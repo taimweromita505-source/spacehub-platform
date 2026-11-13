@@ -1464,3 +1464,7 @@ dialog::backdrop {
   .workspace-split[data-phone-pane="editor"] .file-tabs-bar { display: none; }
   .workspace-split[data-phone-pane="files"] .editor-pane { min-height: 0; }
 }
+
+.launch-checklist { list-style: none; margin-block-start: .6rem; }
+.launch-checklist li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .3rem 1rem; padding-block: .35rem; }
+.launch-checklist span { color: var(--muted); }

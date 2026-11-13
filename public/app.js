@@ -534,6 +534,7 @@ function updateLiveStagingPreview() {
 
 function updateStudioHeaderBadges(space) {
   renderStudioHosting(space);
+  renderLaunchChecklist(space);
   document.getElementById('phoneSaveDraft').hidden = !space.isOwner;
   const reviewPanel = document.getElementById('draftReviewPanel');
   reviewPanel.hidden = !space.isPrimaryOwner;
@@ -707,6 +708,7 @@ function clearRecovery(key) {
 
 function recordDraftEdit() {
   state.isDirty = true;
+  renderLaunchChecklist(state.currentSpace);
   const key = recoveryKey();
   if (!key) return;
   try {
@@ -1555,9 +1557,11 @@ document.getElementById('saveDraftBtn').addEventListener('click', async () => {
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
   try {
     const { ownerUsername, slug } = state.currentSpace;
+    const key = recoveryKey();
+    const submitted = JSON.stringify(state.workingFiles);
     const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}`, {
       method: 'PUT',
-      body: JSON.stringify({ draftFiles: state.workingFiles })
+      body: '{"draftFiles":' + submitted + '}'
     });
     if (recoveryKey() !== key || JSON.stringify(state.workingFiles) !== submitted) return;
     clearRecovery(key);
@@ -1792,7 +1796,7 @@ document.getElementById('checkCustomDomain').addEventListener('click', async (ev
   }
 });
 
-function renderPublishPreflight(files) {
+function findPublishIssues(files) {
   const findings = [];
   const site = 'https://spacehub-preflight.invalid';
   const paths = new Set(Object.keys(files).map((name) => new URL(name, site).pathname));
@@ -1812,7 +1816,13 @@ function renderPublishPreflight(files) {
       if (!paths.has(path)) findings.push(file + ' references missing ' + ref);
     }
   }
-  const unique = [...new Set(findings)];
+  return [...new Set(findings)];
+}
+
+function renderPublishPreflight(files) {
+  const unique = findPublishIssues(files);
+  checklistPreflight = { space: state.currentSpace, files: JSON.stringify(files), count: unique.length };
+  renderLaunchChecklist(state.currentSpace);
   document.getElementById('publishPreflightStatus').textContent = unique.length
     ? 'Preflight found ' + unique.length + ' possible issue(s).' : 'Preflight found no missing titles or local files.';
   const list = document.getElementById('publishPreflightFindings');
@@ -1825,6 +1835,65 @@ function renderPublishPreflight(files) {
 const draftReviewPanel = document.getElementById('draftReviewPanel');
 const draftReviewStatus = document.getElementById('draftReviewStatus');
 const draftReviewLinks = document.getElementById('draftReviewLinks');
+const launchChecklist = document.getElementById('launchChecklist');
+let checklistPreflight;
+let checklistFeedback;
+
+function renderLaunchChecklist(space) {
+  launchChecklist.hidden = !space?.isOwner;
+  if (launchChecklist.hidden) return;
+  const preflight = checklistPreflight;
+  const currentFiles = () => JSON.stringify({ ...space.draftFiles, ...state.workingFiles });
+  document.getElementById('checklistDraftStatus').textContent = state.isDirty ? 'Unsaved edits' : 'Saved';
+  document.getElementById('checklistPreflightStatus').textContent =
+    preflight?.space === space && preflight.files === currentFiles()
+      ? preflight.count ? preflight.count + ' possible issue(s)' : 'No issues found'
+      : 'Check current files';
+  document.getElementById('checklistFeedback').disabled = !space.isPrimaryOwner;
+  document.getElementById('checklistFeedbackStatus').textContent = !space.isPrimaryOwner
+    ? 'Space owner only'
+    : checklistFeedback?.space === space ? checklistFeedback.count + ' unresolved' : 'Check feedback';
+  document.getElementById('checklistLiveStatus').textContent = !space.publishedAt ? 'Awaiting first publish'
+    : space.releaseId && space.releaseId === verifiedReleaseId ? 'Verified in this session' : 'Check hosting status';
+}
+
+launchChecklist.addEventListener('toggle', () => {
+  if (launchChecklist.open) refreshChecklistFeedback(state.currentSpace);
+});
+
+async function refreshChecklistFeedback(space) {
+  if (!space?.isPrimaryOwner) return;
+  try {
+    const { reviews } = await apiFetch(releaseEndpoint(space).replace(/releases$/, 'draft-reviews'));
+    if (state.currentSpace === space) updateChecklistFeedback(space, reviews);
+  } catch {
+    if (state.currentSpace === space) document.getElementById('checklistFeedbackStatus').textContent = 'Could not load feedback';
+  }
+}
+
+function updateChecklistFeedback(space, reviews) {
+  const count = reviews.reduce((total, review) =>
+    total + (review.comments || []).filter((comment) => !comment.resolved).length, 0);
+  checklistFeedback = { space, count };
+  renderLaunchChecklist(space);
+}
+
+document.getElementById('checklistSave').addEventListener('click', () => {
+  if (state.isDirty) document.getElementById('saveDraftBtn').click();
+});
+document.getElementById('checklistPreflight').addEventListener('click', () => {
+  document.getElementById('launchSpaceBtn').click();
+});
+document.getElementById('checklistFeedback').addEventListener('click', () => {
+  draftReviewPanel.open = true;
+  draftReviewPanel.querySelector('summary').focus();
+});
+document.getElementById('checklistLive').addEventListener('click', () => {
+  const hosting = document.getElementById('studioHostingPanel');
+  hosting.open = true;
+  hosting.querySelector('summary').focus();
+  if (!hostingCheck.hidden) hostingCheck.click();
+});
 const createDraftReview = document.getElementById('createDraftReview');
 
 async function updateDraftReviews(method = 'GET', token, commentId) {
@@ -1840,6 +1909,7 @@ async function updateDraftReviews(method = 'GET', token, commentId) {
     }
     const { reviews } = await apiFetch(endpoint);
     if (state.currentSpace !== space) return;
+    updateChecklistFeedback(space, reviews);
     draftReviewLinks.replaceChildren(...reviews.map((review) => {
       const row = document.createElement('li');
       const link = document.createElement('input');
@@ -1987,6 +2057,7 @@ async function verifyRelease(release = pendingVerification, status = publishStat
     }
     if (state.currentSpace !== space) return;
     verifiedReleaseId = releaseId;
+    renderLaunchChecklist(space);
     status.textContent = 'Verified that SpaceHub serves this release.';
     if (status === publishStatus) renderStudioHosting(space);
   } catch {
@@ -2104,6 +2175,7 @@ document.getElementById('launchSpaceBtn').addEventListener('click', async () => 
   verifyButton.hidden = true;
   pendingVerification = null;
   deployDialog.showModal();
+  document.getElementById('publishReviewHeading').focus();
   loadReleaseHistory(space);
 });
 
