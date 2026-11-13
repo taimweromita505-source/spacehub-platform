@@ -500,6 +500,15 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         </div>
       </div>
 
+      <details class="arch-card studio-hosting" id="launchChecklist" hidden>
+        <summary>Launch checklist</summary>
+        <ul class="launch-checklist">
+          <li><button type="button" class="btn-link" id="checklistSave">Draft saved</button><span id="checklistDraftStatus"></span></li>
+          <li><button type="button" class="btn-link" id="checklistPreflight">Preflight</button><span id="checklistPreflightStatus"></span></li>
+          <li><button type="button" class="btn-link" id="checklistFeedback">Draft feedback</button><span id="checklistFeedbackStatus"></span></li>
+          <li><button type="button" class="btn-link" id="checklistLive">Live release</button><span id="checklistLiveStatus"></span></li>
+        </ul>
+      </details>
       <details class="arch-card studio-hosting" id="studioHostingPanel" hidden>
         <summary>Hosting status</summary>
         <dl class="publish-review">
@@ -1710,7 +1719,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
       </div>
 
       <section class="field" aria-labelledby="publishReviewHeading">
-        <h3 id="publishReviewHeading">Review before publishing</h3>
+        <h3 id="publishReviewHeading" tabindex="-1">Review before publishing</h3>
         <p id="publishPreflightStatus" role="status"></p>
         <ul id="publishPreflightFindings"></ul>
         <dl id="publishReview" class="publish-review" aria-live="polite"></dl>
