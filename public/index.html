@@ -501,6 +501,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <button type="button" class="btn btn-outline btn-sm" id="exportBundleBtn">
             Export
           </button>
+          <button type="button" class="btn btn-outline btn-sm" id="exportZipBtn" title="Export entire application as a downloadable .ZIP archive">
+            📦 Download ZIP
+          </button>
           <button type="button" class="btn btn-outline btn-sm" id="shareSpaceBtn">
             Share
           </button>
@@ -1020,12 +1023,16 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 autocapitalize="none"
                 spellcheck="false"
               />
-              <div style="margin-top: 0.4rem;">
+              <div style="margin-top: 0.4rem; display: flex; gap: 0.35rem; flex-wrap: wrap;">
                 <button type="button" class="btn btn-outline btn-sm" id="runDomainDiagBtn" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;">
                   🔍 Run DNS &amp; SSL Diagnostic
                 </button>
+                <button type="button" class="btn btn-outline btn-sm" id="btnProvisionCustomHostname" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;">
+                  ⚡ Provision SSL for SaaS
+                </button>
               </div>
               <div id="domainDiagBox" class="arch-card" style="margin-top: 0.5rem; padding: 0.6rem; font-size: 0.8rem; background: #121215;" hidden></div>
+              <div id="customHostnameStatusBox" class="arch-card" style="margin-top: 0.5rem; padding: 0.6rem; font-size: 0.8rem; background: #121215;" hidden></div>
             </div>
             <div class="field">
               <label for="settingsWebhookUrlInput">Form Notification Webhook URL (Optional)</label>
@@ -1041,6 +1048,48 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
               />
             </div>
           </div>
+
+          <details class="studio-hosting" style="margin-top: 0.75rem;">
+            <summary style="font-size: 0.88rem; font-weight: 600; cursor: pointer;">🔔 Outbound Webhook Integrations Hub (Discord, Slack, Telegram)</summary>
+            <div style="padding: 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; margin-top: 0.5rem; background: var(--surface);">
+              <div class="field" style="margin-bottom: 0.5rem;">
+                <label for="discordWebhookInput" style="font-size: 0.8rem;">Discord Webhook URL</label>
+                <input type="url" id="discordWebhookInput" placeholder="https://discord.com/api/webhooks/..." style="font-size: 0.8rem;" />
+              </div>
+              <div class="field" style="margin-bottom: 0.5rem;">
+                <label for="slackWebhookInput" style="font-size: 0.8rem;">Slack Webhook URL</label>
+                <input type="url" id="slackWebhookInput" placeholder="https://hooks.slack.com/services/..." style="font-size: 0.8rem;" />
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <div class="field">
+                  <label for="telegramBotTokenInput" style="font-size: 0.8rem;">Telegram Bot Token</label>
+                  <input type="text" id="telegramBotTokenInput" placeholder="123456:ABC-DEF..." style="font-size: 0.8rem;" />
+                </div>
+                <div class="field">
+                  <label for="telegramChatIdInput" style="font-size: 0.8rem;">Telegram Chat ID</label>
+                  <input type="text" id="telegramChatIdInput" placeholder="-100123456789" style="font-size: 0.8rem;" />
+                </div>
+              </div>
+              <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                <button type="button" class="btn btn-outline btn-sm" id="btnSaveIntegrations">Save Integrations</button>
+                <button type="button" class="btn btn-outline btn-sm" id="btnTestIntegrations">Test Dispatch</button>
+                <span id="testIntegrationsStatus" style="font-size: 0.76rem;"></span>
+              </div>
+            </div>
+          </details>
+
+          <details class="studio-hosting" style="margin-top: 0.75rem;">
+            <summary style="font-size: 0.88rem; font-weight: 600; cursor: pointer;">📜 Space Activity &amp; Audit Log</summary>
+            <div style="padding: 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; margin-top: 0.5rem; background: var(--surface);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <span style="font-size: 0.8rem; color: var(--muted);">Real-time audit log of configuration and deployments</span>
+                <button type="button" class="btn btn-outline btn-xs" id="btnRefreshActivity">Refresh</button>
+              </div>
+              <div id="spaceActivityTimeline" style="max-height: 220px; overflow-y: auto; font-size: 0.78rem;">
+                <p style="color: var(--muted);">Click Refresh to load recent activity.</p>
+              </div>
+            </div>
+          </details>
 
           <div class="field">
             <label for="settingsCollaboratorsInput">Team Collaborators (Optional)</label>
@@ -1961,6 +2010,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         </button>
         <button type="button" class="btn btn-outline btn-sm" id="downloadFullBundleBtn">
           Download Full PWA Bundle (.json)
+        </button>
+        <button type="button" class="btn btn-outline btn-sm" id="downloadZipModalBtn">
+          📦 Download Full App (.zip)
         </button>
       </div>
     </div>

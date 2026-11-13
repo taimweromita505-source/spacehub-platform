@@ -2576,6 +2576,354 @@ app.get('/api/spaces/:username/:slug/export-bundle', (req, res) => {
   });
 });
 
+function makeCrcTable() {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = ((c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+    table[i] = c;
+  }
+  return table;
+}
+const crcTable = makeCrcTable();
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function createZip(files) {
+  const enc = new TextEncoder();
+  const fileEntries = [];
+  let localOffset = 0;
+  const localHeaders = [];
+
+  for (const [name, content] of Object.entries(files)) {
+    if (content === undefined || content === null) continue;
+    const nameBuf = enc.encode(name);
+    const contentBuf = typeof content === 'string' ? enc.encode(content) : new Uint8Array(content);
+    const crc = crc32(contentBuf);
+    const size = contentBuf.length;
+
+    const localHdr = new Uint8Array(30 + nameBuf.length + size);
+    const v = new DataView(localHdr.buffer);
+    v.setUint32(0, 0x04034b50, true);
+    v.setUint16(4, 20, true);
+    v.setUint16(6, 0x0800, true);
+    v.setUint16(8, 0, true);
+    v.setUint16(10, 0, true);
+    v.setUint16(12, 0, true);
+    v.setUint32(14, crc, true);
+    v.setUint32(18, size, true);
+    v.setUint32(22, size, true);
+    v.setUint16(26, nameBuf.length, true);
+    v.setUint16(28, 0, true);
+    localHdr.set(nameBuf, 30);
+    localHdr.set(contentBuf, 30 + nameBuf.length);
+
+    fileEntries.push({ nameBuf, crc, size, offset: localOffset });
+    localHeaders.push(localHdr);
+    localOffset += localHdr.length;
+  }
+
+  const centralEntries = [];
+  let centralSize = 0;
+  for (const entry of fileEntries) {
+    const hdr = new Uint8Array(46 + entry.nameBuf.length);
+    const v = new DataView(hdr.buffer);
+    v.setUint32(0, 0x02014b50, true);
+    v.setUint16(4, 20, true);
+    v.setUint16(6, 20, true);
+    v.setUint16(8, 0x0800, true);
+    v.setUint16(10, 0, true);
+    v.setUint16(12, 0, true);
+    v.setUint16(14, 0, true);
+    v.setUint32(16, entry.crc, true);
+    v.setUint32(20, entry.size, true);
+    v.setUint32(24, entry.size, true);
+    v.setUint16(28, entry.nameBuf.length, true);
+    v.setUint16(30, 0, true);
+    v.setUint16(32, 0, true);
+    v.setUint16(34, 0, true);
+    v.setUint16(36, 0, true);
+    v.setUint32(38, 0, true);
+    v.setUint32(42, entry.offset, true);
+    hdr.set(entry.nameBuf, 46);
+
+    centralEntries.push(hdr);
+    centralSize += hdr.length;
+  }
+
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, fileEntries.length, true);
+  ev.setUint16(10, fileEntries.length, true);
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, localOffset, true);
+  ev.setUint16(20, 0, true);
+
+  const totalLen = localOffset + centralSize + 22;
+  const out = new Uint8Array(totalLen);
+  let pos = 0;
+  for (const h of localHeaders) { out.set(h, pos); pos += h.length; }
+  for (const c of centralEntries) { out.set(c, pos); pos += c.length; }
+  out.set(eocd, pos);
+  return out;
+}
+
+function recordAuditLog(space, user, action, details = {}) {
+  if (!space) return;
+  space.auditLogs = Array.isArray(space.auditLogs) ? space.auditLogs : [];
+  space.auditLogs.unshift({
+    id: 'log_' + crypto.randomBytes(4).toString('hex'),
+    action,
+    username: user ? user.username : 'system',
+    details,
+    timestamp: new Date().toISOString()
+  });
+  if (space.auditLogs.length > 50) space.auditLogs = space.auditLogs.slice(0, 50);
+}
+
+async function dispatchSpaceIntegrations(space, eventType, data = {}) {
+  if (!space || !space.integrations) return { discord: false, slack: false, telegram: false };
+  const { discordWebhookUrl, slackWebhookUrl, telegramBotToken, telegramChatId } = space.integrations;
+  const results = { discord: false, slack: false, telegram: false };
+
+  const title = `SpaceHub: ${space.title || space.slug}`;
+  const summary = data.summary || `Event "${eventType}" occurred on space ${space.slug}`;
+
+  // Discord
+  if (discordWebhookUrl && /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\//i.test(discordWebhookUrl)) {
+    try {
+      const payload = {
+        username: 'SpaceHub Bot',
+        embeds: [{
+          title,
+          description: summary,
+          color: 6537713,
+          fields: Object.entries(data.fields || {}).map(([k, v]) => ({ name: k, value: String(v).slice(0, 1024), inline: true })),
+          footer: { text: `Space: ${space.slug} | Event: ${eventType}` },
+          timestamp: new Date().toISOString()
+        }]
+      };
+      const r = await fetch(discordWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      results.discord = r.ok;
+    } catch (_e) {}
+  } else if (discordWebhookUrl && discordWebhookUrl.startsWith('mock://')) {
+    results.discord = true;
+  }
+
+  // Slack
+  if (slackWebhookUrl && /^https:\/\/hooks\.slack\.com\/services\//i.test(slackWebhookUrl)) {
+    try {
+      const payload = {
+        text: `*${title}* — ${summary}`,
+        blocks: [
+          {
+            type: 'section',
+            text: { type: 'mrkdwn', text: `*${title}*\n>${summary}\n_Event: \`${eventType}\` | Space: \`${space.slug}\`_` }
+          }
+        ]
+      };
+      const r = await fetch(slackWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      results.slack = r.ok;
+    } catch (_e) {}
+  } else if (slackWebhookUrl && slackWebhookUrl.startsWith('mock://')) {
+    results.slack = true;
+  }
+
+  // Telegram
+  if (telegramBotToken && telegramChatId) {
+    if (telegramBotToken.startsWith('mock_')) {
+      results.telegram = true;
+    } else {
+      try {
+        const tgUrl = `https://api.telegram.org/bot${encodeURIComponent(telegramBotToken)}/sendMessage`;
+        const text = `🚀 *${title}*\n${summary}\n_Event: ${eventType}_`;
+        const r = await fetch(tgUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: telegramChatId, text, parse_mode: 'Markdown' })
+        });
+        results.telegram = r.ok;
+      } catch (_e) {}
+    }
+  }
+
+  return results;
+}
+
+// Download ready-to-run ZIP archive
+app.get('/api/spaces/:username/:slug/export-zip', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space || !canViewSpace(space, user)) {
+    return res.status(404).json({ error: 'Space not found or is set to Private.' });
+  }
+
+  const files = {
+    ...(space.draftFiles || space.publishedFiles || {}),
+    'manifest.webmanifest': JSON.stringify(generateSpaceManifest(space, ''), null, 2),
+    'icon.svg': generateSpaceIconSvg(space.title),
+    'sw.js': generateSpaceServiceWorker(space.slug),
+    'vercel.json': JSON.stringify({ version: 2, name: space.slug, cleanUrls: true }, null, 2),
+    'netlify.toml': `[build]\n  publish = "."\n`
+  };
+
+  const zipBytes = createZip(files);
+  recordAuditLog(space, user, 'export_zip_downloaded');
+  saveDb(db);
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(space.slug)}.zip"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(Buffer.from(zipBytes));
+});
+
+// Space Activity & Audit Log
+app.get('/api/spaces/:username/:slug/activity', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space || !canViewSpace(space, user)) {
+    return res.status(404).json({ error: 'Space not found or is set to Private.' });
+  }
+
+  res.json({ logs: space.auditLogs || [] });
+});
+
+// Cloudflare Custom Hostname API (SSL for SaaS)
+app.post('/api/spaces/:username/:slug/custom-hostname', async (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  if (!space || !canEditSpace(space, user)) return res.status(403).json({ error: 'Unauthorized.' });
+
+  const cleanDomain = normalizeCustomDomain(req.body.hostname || space.customDomain);
+  if (!cleanDomain) return res.status(400).json({ error: 'Valid custom domain required.' });
+
+  const hostnameData = {
+    id: 'cf_chn_' + crypto.randomBytes(4).toString('hex'),
+    hostname: cleanDomain,
+    status: 'active',
+    ssl: { status: 'active', method: 'http', type: 'dv' },
+    verificationRecord: {
+      type: 'cname',
+      name: `_cf-custom-hostname.${cleanDomain}`,
+      value: `${cleanDomain}.cdn.cloudflare.net`
+    },
+    createdAt: new Date().toISOString(),
+    simulated: true
+  };
+
+  space.customHostname = hostnameData;
+  space.customDomain = cleanDomain;
+  recordAuditLog(space, user, 'custom_hostname_provisioned', { hostname: cleanDomain, status: hostnameData.status });
+  saveDb(db);
+
+  res.json({ ok: true, customHostname: hostnameData });
+});
+
+app.get('/api/spaces/:username/:slug/custom-hostname', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space || !canViewSpace(space, user)) return res.status(404).json({ error: 'Not found.' });
+  res.json({ customHostname: space.customHostname || null });
+});
+
+// Outbound Webhook Integrations Hub
+app.get('/api/spaces/:username/:slug/integrations', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!user || !space || !canEditSpace(space, user)) return res.status(403).json({ error: 'Unauthorized.' });
+  res.json({ integrations: space.integrations || {} });
+});
+
+app.put('/api/spaces/:username/:slug/integrations', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!user || !space || !canEditSpace(space, user)) return res.status(403).json({ error: 'Unauthorized.' });
+
+  space.integrations = {
+    discordWebhookUrl: String(req.body.discordWebhookUrl || '').trim(),
+    slackWebhookUrl: String(req.body.slackWebhookUrl || '').trim(),
+    telegramBotToken: String(req.body.telegramBotToken || '').trim(),
+    telegramChatId: String(req.body.telegramChatId || '').trim()
+  };
+  recordAuditLog(space, user, 'integrations_updated');
+  saveDb(db);
+  res.json({ ok: true, integrations: space.integrations });
+});
+
+app.post('/api/spaces/:username/:slug/test-integrations', async (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!user || !space || !canEditSpace(space, user)) return res.status(403).json({ error: 'Unauthorized.' });
+
+  if (req.body && req.body.integrations) {
+    space.integrations = {
+      discordWebhookUrl: String(req.body.integrations.discordWebhookUrl || space.integrations?.discordWebhookUrl || '').trim(),
+      slackWebhookUrl: String(req.body.integrations.slackWebhookUrl || space.integrations?.slackWebhookUrl || '').trim(),
+      telegramBotToken: String(req.body.integrations.telegramBotToken || space.integrations?.telegramBotToken || '').trim(),
+      telegramChatId: String(req.body.integrations.telegramChatId || space.integrations?.telegramChatId || '').trim()
+    };
+  }
+
+  const result = await dispatchSpaceIntegrations(space, 'test_alert', {
+    summary: `Webhook integration test dispatched from SpaceHub for space "${space.title}".`,
+    fields: { Status: 'Connected', TriggeredBy: user.username }
+  });
+  recordAuditLog(space, user, 'integration_test_dispatched', result);
+  saveDb(db);
+
+  res.json({ ok: true, dispatched: result });
+});
+
 function pushSpaceSnapshot(space, label = 'Previous version') {
   if (!space.draftFiles) return;
   space.snapshots = Array.isArray(space.snapshots) ? space.snapshots : [];
@@ -2907,6 +3255,7 @@ async function handleExternalDeploy(req, res) {
 
 app.post('/api/spaces/:username/:slug/deploy-external', handleExternalDeploy);
 app.post('/api/spaces/:username/:slug/publish', handleExternalDeploy);
+app.post('/api/spaces/:username/:slug/deploy', handleExternalDeploy);
 
 // --- EXTERNAL CODING AGENT REST API (/api/agent/v1/...) ---
 

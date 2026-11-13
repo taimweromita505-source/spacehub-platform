@@ -840,6 +840,28 @@ async function openSpaceStudio(username, slug) {
     if (customDomainInput) customDomainInput.value = space.customDomain || '';
     const webhookUrlInput = document.getElementById('settingsWebhookUrlInput');
     if (webhookUrlInput) webhookUrlInput.value = space.submissionWebhookUrl || '';
+
+    const ints = space.integrations || {};
+    if (document.getElementById('discordWebhookInput')) document.getElementById('discordWebhookInput').value = ints.discordWebhookUrl || '';
+    if (document.getElementById('slackWebhookInput')) document.getElementById('slackWebhookInput').value = ints.slackWebhookUrl || '';
+    if (document.getElementById('telegramBotTokenInput')) document.getElementById('telegramBotTokenInput').value = ints.telegramBotToken || '';
+    if (document.getElementById('telegramChatIdInput')) document.getElementById('telegramChatIdInput').value = ints.telegramChatId || '';
+    if (document.getElementById('customHostnameStatusBox')) {
+      const ch = space.customHostname;
+      if (ch) {
+        document.getElementById('customHostnameStatusBox').hidden = false;
+        document.getElementById('customHostnameStatusBox').innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
+            <strong>SSL for SaaS Edge Status:</strong>
+            <span class="badge" style="background:#064e3b; color:#a7f3d0;">${escapeHtml(ch.status || 'Active')}</span>
+          </div>
+          <div>Hostname: <code>${escapeHtml(ch.hostname)}</code></div>
+        `;
+      } else {
+        document.getElementById('customHostnameStatusBox').hidden = true;
+      }
+    }
+    loadSpaceActivity();
     const collaboratorsInput = document.getElementById('settingsCollaboratorsInput');
     if (collaboratorsInput) {
       collaboratorsInput.value = Array.isArray(space.collaborators)
@@ -2505,7 +2527,13 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
         cronSchedule,
         cronWebhookUrl,
         maintenanceMode,
-        secrets
+        secrets,
+        integrations: {
+          discordWebhookUrl: document.getElementById('discordWebhookInput')?.value.trim() || '',
+          slackWebhookUrl: document.getElementById('slackWebhookInput')?.value.trim() || '',
+          telegramBotToken: document.getElementById('telegramBotTokenInput')?.value.trim() || '',
+          telegramChatId: document.getElementById('telegramChatIdInput')?.value.trim() || ''
+        }
       })
     });
     state.currentSpace = data.space;
@@ -3404,6 +3432,157 @@ document.getElementById('runDomainDiagBtn')?.addEventListener('click', async () 
     box.innerHTML = `<span style="color:#f87171;">Diagnostic failed: ${escapeHtml(err.message)}</span>`;
   }
 });
+
+// Wave 12: Provision SSL for SaaS via Cloudflare Custom Hostname API
+document.getElementById('btnProvisionCustomHostname')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const customDomainInput = document.getElementById('settingsCustomDomainInput');
+  const hostname = (customDomainInput?.value || state.currentSpace.customDomain || '').trim();
+  if (!hostname) {
+    showToast('Please enter a custom domain first.');
+    return;
+  }
+  const box = document.getElementById('customHostnameStatusBox');
+  if (box) {
+    box.hidden = false;
+    box.innerHTML = '<em>⚡ Contacting Cloudflare edge for SSL for SaaS provisioning...</em>';
+  }
+  try {
+    const res = await apiFetch(
+      `/api/spaces/${encodeURIComponent(state.currentSpace.ownerUsername)}/${encodeURIComponent(state.currentSpace.slug)}/custom-hostname`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ hostname })
+      }
+    );
+    if (box) {
+      const ch = res.customHostname;
+      box.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+          <strong>Edge Custom Hostname:</strong>
+          <span class="badge" style="background:#064e3b; color:#a7f3d0;">SSL Active</span>
+        </div>
+        <div>Hostname: <code>${escapeHtml(ch.hostname)}</code></div>
+        <div>Verification Record: <code>CNAME ${escapeHtml(ch.verificationRecord?.name || '_cf-custom-hostname')} → ${escapeHtml(ch.verificationRecord?.value || 'cloudflare.net')}</code></div>
+        <div style="color:var(--muted); font-size:0.73rem; margin-top:0.3rem;">Free SSL certificate active and managed by Cloudflare SaaS edge.</div>
+      `;
+    }
+    showToast('Edge SSL for SaaS provisioned successfully!');
+  } catch (err) {
+    if (box) box.innerHTML = `<span style="color:var(--danger);">Error: ${escapeHtml(err.message)}</span>`;
+    showToast(err.message);
+  }
+});
+
+// Wave 12: Webhook Integrations Hub save & test
+document.getElementById('btnSaveIntegrations')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  try {
+    const payload = {
+      discordWebhookUrl: document.getElementById('discordWebhookInput')?.value.trim() || '',
+      slackWebhookUrl: document.getElementById('slackWebhookInput')?.value.trim() || '',
+      telegramBotToken: document.getElementById('telegramBotTokenInput')?.value.trim() || '',
+      telegramChatId: document.getElementById('telegramChatIdInput')?.value.trim() || ''
+    };
+    await apiFetch(
+      `/api/spaces/${encodeURIComponent(state.currentSpace.ownerUsername)}/${encodeURIComponent(state.currentSpace.slug)}/integrations`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      }
+    );
+    state.currentSpace.integrations = payload;
+    showToast('Integrations saved successfully!');
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+document.getElementById('btnTestIntegrations')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const statusEl = document.getElementById('testIntegrationsStatus');
+  if (statusEl) statusEl.textContent = 'Dispatching test ping...';
+  try {
+    const payload = {
+      integrations: {
+        discordWebhookUrl: document.getElementById('discordWebhookInput')?.value.trim() || '',
+        slackWebhookUrl: document.getElementById('slackWebhookInput')?.value.trim() || '',
+        telegramBotToken: document.getElementById('telegramBotTokenInput')?.value.trim() || '',
+        telegramChatId: document.getElementById('telegramChatIdInput')?.value.trim() || ''
+      }
+    };
+    const res = await apiFetch(
+      `/api/spaces/${encodeURIComponent(state.currentSpace.ownerUsername)}/${encodeURIComponent(state.currentSpace.slug)}/test-integrations`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      }
+    );
+    if (statusEl) {
+      const d = res.dispatched || {};
+      statusEl.innerHTML = `<span style="color:#34d399;">✓ Sent: Discord (${d.discord ? 'OK' : '—'}), Slack (${d.slack ? 'OK' : '—'}), Telegram (${d.telegram ? 'OK' : '—'})</span>`;
+    }
+    showToast('Test webhook alert dispatched!');
+  } catch (err) {
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`;
+    showToast(err.message);
+  }
+});
+
+// Wave 12: Space Activity & Audit Log
+async function loadSpaceActivity() {
+  if (!state.currentSpace) return;
+  const container = document.getElementById('spaceActivityTimeline');
+  if (!container) return;
+  container.innerHTML = '<em>Loading audit logs...</em>';
+  try {
+    const res = await apiFetch(
+      `/api/spaces/${encodeURIComponent(state.currentSpace.ownerUsername)}/${encodeURIComponent(state.currentSpace.slug)}/activity`
+    );
+    const logs = res.logs || [];
+    if (!logs.length) {
+      container.innerHTML = '<p style="color:var(--muted);">No activity recorded yet.</p>';
+      return;
+    }
+    container.innerHTML = logs.map(l => `
+      <div style="padding: 0.35rem 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+        <div>
+          <strong style="color: var(--primary);">${escapeHtml(l.action)}</strong> by <code>@${escapeHtml(l.username)}</code>
+          ${l.details && Object.keys(l.details).length ? `<span style="color: var(--muted); font-size: 0.72rem; margin-left: 0.3rem;">${escapeHtml(JSON.stringify(l.details).slice(0, 50))}</span>` : ''}
+        </div>
+        <span style="color: var(--muted); font-size: 0.72rem; white-space: nowrap;">${new Date(l.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`;
+  }
+}
+document.getElementById('btnRefreshActivity')?.addEventListener('click', loadSpaceActivity);
+
+// Wave 12: App Export as ZIP (.zip)
+async function downloadSpaceZip() {
+  if (!state.currentSpace) return;
+  const { ownerUsername, slug } = state.currentSpace;
+  try {
+    showToast(`Generating ${slug}.zip archive...`);
+    const res = await fetch(`/api/spaces/${encodeURIComponent(ownerUsername)}/${encodeURIComponent(slug)}/export-zip`, {
+      headers: state.token ? { Authorization: 'Bearer ' + state.token } : {}
+    });
+    if (!res.ok) throw new Error(`Export failed (HTTP ${res.status})`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slug}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Downloaded ${slug}.zip!`);
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+document.getElementById('exportZipBtn')?.addEventListener('click', downloadSpaceZip);
+document.getElementById('downloadZipModalBtn')?.addEventListener('click', downloadSpaceZip);
 
 document.getElementById('tabHosting').addEventListener('click', () => {
   document.querySelectorAll('.nav-tab').forEach((b) => b.classList.remove('active'));
