@@ -489,6 +489,8 @@ function formatSpaceSummary(space, user) {
     colorTo: space.colorTo,
     sdk: space.sdk,
     visibility: space.visibility,
+    appPlatform: space.appPlatform || 'both',
+    appOrientation: space.appOrientation || 'any',
     status: space.status,
     likes: space.likes || 0,
     likedByMe: Boolean(user && (space.likedBy || []).includes(user.id)),
@@ -1563,6 +1565,10 @@ function createSpaceRecord(db, user, payload) {
 
   const template = STARTER_TEMPLATES[templateId] || STARTER_TEMPLATES.landing;
   const cleanVisibility = visibility === 'public' ? 'public' : 'private';
+  const validPlatforms = ['both', 'android', 'iphone', 'web_only'];
+  const appPlatform = validPlatforms.includes(payload?.appPlatform) ? payload.appPlatform : 'both';
+  const validOrientations = ['any', 'portrait', 'landscape'];
+  const appOrientation = validOrientations.includes(payload?.appOrientation) ? payload.appOrientation : 'any';
   const now = new Date().toISOString();
 
   const baseFiles = files && typeof files === 'object' ? files : template.files;
@@ -1592,6 +1598,8 @@ function createSpaceRecord(db, user, payload) {
     colorTo: String(colorTo || 'purple'),
     sdk: 'static',
     visibility: cleanVisibility,
+    appPlatform,
+    appOrientation,
     status: 'draft',
     likes: 0,
     likedBy: [],
@@ -1673,6 +1681,9 @@ app.get('/api/spaces/:username/:slug/export-bundle', (req, res) => {
   const files = space.draftFiles || space.publishedFiles || {};
   const bundle = {
     ...files,
+    'manifest.webmanifest': JSON.stringify(generateSpaceManifest(space, ''), null, 2),
+    'icon.svg': generateSpaceIconSvg(space.title),
+    'sw.js': generateSpaceServiceWorker(space.slug),
     'vercel.json': JSON.stringify(
       {
         version: 2,
@@ -1708,7 +1719,7 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
     return res.status(403).json({ error: 'Only the Space owner can modify this project.' });
   }
 
-  const { title, description, emoji, visibility, colorFrom, colorTo, draftFiles } = req.body || {};
+  const { title, description, emoji, visibility, appPlatform, appOrientation, colorFrom, colorTo, draftFiles } = req.body || {};
 
   if (typeof title === 'string' && title.trim()) space.title = title.trim();
   if (typeof description === 'string') space.description = description.trim();
@@ -1717,6 +1728,12 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
   if (colorTo) space.colorTo = colorTo;
   if (visibility === 'public' || visibility === 'private') {
     space.visibility = visibility;
+  }
+  if (['both', 'android', 'iphone', 'web_only'].includes(appPlatform)) {
+    space.appPlatform = appPlatform;
+  }
+  if (['any', 'portrait', 'landscape'].includes(appOrientation)) {
+    space.appOrientation = appOrientation;
   }
 
   if (draftFiles && typeof draftFiles === 'object') {
@@ -2081,7 +2098,50 @@ app.delete('/api/spaces/:username/:slug', (req, res) => {
 
 // --- STAGING SANDBOX PREVIEW RUNNER (/spaces/:username/:slug/live) ---
 // Used inside the platform to check how the website/app looks before deploying to an external hosting service!
-function buildBundledHtml(files) {
+function generateSpaceIconSvg(spaceTitle = 'S') {
+  const initial = String(spaceTitle || 'S').trim().charAt(0).toUpperCase() || 'S';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#09090b" />
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="#27272a" stroke-width="8" />
+  <text x="256" y="330" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="240" font-weight="700" fill="#fafafa">${initial.replace(/[<>&"']/g, '')}</text>
+</svg>`;
+}
+
+function generateSpaceManifest(space, origin = '') {
+  const startUrl = `${origin}/live/${space.slug}`;
+  return {
+    name: `${space.title}`,
+    short_name: String(space.title || space.slug).slice(0, 15),
+    description: space.description || `${space.title} — Web App on SpaceHub`,
+    start_url: startUrl,
+    scope: `${origin}/live/${space.slug}`,
+    display: 'standalone',
+    orientation: space.appOrientation || 'any',
+    background_color: '#09090b',
+    theme_color: '#09090b',
+    icons: [
+      {
+        src: `${origin}/live/${space.slug}/icon.svg`,
+        sizes: '192x192 512x512',
+        type: 'image/svg+xml',
+        purpose: 'any maskable'
+      }
+    ]
+  };
+}
+
+function generateSpaceServiceWorker(slug) {
+  return `const CACHE_NAME = 'spacehub-app-${slug}-v1';
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+});
+`;
+}
+
+function buildBundledHtml(files, space = null) {
   let html = files['index.html'] || '<!DOCTYPE html><html><body><h1>Empty Space</h1></body></html>';
   const css = files['style.css'] || '';
   const js = files['script.js'] || '';
@@ -2106,8 +2166,49 @@ function buildBundledHtml(files) {
     }
   }
 
+  const appPlatform = space?.appPlatform || 'both';
+  const supportsAndroid = appPlatform === 'both' || appPlatform === 'android';
+  const supportsIphone = appPlatform === 'both' || appPlatform === 'iphone';
+
+  if (space && appPlatform !== 'web_only') {
+    const safeTitle = String(space.title || space.slug).replace(/["<>]/g, '');
+    const pwaHead = `
+  ${supportsAndroid ? `<link rel="manifest" href="/live/${space.slug}/manifest.webmanifest" />\n  <meta name="mobile-web-app-capable" content="yes" />` : ''}
+  <link rel="icon" type="image/svg+xml" href="/live/${space.slug}/icon.svg" />
+  ${supportsIphone ? `<link rel="apple-touch-icon" href="/live/${space.slug}/icon.svg" />\n  <meta name="apple-mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />\n  <meta name="apple-mobile-web-app-title" content="${safeTitle}" />` : ''}
+  <meta name="theme-color" content="#09090b" />
+  ${supportsAndroid ? `<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/live/${space.slug}/sw.js').catch(()=>{});});}</script>` : ''}`;
+    if (html.includes('</head>')) {
+      html = html.replace('</head>', `${pwaHead}\n</head>`);
+    } else {
+      html = pwaHead + '\n' + html;
+    }
+  }
+
   return html;
 }
+
+app.get(['/live/:slug/manifest.webmanifest', '/s/:slug/manifest.webmanifest'], (req, res) => {
+  const db = loadDb();
+  const space = db.spaces.find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found' });
+  const origin = `${req.protocol}://${req.get('host')}`;
+  res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+  res.send(JSON.stringify(generateSpaceManifest(space, origin), null, 2));
+});
+
+app.get(['/live/:slug/icon.svg', '/s/:slug/icon.svg'], (req, res) => {
+  const db = loadDb();
+  const space = db.spaces.find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).send('Not found');
+  res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+  res.send(generateSpaceIconSvg(space.title));
+});
+
+app.get(['/live/:slug/sw.js', '/s/:slug/sw.js'], (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.send(generateSpaceServiceWorker(req.params.slug.toLowerCase()));
+});
 
 app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) => {
   const db = loadDb();
@@ -2155,7 +2256,7 @@ app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) 
     : (space.publishedFiles || space.draftFiles);
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(buildBundledHtml(targetFiles));
+  res.send(buildBundledHtml(targetFiles, space));
 });
 
 if (require.main === module) {

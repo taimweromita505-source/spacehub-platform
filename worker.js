@@ -380,6 +380,8 @@ function formatSpaceSummary(space, user) {
     colorTo: space.colorTo,
     sdk: space.sdk,
     visibility: space.visibility,
+    appPlatform: space.appPlatform || 'both',
+    appOrientation: space.appOrientation || 'any',
     status: space.status,
     likes: space.likes || 0,
     likedByMe: Boolean(user && (space.likedBy || []).includes(user.id)),
@@ -395,7 +397,50 @@ function formatSpaceSummary(space, user) {
   };
 }
 
-function buildBundledHtml(files, origin = '') {
+function generateSpaceIconSvg(spaceTitle = 'S') {
+  const initial = String(spaceTitle || 'S').trim().charAt(0).toUpperCase() || 'S';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#09090b" />
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="#27272a" stroke-width="8" />
+  <text x="256" y="330" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="240" font-weight="700" fill="#fafafa">${initial.replace(/[<>&"']/g, '')}</text>
+</svg>`;
+}
+
+function generateSpaceManifest(space, origin = '') {
+  const startUrl = `${origin}/live/${space.slug}`;
+  return {
+    name: `${space.title}`,
+    short_name: String(space.title || space.slug).slice(0, 15),
+    description: space.description || `${space.title} — Web App on SpaceHub`,
+    start_url: startUrl,
+    scope: `${origin}/live/${space.slug}`,
+    display: 'standalone',
+    orientation: space.appOrientation || 'any',
+    background_color: '#09090b',
+    theme_color: '#09090b',
+    icons: [
+      {
+        src: `${origin}/live/${space.slug}/icon.svg`,
+        sizes: '192x192 512x512',
+        type: 'image/svg+xml',
+        purpose: 'any maskable'
+      }
+    ]
+  };
+}
+
+function generateSpaceServiceWorker(slug) {
+  return `const CACHE_NAME = 'spacehub-app-${slug}-v1';
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+});
+`;
+}
+
+function buildBundledHtml(files, origin = '', space = null) {
   let html = files['index.html'] || '<!DOCTYPE html><html><body><h1>Empty Space</h1></body></html>';
   const css = files['style.css'] || '';
   const js = files['script.js'] || '';
@@ -413,8 +458,30 @@ function buildBundledHtml(files, origin = '') {
       html = html + `\n<script>\n${js}\n</script>`;
     }
   }
+  const appPlatform = space?.appPlatform || 'both';
+  const supportsAndroid = appPlatform === 'both' || appPlatform === 'android';
+  const supportsIphone = appPlatform === 'both' || appPlatform === 'iphone';
+
+  if (space && appPlatform !== 'web_only') {
+    const safeTitle = String(space.title || space.slug).replace(/["<>]/g, '');
+    const pwaHead = `
+  ${supportsAndroid ? `<link rel="manifest" href="/live/${space.slug}/manifest.webmanifest" />\n  <meta name="mobile-web-app-capable" content="yes" />` : ''}
+  <link rel="icon" type="image/svg+xml" href="/live/${space.slug}/icon.svg" />
+  ${supportsIphone ? `<link rel="apple-touch-icon" href="/live/${space.slug}/icon.svg" />\n  <meta name="apple-mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />\n  <meta name="apple-mobile-web-app-title" content="${safeTitle}" />` : ''}
+  <meta name="theme-color" content="#09090b" />
+  ${supportsAndroid ? `<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/live/${space.slug}/sw.js').catch(()=>{});});}</script>` : ''}`;
+    if (html.includes('</head>')) {
+      html = html.replace('</head>', `${pwaHead}\n</head>`);
+    } else {
+      html = pwaHead + '\n' + html;
+    }
+  }
   if (origin) {
-    const badgeHtml = `<a href="${origin}" target="_blank" rel="noopener" style="position:fixed;bottom:12px;right:12px;z-index:99999;background:rgba(9,9,11,0.88);color:#fafafa;border:1px solid #27272a;padding:6px 11px;border-radius:999px;font-family:system-ui,sans-serif;font-size:12px;font-weight:600;text-decoration:none;box-shadow:0 4px 14px rgba(0,0,0,0.35);backdrop-filter:blur(4px)">◆ Hosted on SpaceHub · $1/mo</a>`;
+    const installBtnHtml =
+      appPlatform !== 'web_only'
+        ? `<button type="button" id="shInstallLiveBtn" hidden style="background:#fafafa;color:#09090b;border:1px solid #e4e4e7;padding:6px 11px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.35)">+ Install App</button>`
+        : '';
+    const badgeHtml = `<style>@media (display-mode: standalone) { .sh-live-pill { display: none !important; } }</style><div class="sh-live-pill" style="position:fixed;bottom:12px;right:12px;z-index:99999;display:flex;gap:6px;align-items:center;font-family:system-ui,-apple-system,sans-serif">${installBtnHtml}<a href="${origin}" target="_blank" rel="noopener" style="background:rgba(9,9,11,0.88);color:#fafafa;border:1px solid #27272a;padding:6px 11px;border-radius:999px;font-size:12px;font-weight:600;text-decoration:none;box-shadow:0 4px 14px rgba(0,0,0,0.35);backdrop-filter:blur(4px)">◆ Hosted on SpaceHub · $1/mo</a></div><script>(function(){let dp;const b=document.getElementById('shInstallLiveBtn');if(!b)return;const plat='${appPlatform}';const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;const isStandalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone;if(isStandalone)return;if(isIOS&&(plat==='both'||plat==='iphone')){b.hidden=false;b.addEventListener('click',()=>alert('To install this app on iPhone/iPad:\\n1. Tap the Share button in Safari\\n2. Tap "Add to Home Screen"'));}if(plat==='both'||plat==='android'){window.addEventListener('beforeinstallprompt',(e)=>{e.preventDefault();dp=e;b.hidden=false;});b.addEventListener('click',async()=>{if(dp){dp.prompt();await dp.userChoice;dp=null;b.hidden=true;}});}})();</script>`;
     if (html.includes('</body>')) {
       html = html.replace('</body>', `${badgeHtml}\n</body>`);
     } else {
@@ -607,7 +674,35 @@ export default {
       });
     }
 
-    // 1. Short Clean Live URL Route (/live/:slug or /s/:slug) & Full Route (/spaces/:username/:slug/live)
+    // 1. Per-Space Installable PWA Assets (/live/:slug/manifest.webmanifest, /live/:slug/icon.svg, /live/:slug/sw.js)
+    const spacePwaMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(manifest\.webmanifest|icon\.svg|sw\.js)$/i);
+    if (spacePwaMatch && method === 'GET') {
+      const slug = decodeURIComponent(spacePwaMatch[1]).toLowerCase();
+      const asset = spacePwaMatch[2].toLowerCase();
+      const space = db.spaces.find((s) => s.slug === slug);
+      if (!space) return new Response('Not found', { status: 404 });
+
+      if (asset === 'manifest.webmanifest') {
+        return new Response(JSON.stringify(generateSpaceManifest(space, url.origin), null, 2), {
+          status: 200,
+          headers: { 'Content-Type': 'application/manifest+json; charset=utf-8' }
+        });
+      }
+      if (asset === 'icon.svg') {
+        return new Response(generateSpaceIconSvg(space.title), {
+          status: 200,
+          headers: { 'Content-Type': 'image/svg+xml; charset=utf-8' }
+        });
+      }
+      if (asset === 'sw.js') {
+        return new Response(generateSpaceServiceWorker(space.slug), {
+          status: 200,
+          headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
+        });
+      }
+    }
+
+    // 1b. Short Clean Live URL Route (/live/:slug or /s/:slug) & Full Route (/spaces/:username/:slug/live)
     const shortLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/?$/i);
     const liveMatch = pathname.match(/^\/spaces\/([^/]+)\/([^/]+)\/live$/i);
     if ((shortLiveMatch || liveMatch) && method === 'GET') {
@@ -629,7 +724,7 @@ export default {
         );
       }
       const targetFiles = mode === 'draft' && isOwner ? space.draftFiles : space.publishedFiles || space.draftFiles;
-      return new Response(buildBundledHtml(targetFiles, url.origin), {
+      return new Response(buildBundledHtml(targetFiles, url.origin, space), {
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       });
@@ -856,6 +951,10 @@ export default {
         const cleanTitle = String(body.title || 'Untitled Space').trim();
         const cleanDesc = String(body.description || '').trim();
         const vis = body.visibility === 'public' ? 'public' : 'private';
+        const validPlatforms = ['both', 'android', 'iphone', 'web_only'];
+        const appPlatform = validPlatforms.includes(body.appPlatform) ? body.appPlatform : 'both';
+        const validOrientations = ['any', 'portrait', 'landscape'];
+        const appOrientation = validOrientations.includes(body.appOrientation) ? body.appOrientation : 'any';
 
         const newSpace = {
           id: 'spc_' + randomHex(8),
@@ -869,6 +968,8 @@ export default {
           colorTo: body.colorTo || tpl.colorTo || 'cyan',
           sdk: 'static',
           visibility: vis,
+          appPlatform,
+          appOrientation,
           status: 'draft',
           likes: 0,
           likedBy: [],
@@ -932,6 +1033,12 @@ export default {
           if (body.description !== undefined) space.description = String(body.description).trim();
           if (body.visibility === 'public' || body.visibility === 'private') {
             space.visibility = body.visibility;
+          }
+          if (['both', 'android', 'iphone', 'web_only'].includes(body.appPlatform)) {
+            space.appPlatform = body.appPlatform;
+          }
+          if (['any', 'portrait', 'landscape'].includes(body.appOrientation)) {
+            space.appOrientation = body.appOrientation;
           }
           const incomingFiles = body.draftFiles || body.files;
           if (incomingFiles && typeof incomingFiles === 'object') {
@@ -1116,6 +1223,9 @@ export default {
             title: space.title,
             files: {
               ...space.draftFiles,
+              'manifest.webmanifest': JSON.stringify(generateSpaceManifest(space, ''), null, 2),
+              'icon.svg': generateSpaceIconSvg(space.title),
+              'sw.js': generateSpaceServiceWorker(space.slug),
               'vercel.json': JSON.stringify({ version: 2, name: space.slug, cleanUrls: true }, null, 2),
               'netlify.toml': '[build]\n  publish = "."\n'
             }

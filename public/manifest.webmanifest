@@ -1,0 +1,19 @@
+{
+  "name": "SpaceHub — Stage & Host Web Apps",
+  "short_name": "SpaceHub",
+  "description": "Stage, preview, and host web applications and coding agents for $1/month per Space.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

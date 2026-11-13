@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#09090b" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SpaceHub" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
   <title>SpaceHub — Stage, Preview &amp; Host Web Apps ($1/mo per Space)</title>
   <meta name="description" content="Stage and test your website or web app in a private workspace with your own AI coding agents. Launch to global edge hosting for $1/month or $12/year per Space." />
   <meta name="keywords" content="web app staging, website preview platform, AI coding agent workspace, $1 web hosting, Cloudflare edge hosting, SpaceHub" />
@@ -81,6 +89,9 @@
       </div>
 
       <div class="user-bar">
+        <button type="button" class="btn btn-outline btn-sm" id="installSpaceHubBtn">
+          Install App
+        </button>
         <div id="guestActions" class="auth-buttons">
           <button type="button" class="btn btn-ghost btn-sm" id="openSignInBtn">Sign In</button>
           <button type="button" class="btn btn-outline btn-sm" id="openSignUpBtn">Create Account</button>
@@ -391,6 +402,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <span class="crumb-sep">/</span>
           <h1 class="studio-title" id="studioTitle"></h1>
           <span class="status-pill" id="studioVisibilityBadge">Private</span>
+          <span class="status-pill" id="studioPlatformBadge">Android &amp; iPhone</span>
           <span class="status-pill" id="studioStatusBadge">Staging</span>
           <span class="status-pill" id="studioHostBadge">No Host</span>
         </div>
@@ -401,6 +413,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           </button>
           <button type="button" class="btn btn-outline btn-sm" id="quickPrivacyToggleBtn" hidden>
             Make Public
+          </button>
+          <button type="button" class="btn btn-outline btn-sm" id="installSpaceAppBtn">
+            Install App
           </button>
           <button type="button" class="btn btn-outline btn-sm" id="exportBundleBtn">
             Export
@@ -434,7 +449,8 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <span class="viewport-label">Viewport:</span>
           <button type="button" class="vp-btn active" data-vp="desktop">Desktop</button>
           <button type="button" class="vp-btn" data-vp="tablet">Tablet</button>
-          <button type="button" class="vp-btn" data-vp="mobile">Mobile</button>
+          <button type="button" class="vp-btn" data-vp="mobile">Phone (Portrait)</button>
+          <button type="button" class="vp-btn" data-vp="mobile-landscape">Phone (Landscape)</button>
         </div>
       </div>
 
@@ -594,6 +610,49 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             </div>
           </fieldset>
 
+          <fieldset class="radio-fieldset">
+            <legend>App Target Support</legend>
+            <div class="radio-card-list">
+              <div class="radio-option">
+                <input type="radio" id="setPlatBoth" name="settingsAppPlatform" value="both" checked />
+                <label for="setPlatBoth">
+                  <strong>Android &amp; iPhone + Web</strong>
+                  <span>Installable home-screen app on both Android and iOS devices.</span>
+                </label>
+              </div>
+              <div class="radio-option">
+                <input type="radio" id="setPlatAndroid" name="settingsAppPlatform" value="android" />
+                <label for="setPlatAndroid">
+                  <strong>Android App + Web</strong>
+                  <span>Installable PWA manifest and service worker for Android devices.</span>
+                </label>
+              </div>
+              <div class="radio-option">
+                <input type="radio" id="setPlatIphone" name="settingsAppPlatform" value="iphone" />
+                <label for="setPlatIphone">
+                  <strong>iPhone / iOS App + Web</strong>
+                  <span>Standalone Apple Touch web app for iPhone and iPad.</span>
+                </label>
+              </div>
+              <div class="radio-option">
+                <input type="radio" id="setPlatWebOnly" name="settingsAppPlatform" value="web_only" />
+                <label for="setPlatWebOnly">
+                  <strong>Web Only</strong>
+                  <span>Standard browser website without mobile app install prompts.</span>
+                </label>
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="field">
+            <label for="settingsOrientationSelect">Mobile Screen Direction (Orientation)</label>
+            <select id="settingsOrientationSelect" name="appOrientation" class="select-control">
+              <option value="any">Auto-Rotate (Portrait &amp; Landscape)</option>
+              <option value="portrait">Portrait Only (Vertical Mobile App)</option>
+              <option value="landscape">Landscape Only (Horizontal / Wide App)</option>
+            </select>
+          </div>
+
           <div class="settings-actions">
             <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
             <button type="button" class="btn btn-danger btn-sm" id="deleteSpaceBtn">Delete Space</button>
@@ -707,6 +766,25 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           </div>
         </div>
       </fieldset>
+
+      <div class="field">
+        <label for="createPlatformSelect">Platform Target</label>
+        <select id="createPlatformSelect" name="appPlatform" class="select-control">
+          <option value="both">Installable on Android &amp; iPhone + Web (Recommended)</option>
+          <option value="android">Android App + Web</option>
+          <option value="iphone">iPhone / iOS App + Web</option>
+          <option value="web_only">Web Only (Standard Browser)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="createOrientationSelect">Mobile Screen Direction</label>
+        <select id="createOrientationSelect" name="appOrientation" class="select-control">
+          <option value="any">Auto-Rotate (Portrait &amp; Landscape)</option>
+          <option value="portrait">Portrait (Vertical Phone App)</option>
+          <option value="landscape">Landscape (Horizontal / Wide App)</option>
+        </select>
+      </div>
 
       <div class="dialog-footer">
         <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="createSpaceDialog">Cancel</button>
@@ -1125,6 +1203,47 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         <button type="submit" class="btn btn-primary btn-sm">Activate Hosting Slot</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- DIALOG 7: INSTALL ON ANDROID & IPHONE -->
+  <dialog id="installAppDialog" closedby="any" aria-labelledby="installAppDialogTitle">
+    <div class="dialog-header">
+      <h2 id="installAppDialogTitle">Install App on Android &amp; iPhone</h2>
+      <button type="button" class="btn-icon" data-close-dialog="installAppDialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <p class="dialog-lead" id="installAppDialogLead">
+      Install <strong>SpaceHub</strong> directly onto your phone for a full-screen native app experience.
+    </p>
+
+    <div id="nativeInstallPromptWrap" style="margin-block-end: 1rem;" hidden>
+      <button type="button" class="btn btn-primary btn-sm" id="triggerNativeInstallBtn" style="width: 100%;">
+        Install Now (1-Tap Android / Desktop)
+      </button>
+    </div>
+
+    <div class="arch-card" style="margin-block-end: 0.75rem;">
+      <h3>Android (Chrome, Edge, Samsung Internet)</h3>
+      <p>
+        Open <code id="installTargetUrlAndroid">https://spacehub.win</code> in Chrome, tap the browser menu (<strong>⋮</strong>), and select <strong>Install app</strong> or <strong>Add to Home screen</strong>.
+      </p>
+    </div>
+
+    <div class="arch-card" style="margin-block-end: 1rem;">
+      <h3>iPhone &amp; iPad (Safari)</h3>
+      <p>
+        Open <code id="installTargetUrlIos">https://spacehub.win</code> in Safari, tap the <strong>Share</strong> button at the bottom of the screen, and tap <strong>Add to Home Screen</strong>.
+      </p>
+    </div>
+
+    <div class="dialog-footer" style="justify-content: space-between;">
+      <button type="button" class="btn btn-outline btn-sm" id="copyInstallLinkBtn">
+        Copy App Link
+      </button>
+      <button type="button" class="btn btn-primary btn-sm" data-close-dialog="installAppDialog">
+        Done
+      </button>
+    </div>
   </dialog>
 
   <script src="/app.js"></script>

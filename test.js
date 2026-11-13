@@ -161,6 +161,28 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(bundleRes.status, 200);
     assert.ok(bundleRes.body.files['vercel.json'], 'Should include vercel.json in export bundle');
     assert.ok(bundleRes.body.files['netlify.toml'], 'Should include netlify.toml in export bundle');
+    assert.ok(bundleRes.body.files['manifest.webmanifest'], 'Should include PWA manifest in export bundle');
+    assert.ok(bundleRes.body.files['sw.js'], 'Should include PWA service worker in export bundle');
+
+    console.log('8b. Verifying Android & iPhone PWA Manifest & Platform/Orientation choice...');
+    const updatePlatRes = await request(
+      server,
+      'PUT',
+      `/api/spaces/${uniqueUser}/${space.slug}`,
+      {
+        appPlatform: 'both',
+        appOrientation: 'portrait'
+      },
+      token
+    );
+    assert.strictEqual(updatePlatRes.status, 200);
+    assert.strictEqual(updatePlatRes.body.space.appPlatform, 'both');
+    assert.strictEqual(updatePlatRes.body.space.appOrientation, 'portrait');
+
+    const manifestRes = await request(server, 'GET', `/live/${space.slug}/manifest.webmanifest`);
+    assert.strictEqual(manifestRes.status, 200);
+    assert.strictEqual(manifestRes.body.display, 'standalone');
+    assert.strictEqual(manifestRes.body.orientation, 'portrait');
 
     console.log('9. Testing External Coding Agent REST API with sh_pat_ token...');
     const patRes = await request(

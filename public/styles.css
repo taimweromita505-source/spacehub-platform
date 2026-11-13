@@ -845,6 +845,30 @@ textarea {
   border-radius: 0.65rem;
 }
 
+.preview-stage.vp-mobile-landscape {
+  padding: 1.5rem 1rem;
+  align-items: center;
+}
+.preview-stage.vp-mobile-landscape .preview-iframe {
+  width: 844px;
+  height: 390px;
+  min-height: 390px;
+  max-width: 100%;
+  border-radius: 0.65rem;
+}
+
+@media (display-mode: standalone) {
+  .topbar {
+    padding-top: env(safe-area-inset-top);
+  }
+  .site-footer {
+    padding-bottom: calc(1.1rem + env(safe-area-inset-bottom));
+  }
+  #installSpaceHubBtn {
+    display: none;
+  }
+}
+
 .full-app-stage {
   min-height: 660px;
   border: 1px solid var(--border);

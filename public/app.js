@@ -328,6 +328,13 @@ function renderSpacesGrid() {
       const hostLabel = s.externalHost
         ? escapeHtml(s.externalHost.providerLabel)
         : 'Staging';
+      const platLabels = {
+        both: 'Android & iOS',
+        android: 'Android App',
+        iphone: 'iPhone App',
+        web_only: 'Web Only'
+      };
+      const platLabel = platLabels[s.appPlatform || 'both'] || 'Android & iOS';
 
       return `
         <article class="space-card">
@@ -339,6 +346,7 @@ function renderSpacesGrid() {
               </div>
               <div class="space-card-badges">
                 <span class="badge-pill">${visBadge}</span>
+                <span class="badge-pill">${platLabel}</span>
                 <span class="badge-pill">${hostLabel}</span>
               </div>
             </div>
@@ -412,6 +420,22 @@ function updateStudioHeaderBadges(space) {
 
   const visBadge = document.getElementById('studioVisibilityBadge');
   visBadge.textContent = space.visibility === 'private' ? 'Private' : 'Public';
+
+  const platBadge = document.getElementById('studioPlatformBadge');
+  const installSpaceBtn = document.getElementById('installSpaceAppBtn');
+  const platLabels = {
+    both: 'Android & iPhone',
+    android: 'Android App',
+    iphone: 'iPhone App',
+    web_only: 'Web Only'
+  };
+  const currentPlat = space.appPlatform || 'both';
+  if (platBadge) {
+    platBadge.textContent = platLabels[currentPlat] || 'Android & iPhone';
+  }
+  if (installSpaceBtn) {
+    installSpaceBtn.hidden = currentPlat === 'web_only';
+  }
 
   const statusBadge = document.getElementById('studioStatusBadge');
   if (space.status === 'draft') {
@@ -506,6 +530,12 @@ async function openSpaceStudio(username, slug) {
     document.getElementById('visPublic').checked = space.visibility === 'public';
     document.getElementById('visPrivate').checked = space.visibility === 'private';
 
+    const platVal = space.appPlatform || 'both';
+    const platRadio = document.querySelector(`input[name="settingsAppPlatform"][value="${platVal}"]`);
+    if (platRadio) platRadio.checked = true;
+    const orientSelect = document.getElementById('settingsOrientationSelect');
+    if (orientSelect) orientSelect.value = space.appOrientation || 'any';
+
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
     setStudioTab(space.isOwner ? 'workspace' : 'app');
@@ -542,15 +572,16 @@ document.getElementById('refreshPreviewBtn').addEventListener('click', () => {
   showToast('Staging preview refreshed');
 });
 
-// Responsive Viewport Switcher (Desktop / Tablet / Mobile)
+// Responsive Viewport Switcher (Desktop / Tablet / Mobile Portrait / Mobile Landscape)
 document.querySelectorAll('.vp-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const vp = btn.getAttribute('data-vp');
     document.querySelectorAll('.vp-btn').forEach((b) => b.classList.toggle('active', b === btn));
     const stage = document.getElementById('previewStage');
-    stage.classList.remove('vp-tablet', 'vp-mobile');
+    stage.classList.remove('vp-tablet', 'vp-mobile', 'vp-mobile-landscape');
     if (vp === 'tablet') stage.classList.add('vp-tablet');
     if (vp === 'mobile') stage.classList.add('vp-mobile');
+    if (vp === 'mobile-landscape') stage.classList.add('vp-mobile-landscape');
   });
 });
 
@@ -840,12 +871,15 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
   const title = document.getElementById('settingsTitleInput').value.trim();
   const description = document.getElementById('settingsDescInput').value.trim();
   const visibility = document.getElementById('visPrivate').checked ? 'private' : 'public';
+  const appPlatform =
+    document.querySelector('input[name="settingsAppPlatform"]:checked')?.value || 'both';
+  const appOrientation = document.getElementById('settingsOrientationSelect')?.value || 'any';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
     const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}`, {
       method: 'PUT',
-      body: JSON.stringify({ title, description, visibility })
+      body: JSON.stringify({ title, description, visibility, appPlatform, appOrientation })
     });
     state.currentSpace = data.space;
     state.workingFiles['README.md'] = data.space.draftFiles['README.md'];
@@ -853,7 +887,7 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
       document.getElementById('codeEditorTextarea').value = state.workingFiles['README.md'];
     }
     updateStudioHeaderBadges(data.space);
-    showToast('Space settings & privacy updated.');
+    showToast('Space settings, platform target & orientation updated.');
   } catch (err) {
     showToast(err.message);
   }
@@ -1301,6 +1335,8 @@ document.getElementById('createSpaceForm').addEventListener('submit', async (e) 
   const description = document.getElementById('spaceDescInput').value.trim();
   const templateId = form.querySelector('input[name="templateId"]:checked')?.value || 'landing';
   const visibility = form.querySelector('input[name="visibility"]:checked')?.value || 'private';
+  const appPlatform = document.getElementById('createPlatformSelect')?.value || 'both';
+  const appOrientation = document.getElementById('createOrientationSelect')?.value || 'any';
 
   const templateMeta = {
     landing: { emoji: '✨', colorFrom: 'indigo', colorTo: 'cyan' },
@@ -1316,6 +1352,8 @@ document.getElementById('createSpaceForm').addEventListener('submit', async (e) 
         description,
         templateId,
         visibility,
+        appPlatform,
+        appOrientation,
         ...templateMeta
       })
     });
@@ -1325,6 +1363,74 @@ document.getElementById('createSpaceForm').addEventListener('submit', async (e) 
     openSpaceStudio(data.space.ownerUsername, data.space.slug);
   } catch (err) {
     showToast(err.message);
+  }
+});
+
+// --- 7. INSTALLABLE MOBILE APP (ANDROID & IPHONE PWA) ---
+
+let deferredInstallPrompt = null;
+let currentInstallUrl = window.location.origin;
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const wrap = document.getElementById('nativeInstallPromptWrap');
+  if (wrap) wrap.hidden = false;
+});
+
+function openInstallAppModal(appName, targetUrl) {
+  currentInstallUrl = targetUrl || window.location.origin;
+  const titleEl = document.getElementById('installAppDialogTitle');
+  const leadEl = document.getElementById('installAppDialogLead');
+  const androidCode = document.getElementById('installTargetUrlAndroid');
+  const iosCode = document.getElementById('installTargetUrlIos');
+  if (titleEl) titleEl.textContent = `Install ${appName} on Android & iPhone`;
+  if (leadEl) {
+    leadEl.innerHTML = `Install <strong>${escapeHtml(
+      appName
+    )}</strong> onto your phone home screen for a full-screen mobile app experience.`;
+  }
+  if (androidCode) androidCode.textContent = currentInstallUrl;
+  if (iosCode) iosCode.textContent = currentInstallUrl;
+  document.getElementById('installAppDialog')?.showModal();
+}
+
+document.getElementById('installSpaceHubBtn')?.addEventListener('click', async () => {
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    return;
+  }
+  openInstallAppModal('SpaceHub', window.location.origin);
+});
+
+document.getElementById('installSpaceAppBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace) return;
+  const spaceLiveUrl = `${window.location.origin}/live/${state.currentSpace.slug}`;
+  openInstallAppModal(state.currentSpace.title, spaceLiveUrl);
+});
+
+document.getElementById('triggerNativeInstallBtn')?.addEventListener('click', async () => {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  document.getElementById('installAppDialog')?.close();
+});
+
+document.getElementById('copyInstallLinkBtn')?.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(currentInstallUrl);
+    showToast(`Copied mobile app link: ${currentInstallUrl}`);
+  } catch (_e) {
+    showToast(currentInstallUrl);
   }
 });
 
