@@ -353,10 +353,15 @@ function renderSpacesGrid() {
             <p class="space-card-desc" style="margin-block-start: 0.75rem;">${escapeHtml(s.description || 'Staged web application')}</p>
           </div>
           <div class="space-card-footer">
-            <span class="section-sub">${s.likes} ${s.likes === 1 ? 'like' : 'likes'}</span>
-            <button type="button" class="btn btn-outline btn-xs" data-open-space="${escapeHtml(s.ownerUsername)}/${escapeHtml(s.slug)}">
-              ${s.isOwner ? 'Open Workspace' : 'Open Space'}
-            </button>
+            <span class="section-sub">${s.views || 0} views · ${s.likes || 0} likes</span>
+            <div style="display: flex; gap: 0.35rem;">
+              <button type="button" class="btn btn-ghost btn-xs" data-fork-space="${escapeHtml(s.ownerUsername)}/${escapeHtml(s.slug)}">
+                Clone
+              </button>
+              <button type="button" class="btn btn-outline btn-xs" data-open-space="${escapeHtml(s.ownerUsername)}/${escapeHtml(s.slug)}">
+                ${s.isOwner ? 'Open Workspace' : 'Open Space'}
+              </button>
+            </div>
           </div>
         </article>
       `;
@@ -367,6 +372,24 @@ function renderSpacesGrid() {
     btn.addEventListener('click', () => {
       const [owner, slug] = btn.getAttribute('data-open-space').split('/');
       openSpaceStudio(owner, slug);
+    });
+  });
+
+  grid.querySelectorAll('[data-fork-space]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!state.user) {
+        showToast('Sign in to clone this Space into your private staging workspace.');
+        document.getElementById('signInDialog').showModal();
+        return;
+      }
+      const [owner, slug] = btn.getAttribute('data-fork-space').split('/');
+      try {
+        const res = await apiFetch(`/api/spaces/${owner}/${slug}/fork`, { method: 'POST' });
+        showToast(res.message);
+        openSpaceStudio(res.space.ownerUsername, res.space.slug);
+      } catch (err) {
+        showToast(err.message);
+      }
     });
   });
 }
@@ -444,6 +467,18 @@ function updateStudioHeaderBadges(space) {
     statusBadge.textContent = 'Unpublished Changes';
   } else {
     statusBadge.textContent = 'Live';
+  }
+
+  const analyticsBadge = document.getElementById('studioAnalyticsBadge');
+  if (analyticsBadge) {
+    analyticsBadge.textContent = `${space.views || 0} views · ${space.installs || 0} installs`;
+  }
+
+  const rollbackBtn = document.getElementById('rollbackDraftBtn');
+  if (rollbackBtn) {
+    const snapCount = space.snapshotCount || (space.snapshots ? space.snapshots.length : 0);
+    rollbackBtn.hidden = !(space.isOwner && snapCount > 0);
+    rollbackBtn.textContent = `Undo (${snapCount})`;
   }
 
   const hostBadge = document.getElementById('studioHostBadge');
@@ -535,6 +570,10 @@ async function openSpaceStudio(username, slug) {
     if (platRadio) platRadio.checked = true;
     const orientSelect = document.getElementById('settingsOrientationSelect');
     if (orientSelect) orientSelect.value = space.appOrientation || 'any';
+    const iconTextInput = document.getElementById('settingsIconTextInput');
+    if (iconTextInput) iconTextInput.value = space.appIconText || '';
+    const themeColorSelect = document.getElementById('settingsThemeColorSelect');
+    if (themeColorSelect) themeColorSelect.value = space.appThemeColor || '#09090b';
 
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
@@ -700,6 +739,47 @@ document.getElementById('saveDraftBtn').addEventListener('click', async () => {
     document.getElementById('dirtyIndicator').textContent = '✓ Staging draft saved';
     updateStudioHeaderBadges(data.space);
     showToast('Staging draft saved! Connect or buy hosting when ready to launch.');
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+// 1-Click Rollback / Undo to Previous Snapshot
+document.getElementById('rollbackDraftBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+    state.currentSpace = data.space;
+    state.workingFiles = JSON.parse(JSON.stringify(data.space.draftFiles));
+    state.isDirty = false;
+    document.getElementById('codeEditorTextarea').value =
+      state.workingFiles[state.activeFile] || '';
+    document.getElementById('dirtyIndicator').textContent = '✓ Restored previous snapshot';
+    updateStudioHeaderBadges(data.space);
+    updateLiveStagingPreview();
+    showToast(data.message);
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+// Fork / Clone Space from Studio
+document.getElementById('forkSpaceBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace) return;
+  if (!state.user) {
+    showToast('Sign in to clone this Space into your private staging workspace.');
+    document.getElementById('signInDialog').showModal();
+    return;
+  }
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    const res = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/fork`, { method: 'POST' });
+    showToast(res.message);
+    openSpaceStudio(res.space.ownerUsername, res.space.slug);
   } catch (err) {
     showToast(err.message);
   }
@@ -874,12 +954,22 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
   const appPlatform =
     document.querySelector('input[name="settingsAppPlatform"]:checked')?.value || 'both';
   const appOrientation = document.getElementById('settingsOrientationSelect')?.value || 'any';
+  const appIconText = document.getElementById('settingsIconTextInput')?.value.trim() || '';
+  const appThemeColor = document.getElementById('settingsThemeColorSelect')?.value || '#09090b';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
     const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}`, {
       method: 'PUT',
-      body: JSON.stringify({ title, description, visibility, appPlatform, appOrientation })
+      body: JSON.stringify({
+        title,
+        description,
+        visibility,
+        appPlatform,
+        appOrientation,
+        appIconText,
+        appThemeColor
+      })
     });
     state.currentSpace = data.space;
     state.workingFiles['README.md'] = data.space.draftFiles['README.md'];
@@ -1390,14 +1480,20 @@ function openInstallAppModal(appName, targetUrl) {
   const leadEl = document.getElementById('installAppDialogLead');
   const androidCode = document.getElementById('installTargetUrlAndroid');
   const iosCode = document.getElementById('installTargetUrlIos');
+  const qrImg = document.getElementById('installQrCodeImg');
   if (titleEl) titleEl.textContent = `Install ${appName} on Android & iPhone`;
   if (leadEl) {
-    leadEl.innerHTML = `Install <strong>${escapeHtml(
+    leadEl.innerHTML = `Scan the QR code or open the link below to install <strong>${escapeHtml(
       appName
-    )}</strong> onto your phone home screen for a full-screen mobile app experience.`;
+    )}</strong> onto your Android or iPhone home screen.`;
   }
   if (androidCode) androidCode.textContent = currentInstallUrl;
   if (iosCode) iosCode.textContent = currentInstallUrl;
+  if (qrImg) {
+    qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(
+      currentInstallUrl
+    )}`;
+  }
   document.getElementById('installAppDialog')?.showModal();
 }
 

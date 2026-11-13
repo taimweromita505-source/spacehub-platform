@@ -382,8 +382,13 @@ function formatSpaceSummary(space, user) {
     visibility: space.visibility,
     appPlatform: space.appPlatform || 'both',
     appOrientation: space.appOrientation || 'any',
+    appIconText: space.appIconText || '',
+    appThemeColor: space.appThemeColor || '#09090b',
     status: space.status,
     likes: space.likes || 0,
+    views: space.views || 0,
+    installs: space.installs || 0,
+    snapshotCount: (space.snapshots || []).length,
     likedByMe: Boolean(user && (space.likedBy || []).includes(user.id)),
     hasUnpublishedChanges: Boolean(space.hasUnpublishedChanges),
     createdAt: space.createdAt,
@@ -397,17 +402,40 @@ function formatSpaceSummary(space, user) {
   };
 }
 
-function generateSpaceIconSvg(spaceTitle = 'S') {
-  const initial = String(spaceTitle || 'S').trim().charAt(0).toUpperCase() || 'S';
+function pushSpaceSnapshot(space, label = 'Previous version') {
+  if (!space.draftFiles) return;
+  space.snapshots = Array.isArray(space.snapshots) ? space.snapshots : [];
+  space.snapshots.unshift({
+    id: 'snap_' + randomHex(6),
+    label,
+    files: JSON.parse(JSON.stringify(space.draftFiles)),
+    createdAt: new Date().toISOString()
+  });
+  if (space.snapshots.length > 10) {
+    space.snapshots = space.snapshots.slice(0, 10);
+  }
+}
+
+function generateSpaceIconSvg(spaceOrTitle = 'S') {
+  const isObj = spaceOrTitle && typeof spaceOrTitle === 'object';
+  const rawText = isObj
+    ? spaceOrTitle.appIconText || String(spaceOrTitle.title || 'S').trim().charAt(0).toUpperCase()
+    : String(spaceOrTitle || 'S').trim().charAt(0).toUpperCase();
+  const initial = String(rawText || 'S').trim().slice(0, 2) || 'S';
+  const bg = (isObj && /^#[0-9a-fA-F]{3,8}$/.test(spaceOrTitle.appThemeColor))
+    ? spaceOrTitle.appThemeColor
+    : '#09090b';
+  const fontSize = initial.length > 1 ? 185 : 240;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="112" fill="#09090b" />
-  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="#27272a" stroke-width="8" />
-  <text x="256" y="330" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="240" font-weight="700" fill="#fafafa">${initial.replace(/[<>&"']/g, '')}</text>
+  <rect width="512" height="512" rx="112" fill="${bg}" />
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="rgba(255,255,255,0.16)" stroke-width="8" />
+  <text x="256" y="330" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="${fontSize}" font-weight="700" fill="#fafafa">${initial.replace(/[<>&"']/g, '')}</text>
 </svg>`;
 }
 
 function generateSpaceManifest(space, origin = '') {
   const startUrl = `${origin}/live/${space.slug}`;
+  const themeColor = /^#[0-9a-fA-F]{3,8}$/.test(space.appThemeColor) ? space.appThemeColor : '#09090b';
   return {
     name: `${space.title}`,
     short_name: String(space.title || space.slug).slice(0, 15),
@@ -416,8 +444,8 @@ function generateSpaceManifest(space, origin = '') {
     scope: `${origin}/live/${space.slug}`,
     display: 'standalone',
     orientation: space.appOrientation || 'any',
-    background_color: '#09090b',
-    theme_color: '#09090b',
+    background_color: themeColor,
+    theme_color: themeColor,
     icons: [
       {
         src: `${origin}/live/${space.slug}/icon.svg`,
@@ -679,17 +707,19 @@ export default {
     if (spacePwaMatch && method === 'GET') {
       const slug = decodeURIComponent(spacePwaMatch[1]).toLowerCase();
       const asset = spacePwaMatch[2].toLowerCase();
-      const space = db.spaces.find((s) => s.slug === slug);
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
       if (!space) return new Response('Not found', { status: 404 });
 
       if (asset === 'manifest.webmanifest') {
+        space.installs = (space.installs || 0) + 1;
+        await saveDb(env, db);
         return new Response(JSON.stringify(generateSpaceManifest(space, url.origin), null, 2), {
           status: 200,
           headers: { 'Content-Type': 'application/manifest+json; charset=utf-8' }
         });
       }
       if (asset === 'icon.svg') {
-        return new Response(generateSpaceIconSvg(space.title), {
+        return new Response(generateSpaceIconSvg(space), {
           status: 200,
           headers: { 'Content-Type': 'image/svg+xml; charset=utf-8' }
         });
@@ -710,7 +740,7 @@ export default {
       let space = null;
       if (shortLiveMatch) {
         const slug = decodeURIComponent(shortLiveMatch[1]).toLowerCase();
-        space = db.spaces.find((s) => s.slug === slug);
+        space = [...db.spaces].reverse().find((s) => s.slug === slug);
       } else {
         const username = decodeURIComponent(liveMatch[1]).toLowerCase();
         const slug = decodeURIComponent(liveMatch[2]).toLowerCase();
@@ -722,6 +752,10 @@ export default {
           `<!DOCTYPE html><html><body style="background:#09090b;color:#fafafa;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;padding:2rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;max-width:420px"><h1 style="font-size:1.25rem;margin-bottom:0.5rem">404 — Private or Unlaunched Space</h1><p style="color:#a1a1aa;font-size:0.9rem;margin-bottom:1.25rem">This Space is set to private or is currently in staging.</p><a href="/" style="color:#818cf8;text-decoration:none;font-weight:600">← Return to SpaceHub</a></div></body></html>`,
           { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
         );
+      }
+      if (mode !== 'draft') {
+        space.views = (space.views || 0) + 1;
+        await saveDb(env, db);
       }
       const targetFiles = mode === 'draft' && isOwner ? space.draftFiles : space.publishedFiles || space.draftFiles;
       return new Response(buildBundledHtml(targetFiles, url.origin, space), {
@@ -1040,8 +1074,15 @@ export default {
           if (['any', 'portrait', 'landscape'].includes(body.appOrientation)) {
             space.appOrientation = body.appOrientation;
           }
+          if (typeof body.appIconText === 'string') {
+            space.appIconText = body.appIconText.trim().slice(0, 2);
+          }
+          if (typeof body.appThemeColor === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(body.appThemeColor.trim())) {
+            space.appThemeColor = body.appThemeColor.trim();
+          }
           const incomingFiles = body.draftFiles || body.files;
           if (incomingFiles && typeof incomingFiles === 'object') {
+            pushSpaceSnapshot(space, 'Before manual save');
             space.draftFiles = { ...space.draftFiles, ...incomingFiles };
             space.hasUnpublishedChanges = true;
           }
@@ -1052,9 +1093,95 @@ export default {
               ...formatSpaceSummary(space, user),
               draftFiles: space.draftFiles,
               publishedFiles: space.publishedFiles,
+              snapshots: space.snapshots || [],
               agentHistory: space.agentHistory || []
             }
           });
+        }
+
+        if (action === 'rollback' && method === 'POST') {
+          if (!user || !space || space.ownerId !== user.id) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          const snaps = space.snapshots || [];
+          if (!snaps.length) {
+            return jsonResponse({ error: 'No previous snapshot available to restore.' }, 400);
+          }
+          const snap = body.snapshotId
+            ? snaps.find((s) => s.id === body.snapshotId) || snaps[0]
+            : snaps.shift();
+          space.draftFiles = JSON.parse(JSON.stringify(snap.files));
+          space.hasUnpublishedChanges = true;
+          space.updatedAt = new Date().toISOString();
+          await saveDb(env, db);
+          return jsonResponse({
+            message: `Restored previous version (${snap.label})`,
+            space: {
+              ...formatSpaceSummary(space, user),
+              draftFiles: space.draftFiles,
+              publishedFiles: space.publishedFiles,
+              snapshots: space.snapshots || [],
+              agentHistory: space.agentHistory || []
+            }
+          });
+        }
+
+        if (action === 'fork' && method === 'POST') {
+          if (!user) return jsonResponse({ error: 'Please sign in to clone this Space.' }, 401);
+          if (!space || !canViewSpace(space, user)) {
+            return jsonResponse({ error: 'Space not found or is Private.' }, 404);
+          }
+          let forkSlug = slugify(`${space.slug}-fork`);
+          if (db.spaces.some((s) => s.ownerId === user.id && s.slug === forkSlug)) {
+            forkSlug = slugify(`${space.slug}-fork-${randomHex(2)}`);
+          }
+          const now = new Date().toISOString();
+          const sourceFiles = space.publishedFiles || space.draftFiles || {};
+          const forkedSpace = {
+            id: 'spc_' + randomHex(8),
+            ownerId: user.id,
+            ownerUsername: user.username,
+            slug: forkSlug,
+            title: `${space.title} (Fork)`,
+            description: space.description || `Cloned from @${space.ownerUsername}/${space.slug}`,
+            emoji: space.emoji || '🚀',
+            colorFrom: space.colorFrom || 'indigo',
+            colorTo: space.colorTo || 'cyan',
+            sdk: 'static',
+            visibility: 'private',
+            appPlatform: space.appPlatform || 'both',
+            appOrientation: space.appOrientation || 'any',
+            appIconText: space.appIconText || '',
+            appThemeColor: space.appThemeColor || '#09090b',
+            status: 'draft',
+            likes: 0,
+            views: 0,
+            installs: 0,
+            likedBy: [],
+            snapshots: [],
+            createdAt: now,
+            updatedAt: now,
+            publishedAt: null,
+            hasUnpublishedChanges: true,
+            agentHistory: [],
+            externalHost: null,
+            draftFiles: JSON.parse(JSON.stringify(sourceFiles)),
+            publishedFiles: null
+          };
+          db.spaces.unshift(forkedSpace);
+          await saveDb(env, db);
+          return jsonResponse(
+            {
+              message: `Cloned to @${user.username}/${forkSlug} in Private Staging!`,
+              space: {
+                ...formatSpaceSummary(forkedSpace, user),
+                draftFiles: forkedSpace.draftFiles,
+                publishedFiles: null,
+                agentHistory: []
+              }
+            },
+            201
+          );
         }
 
         if (!action && method === 'DELETE') {
@@ -1111,6 +1238,7 @@ export default {
             result = synthesizeWithBuiltinAgent(prompt, space.title);
           }
 
+          pushSpaceSnapshot(space, `Before AI build: ${prompt.slice(0, 40)}`);
           space.draftFiles = {
             ...space.draftFiles,
             ...(result.files || {})

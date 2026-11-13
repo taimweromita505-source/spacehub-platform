@@ -184,6 +184,27 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(manifestRes.body.display, 'standalone');
     assert.strictEqual(manifestRes.body.orientation, 'portrait');
 
+    console.log('8c. Verifying Version Snapshot Rollback & Clone/Fork Space...');
+    const rollbackRes = await request(
+      server,
+      'POST',
+      `/api/spaces/${uniqueUser}/${space.slug}/rollback`,
+      {},
+      token
+    );
+    assert.strictEqual(rollbackRes.status, 200);
+    assert.ok(rollbackRes.body.message.includes('Restored previous version'));
+
+    const forkRes = await request(
+      server,
+      'POST',
+      `/api/spaces/${uniqueUser}/${space.slug}/fork`,
+      {},
+      token
+    );
+    assert.strictEqual(forkRes.status, 201);
+    assert.ok(forkRes.body.space.slug.includes('fork'));
+
     console.log('9. Testing External Coding Agent REST API with sh_pat_ token...');
     const patRes = await request(
       server,

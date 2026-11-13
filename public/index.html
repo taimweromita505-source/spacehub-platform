@@ -404,6 +404,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <span class="status-pill" id="studioVisibilityBadge">Private</span>
           <span class="status-pill" id="studioPlatformBadge">Android &amp; iPhone</span>
           <span class="status-pill" id="studioStatusBadge">Staging</span>
+          <span class="status-pill" id="studioAnalyticsBadge">0 views · 0 installs</span>
           <span class="status-pill" id="studioHostBadge">No Host</span>
         </div>
 
@@ -411,11 +412,14 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <button type="button" class="btn btn-outline btn-sm" id="likeSpaceBtn">
             Like · <span id="likeCountText">0</span>
           </button>
+          <button type="button" class="btn btn-outline btn-sm" id="forkSpaceBtn">
+            Clone
+          </button>
           <button type="button" class="btn btn-outline btn-sm" id="quickPrivacyToggleBtn" hidden>
             Make Public
           </button>
           <button type="button" class="btn btn-outline btn-sm" id="installSpaceAppBtn">
-            Install App
+            Install / QR
           </button>
           <button type="button" class="btn btn-outline btn-sm" id="exportBundleBtn">
             Export
@@ -504,6 +508,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
               </div>
               <div class="editor-toolbar">
                 <span class="unsaved-indicator" id="dirtyIndicator">Saved</span>
+                <button type="button" class="btn btn-ghost btn-xs" id="rollbackDraftBtn" hidden>
+                  Undo Build
+                </button>
                 <button type="button" class="btn btn-outline btn-xs" id="saveDraftBtn">
                   Save Draft
                 </button>
@@ -651,6 +658,30 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
               <option value="portrait">Portrait Only (Vertical Mobile App)</option>
               <option value="landscape">Landscape Only (Horizontal / Wide App)</option>
             </select>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+            <div class="field">
+              <label for="settingsIconTextInput">App Icon Monogram (1–2 chars)</label>
+              <input
+                type="text"
+                id="settingsIconTextInput"
+                name="appIconText"
+                maxlength="2"
+                placeholder="e.g. SH"
+              />
+            </div>
+            <div class="field">
+              <label for="settingsThemeColorSelect">App Icon &amp; Theme Color</label>
+              <select id="settingsThemeColorSelect" name="appThemeColor" class="select-control">
+                <option value="#09090b">Obsidian Black (#09090b)</option>
+                <option value="#4f46e5">Indigo (#4f46e5)</option>
+                <option value="#059669">Emerald (#059669)</option>
+                <option value="#e11d48">Rose (#e11d48)</option>
+                <option value="#0284c7">Sky Blue (#0284c7)</option>
+                <option value="#d97706">Amber (#d97706)</option>
+              </select>
+            </div>
           </div>
 
           <div class="settings-actions">
@@ -1220,6 +1251,23 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
       <button type="button" class="btn btn-primary btn-sm" id="triggerNativeInstallBtn" style="width: 100%;">
         Install Now (1-Tap Android / Desktop)
       </button>
+    </div>
+
+    <div class="arch-card" style="margin-block-end: 0.75rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+      <img
+        id="installQrCodeImg"
+        src="https://api.qrserver.com/v1/create-qr-code/?size=140x140&amp;data=https%3A%2F%2Fspacehub.win"
+        alt="QR Code to open app on phone"
+        width="112"
+        height="112"
+        style="border-radius: 0.45rem; background: #fff; padding: 6px; border: 1px solid var(--border);"
+      />
+      <div style="flex: 1; min-width: 180px;">
+        <h3>Scan with Phone Camera</h3>
+        <p>
+          Point your Android or iPhone camera at this QR code to open and install the app immediately on your phone.
+        </p>
+      </div>
     </div>
 
     <div class="arch-card" style="margin-block-end: 0.75rem;">
