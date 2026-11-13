@@ -1436,3 +1436,8 @@ dialog::backdrop {
 .publish-review dt { color: var(--muted); }
 .publish-review dd { overflow-wrap: anywhere; }
 #publishError { color: var(--danger); }
+
+.studio-hosting { margin-block: 0.75rem; }
+.studio-hosting summary { cursor: pointer; font-weight: 600; }
+.studio-hosting .publish-review { margin-block: 0.65rem; }
+.studio-hosting button { margin-top: 0.5rem; }
