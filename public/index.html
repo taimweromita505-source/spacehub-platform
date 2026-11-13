@@ -4,18 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
-  <title>SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)</title>
-  <meta name="description" content="Stage and test your website or web app in a private workspace with your own AI coding agents. Launch to global edge hosting for $1/month or $12/year, or connect your own host." />
+  <title>SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo per Space)</title>
+  <meta name="description" content="Stage and test your website or web app in a private workspace with your own AI coding agents. Launch to global edge hosting for $1/month or $12/year per Space, or connect your own host." />
   <meta name="keywords" content="web app staging, website preview platform, AI coding agent workspace, $1 web hosting, Cloudflare edge hosting, Hugging Face Spaces alternative" />
   <link rel="canonical" href="https://spacehub.win/" />
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)" />
-  <meta property="og:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year." />
+  <meta property="og:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo per Space)" />
+  <meta property="og:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year per Space." />
   <meta property="og:url" content="https://spacehub.win/" />
   <meta property="og:site_name" content="SpaceHub" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)" />
-  <meta name="twitter:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year." />
+  <meta name="twitter:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo per Space)" />
+  <meta name="twitter:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year per Space." />
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -24,7 +24,7 @@
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Web",
     "url": "https://spacehub.win/",
-    "description": "Web application staging workspace, BYO coding agent builder, and $1/month cloud hosting platform.",
+    "description": "Web application staging workspace, BYO coding agent builder, and $1/month per Space cloud hosting platform.",
     "offers": [
       {
         "@type": "Offer",
@@ -34,13 +34,13 @@
       },
       {
         "@type": "Offer",
-        "name": "Monthly Account Hosting",
+        "name": "Monthly Space Hosting (1 Space)",
         "price": "1.00",
         "priceCurrency": "USD"
       },
       {
         "@type": "Offer",
-        "name": "Annual Account Hosting",
+        "name": "Annual Space Hosting (1 Space)",
         "price": "12.00",
         "priceCurrency": "USD"
       }
@@ -157,17 +157,17 @@
       <div class="arch-panel">
         <div class="panel-head">
           <div>
-            <span class="eyebrow">ACCOUNT HOSTING &amp; CLOUD DEPLOYMENT</span>
-            <h2>Host Your Account Websites — $1 / month or $12 / year</h2>
+            <span class="eyebrow">PER-SPACE HOSTING &amp; CLOUD DEPLOYMENT</span>
+            <h2>Host Each Space — $1 / month or $12 / year per Space</h2>
             <p class="arch-lead">
-              Testing your websites and apps in the staging workspace is free. When you are ready to launch live, activate account hosting for <strong>$1 / month</strong> or <strong>$12 / year</strong> (includes clean <code>/live/your-app</code> URLs on global edge), or connect an external provider.
+              Testing your websites and apps in the staging workspace is free. When you are ready to launch live, activate hosting for <strong>$1 / month per Space</strong> or <strong>$12 / year per Space</strong> (each plan hosts 1 Space with a clean <code>/live/your-app</code> URL on global edge), or connect an external provider.
             </p>
           </div>
         </div>
 
         <div class="subsection">
           <div class="subsection-head">
-            <h3>Account Hosting Plans</h3>
+            <h3>Per-Space Hosting Plans</h3>
             <div class="domain-inline-field">
               <label for="purchaseCustomDomainInput" class="visually-hidden">Custom Domain</label>
               <input
@@ -1033,7 +1033,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
       <div class="dialog-footer" style="justify-content: space-between; flex-wrap: wrap;">
         <button type="button" class="btn btn-outline btn-sm" id="goToBuyHostingFromModalBtn">
-          Hosting Plans ($1/mo · $12/yr)
+          Buy Space Hosting ($1/mo · $12/yr per Space)
         </button>
         <div style="display: flex; gap: 0.5rem;">
           <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="deployHostingDialog">Cancel</button>
@@ -1049,12 +1049,12 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
   <dialog id="paypalCheckoutDialog" closedby="any" aria-labelledby="paypalCheckoutTitle">
     <form id="paypalCheckoutForm" method="POST" action="/api/hosting-plans/purchase">
       <div class="dialog-header">
-        <h2 id="paypalCheckoutTitle">Activate Account Hosting</h2>
+        <h2 id="paypalCheckoutTitle">Activate Per-Space Hosting</h2>
         <button type="button" class="btn-icon" data-close-dialog="paypalCheckoutDialog" aria-label="Close dialog">✕</button>
       </div>
 
       <p class="dialog-lead" id="paypalCheckoutSummary">
-        Selected Plan: <strong>Monthly Account Hosting ($1 / month)</strong>
+        Selected Plan: <strong>Monthly Space Hosting ($1 / month per Space)</strong>
       </p>
 
       <input type="hidden" id="checkoutPlanIdInput" name="planId" value="plan_monthly_1" />

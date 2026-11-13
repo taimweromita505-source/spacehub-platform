@@ -1003,10 +1003,17 @@ document.getElementById('paypalCheckoutForm')?.addEventListener('submit', async 
   const planId = document.getElementById('checkoutPlanIdInput').value;
   const customDomain = document.getElementById('purchaseCustomDomainInput')?.value.trim() || '';
   const paymentRef = document.getElementById('checkoutRefInput')?.value.trim() || 'paypal_checkout';
+  const spaceSlug = state.currentSpace?.slug || '';
   try {
     const res = await apiFetch('/api/hosting-plans/purchase', {
       method: 'POST',
-      body: JSON.stringify({ planId, customDomain, paymentMethod: 'paypal_all_methods', paymentRef })
+      body: JSON.stringify({
+        planId,
+        customDomain,
+        spaceSlug,
+        paymentMethod: 'paypal_all_methods',
+        paymentRef
+      })
     });
     document.getElementById('paypalCheckoutDialog').close();
     await loadHostingConnections();

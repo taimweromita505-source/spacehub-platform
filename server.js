@@ -1280,16 +1280,16 @@ app.delete('/api/agent-keys/:id', (req, res) => {
 const HOSTING_PLANS = [
   {
     id: 'plan_monthly_1',
-    name: 'Monthly Account Hosting',
+    name: 'Monthly Space Hosting (1 Space)',
     amountUsd: '1.00',
     billingUnit: 'M',
     priceMonthly: 1,
     billingPeriod: '1 month',
-    priceLabel: '$1 / month',
+    priceLabel: '$1 / month per Space',
     provider: 'cloudflare_pages',
-    providerLabel: 'SpaceHub Managed Edge Hosting',
+    providerLabel: 'SpaceHub Managed Edge Hosting (1 Space)',
     features: [
-      'Host your account websites & apps for 1 full month',
+      'Host 1 Space website or web app for 1 full month',
       'Clean shareable production URL (/live/your-app)',
       'Global Cloudflare Edge CDN + automatic SSL',
       'Pay with Card, Apple/Google Pay, Venmo, or PayPal'
@@ -1297,19 +1297,19 @@ const HOSTING_PLANS = [
   },
   {
     id: 'plan_yearly_12',
-    name: 'Annual Account Hosting',
+    name: 'Annual Space Hosting (1 Space)',
     amountUsd: '12.00',
     billingUnit: 'Y',
     priceMonthly: 1,
     priceYearly: 12,
     billingPeriod: '1 year',
-    priceLabel: '$12 / year',
+    priceLabel: '$12 / year per Space',
     provider: 'cloudflare_pages',
-    providerLabel: 'SpaceHub Managed Edge Hosting (1 Year)',
+    providerLabel: 'SpaceHub Managed Edge Hosting (1 Space · 1 Year)',
     features: [
-      'Full 12 months of account hosting ($1/month rate)',
-      'Unlimited hosted Spaces & clean /live/ URLs',
-      'Custom domain routing & priority global CDN',
+      'Host 1 Space website or web app for 12 months ($1/mo rate)',
+      'Dedicated /live/your-app production URL + custom domain option',
+      'Global Cloudflare Edge CDN + automatic SSL',
       'Pay with Card, Apple/Google Pay, Venmo, or PayPal'
     ]
   }
@@ -1361,24 +1361,30 @@ app.post('/api/hosting-plans/purchase', (req, res) => {
   const user = getCurrentUser(req, db);
   if (!user) return res.status(401).json({ error: 'Please sign in to buy a hosting plan.' });
 
-  const { planId, customDomain = '' } = req.body || {};
+  const { planId, customDomain = '', spaceSlug = '' } = req.body || {};
   const plan = HOSTING_PLANS.find((p) => p.id === planId) || HOSTING_PLANS[0];
   const now = new Date().toISOString();
+  const targetSpaceSlug = String(spaceSlug || '').trim().toLowerCase();
 
   const cleanDomain =
     String(customDomain || '')
       .trim()
       .toLowerCase()
       .replace(/^https?:\/\//, '')
-      .replace(/[^a-z0-9.-]/g, '') || `${user.username}-cloud.spacehub-edge.app`;
+      .replace(/[^a-z0-9.-]/g, '') ||
+    (targetSpaceSlug ? `spacehub.win/live/${targetSpaceSlug}` : `${user.username}-space.spacehub.win`);
 
   const provisionedConn = {
     id: 'host_' + crypto.randomBytes(6).toString('hex'),
     userId: user.id,
     provider: plan.provider,
     providerLabel: `${plan.name} (${plan.priceLabel})`,
-    name: `${plan.name} — ${cleanDomain}`,
+    name: targetSpaceSlug
+      ? `${plan.name} — Space: ${targetSpaceSlug}`
+      : `${plan.name} — 1 Space Slot (${cleanDomain})`,
     targetUrlOrProject: cleanDomain,
+    assignedSpaceSlug: targetSpaceSlug || null,
+    isSingleSpaceSlot: true,
     apiToken: 'provisioned_' + crypto.randomBytes(12).toString('hex'),
     webhookUrl: '',
     hasToken: true,
@@ -1393,7 +1399,7 @@ app.post('/api/hosting-plans/purchase', (req, res) => {
   saveDb(db);
 
   res.status(201).json({
-    message: `Purchased ${plan.name} (${plan.priceLabel}) and connected ${cleanDomain}!`,
+    message: `Purchased ${plan.name} (${plan.priceLabel}) for 1 Space!`,
     connection: provisionedConn
   });
 });
@@ -1411,6 +1417,8 @@ app.get('/api/hosting-connections', (req, res) => {
       providerLabel: c.providerLabel,
       name: c.name,
       targetUrlOrProject: c.targetUrlOrProject,
+      assignedSpaceSlug: c.assignedSpaceSlug || null,
+      isSingleSpaceSlot: Boolean(c.isSingleSpaceSlot),
       webhookUrl: c.webhookUrl || '',
       hasToken: Boolean(c.apiToken || c.hasToken),
       createdAt: c.createdAt
@@ -1868,6 +1876,19 @@ async function handleExternalDeploy(req, res) {
       (c) => c.id === connectionId && c.userId === user.id
     );
     if (savedConn) {
+      if (
+        savedConn.isSingleSpaceSlot &&
+        savedConn.assignedSpaceSlug &&
+        savedConn.assignedSpaceSlug !== space.slug
+      ) {
+        return res.status(402).json({
+          error: `This hosting plan is already assigned to Space "${savedConn.assignedSpaceSlug}". Hosting is $1/month or $12/year per Space — please purchase a plan for "${space.slug}".`
+        });
+      }
+      if (savedConn.isSingleSpaceSlot && !savedConn.assignedSpaceSlug) {
+        savedConn.assignedSpaceSlug = space.slug;
+        savedConn.name = `${savedConn.providerLabel.split(' (')[0]} — Space: ${space.slug}`;
+      }
       resolvedProvider = savedConn.provider;
       resolvedToken = resolvedToken || savedConn.apiToken || '';
       resolvedWebhook = resolvedWebhook || savedConn.webhookUrl || '';

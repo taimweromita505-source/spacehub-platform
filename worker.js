@@ -160,36 +160,36 @@ p { color: #a1a1aa; font-size: 0.95rem; line-height: 1.5; }`,
 const HOSTING_PLANS = [
   {
     id: 'plan_monthly_1',
-    name: 'Monthly Account Hosting',
+    name: 'Monthly Space Hosting (1 Space)',
     amountUsd: '1.00',
     billingUnit: 'M',
     priceMonthly: 1,
     billingPeriod: '1 month',
-    priceLabel: '$1 / month',
+    priceLabel: '$1 / month per Space',
     provider: 'cloudflare_pages',
-    providerLabel: 'SpaceHub Managed Edge Hosting',
+    providerLabel: 'SpaceHub Managed Edge (1 Space)',
     features: [
-      'Host your account websites & apps for 1 full month',
-      'Clean shareable production URL (/live/your-app)',
+      'Hosts 1 Space (website or web app) for 1 full month',
+      'Clean shareable production URL (/live/your-space)',
       'Global Cloudflare Edge CDN + automatic SSL',
       'Pay with Card, Apple/Google Pay, Venmo, or PayPal'
     ]
   },
   {
     id: 'plan_yearly_12',
-    name: 'Annual Account Hosting',
+    name: 'Annual Space Hosting (1 Space)',
     amountUsd: '12.00',
     billingUnit: 'Y',
     priceMonthly: 1,
     priceYearly: 12,
     billingPeriod: '1 year',
-    priceLabel: '$12 / year',
+    priceLabel: '$12 / year per Space',
     provider: 'cloudflare_pages',
-    providerLabel: 'SpaceHub Managed Edge Hosting (1 Year)',
+    providerLabel: 'SpaceHub Managed Edge (1 Space · 1 Year)',
     features: [
-      'Full 12 months of account hosting ($1/month rate)',
-      'Unlimited hosted Spaces & clean /live/ URLs',
-      'Custom domain routing & priority global CDN',
+      'Hosts 1 Space for 12 full months ($1/month rate)',
+      'Dedicated /live/your-space URL + custom domain support',
+      'Priority global Cloudflare Edge CDN + automatic SSL',
       'Pay with Card, Apple/Google Pay, Venmo, or PayPal'
     ]
   }
@@ -723,38 +723,37 @@ export default {
       }
 
       if (pathname === '/api/hosting-plans/purchase' && method === 'POST') {
-        if (!user) return jsonResponse({ error: 'Please sign in to buy a hosting plan.' }, 401);
+        if (!user) return jsonResponse({ error: 'Please sign in to buy a Space hosting plan.' }, 401);
         const plan = HOSTING_PLANS.find((p) => p.id === body.planId) || HOSTING_PLANS[0];
+        const targetSpaceSlug = body.spaceSlug ? slugify(body.spaceSlug) : null;
         const cleanDomain =
           String(body.customDomain || '').trim().toLowerCase().replace(/^https?:\/\//, '') ||
-          `${url.host}/live`;
+          (targetSpaceSlug ? `${url.host}/live/${targetSpaceSlug}` : `${url.host}/live`);
         const paymentMethod = String(body.paymentMethod || 'paypal_card').trim();
         const paymentRef = String(body.paymentRef || 'paypal_verified').trim();
         const now = new Date().toISOString();
-        user.hostingPlan = {
-          planId: plan.id,
-          name: plan.name,
-          priceLabel: plan.priceLabel,
-          billingPeriod: plan.billingPeriod,
-          paymentMethod,
-          paymentRef,
-          activatedAt: now
-        };
         const conn = {
           id: 'host_' + randomHex(6),
           userId: user.id,
           provider: plan.provider,
           providerLabel: `${plan.name} (${plan.priceLabel})`,
-          name: `${plan.name} — ${cleanDomain}`,
+          planName: plan.name,
+          priceLabel: plan.priceLabel,
+          isSingleSpaceSlot: true,
+          assignedSpaceSlug: targetSpaceSlug,
+          name: targetSpaceSlug
+            ? `${plan.name} — Space: ${targetSpaceSlug}`
+            : `${plan.name} — (1 Unassigned Space Slot)`,
           targetUrlOrProject: cleanDomain,
+          paymentMethod,
+          paymentRef,
           hasToken: true,
           createdAt: now
         };
         db.hostingConnections.unshift(conn);
         await saveDb(env, db);
         return jsonResponse({
-          message: `Activated ${plan.name} (${plan.priceLabel}) via PayPal Checkout`,
-          hostingPlan: user.hostingPlan,
+          message: `Activated ${plan.name} (${plan.priceLabel})`,
           connection: conn
         }, 201);
       }
@@ -1045,6 +1044,18 @@ export default {
           let conn = null;
           if (body.connectionId) {
             conn = db.hostingConnections.find((c) => c.id === body.connectionId && c.userId === user.id);
+          }
+          if (conn && conn.isSingleSpaceSlot) {
+            if (conn.assignedSpaceSlug && conn.assignedSpaceSlug !== space.slug) {
+              return jsonResponse(
+                {
+                  error: `This hosting plan is already bound to Space "${conn.assignedSpaceSlug}". Each Space requires its own $1/month or $12/year hosting plan.`
+                },
+                402
+              );
+            }
+            conn.assignedSpaceSlug = space.slug;
+            conn.name = `${conn.planName || 'Space Hosting'} — Space: ${space.slug}`;
           }
           const provider = conn?.provider || (PROVIDER_LABELS[body.provider] ? body.provider : 'cloudflare_pages');
           const providerLabel = PROVIDER_LABELS[provider] || 'Cloudflare Pages';
