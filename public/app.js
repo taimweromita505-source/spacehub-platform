@@ -282,6 +282,7 @@ function updateAuthUI() {
     }
   }
   updateAgentProviderBadge();
+  refreshAccountExtras();
 }
 
 async function refreshStats() {
@@ -430,6 +431,8 @@ function switchMainSection(sectionId) {
   document.getElementById('hostingHubView').hidden = sectionId !== 'hostingHubView';
   document.getElementById('agentApiView').hidden = sectionId !== 'agentApiView';
   document.getElementById('archView').hidden = sectionId !== 'archView';
+  const adminViewEl = document.getElementById('adminView');
+  if (adminViewEl) adminViewEl.hidden = sectionId !== 'adminView';
   document.getElementById('spaceStudioView').hidden = sectionId !== 'spaceStudioView';
 }
 
@@ -2324,14 +2327,41 @@ async function loadHostingConnections() {
           <div class="section-sub">${escapeHtml(c.providerLabel)} · Target: <code>${escapeHtml(
           c.targetUrlOrProject || 'auto'
         )}</code></div>
+          ${hostingStatusLine(c)}
         </div>
-        <button type="button" class="btn btn-danger btn-xs" data-remove-host="${escapeHtml(
-          c.id
-        )}">Remove</button>
+        <div style="display: flex; gap: 0.35rem; flex-wrap: wrap; justify-content: flex-end;">
+          ${
+            c.canRenew && state.paypalApi?.configured
+              ? `<button type="button" class="btn btn-primary btn-xs" data-renew-host="${escapeHtml(c.id)}">Renew</button>`
+              : ''
+          }
+          <button type="button" class="btn btn-danger btn-xs" data-remove-host="${escapeHtml(
+            c.id
+          )}">Remove</button>
+        </div>
       </div>
     `
       )
       .join('');
+
+    container.querySelectorAll('[data-renew-host]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const connId = btn.getAttribute('data-renew-host');
+        const conn = state.hostingConnections.find((x) => x.id === connId);
+        btn.disabled = true;
+        try {
+          const res = await apiFetch('/api/paypal/create-order', {
+            method: 'POST',
+            body: JSON.stringify({ renewConnectionId: connId, planId: conn?.planId })
+          });
+          if (!res.approveUrl) throw new Error('PayPal did not return a checkout link.');
+          window.location.assign(res.approveUrl);
+        } catch (err) {
+          btn.disabled = false;
+          showToast(err.message);
+        }
+      });
+    });
 
     container.querySelectorAll('[data-remove-host]').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -2574,6 +2604,7 @@ function setTopNavFilter(filterName) {
   document.getElementById('tabHosting').classList.remove('active');
   document.getElementById('tabArchitecture').classList.remove('active');
   document.getElementById('tabAgents').classList.remove('active');
+  document.getElementById('tabAdmin')?.classList.remove('active');
   switchMainSection('hubView');
   loadSpacesList();
 }
@@ -2831,6 +2862,309 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
   showToast('Signed out.');
 });
 
+// --- ACCOUNT, NOTIFICATIONS, SECURITY & ADMIN ---
+
+function hostingStatusLine(c) {
+  if (!c.isSingleSpaceSlot) return '';
+  const labels = {
+    active: 'Active',
+    grace: 'Grace period — renew now to stay online',
+    expired: 'Expired — Space is offline',
+    suspended: 'Suspended'
+  };
+  const colors = { active: '#34d399', grace: '#fbbf24', expired: '#f87171', suspended: '#f87171' };
+  const st = c.hostingState || 'active';
+  let when = 'no expiry';
+  if (c.expiresAt) {
+    when = `${st === 'expired' ? 'expired' : 'expires'} ${new Date(c.expiresAt).toLocaleDateString()}`;
+    if (typeof c.daysLeft === 'number' && c.daysLeft >= 0 && c.daysLeft <= 7 && st === 'active') {
+      when += ` (${c.daysLeft} day${c.daysLeft === 1 ? '' : 's'} left)`;
+    }
+  }
+  return `<div class="section-sub" style="color:${colors[st] || '#a1a1aa'};">${escapeHtml(
+    labels[st] || 'Active'
+  )} · ${escapeHtml(when)}</div>`;
+}
+
+function setNoticesBadge(count) {
+  const badge = document.getElementById('noticesBadge');
+  if (!badge) return;
+  badge.textContent = String(count);
+  badge.hidden = !count;
+}
+
+async function refreshNoticeBadge() {
+  try {
+    const data = await apiFetch('/api/notices');
+    if (Array.isArray(data.notices)) {
+      state.notices = data.notices;
+      setNoticesBadge(Number(data.unread) || 0);
+    }
+  } catch (_e) {
+    setNoticesBadge(0);
+  }
+}
+
+async function refreshAccountExtras() {
+  const adminTab = document.getElementById('tabAdmin');
+  if (!state.user) {
+    if (adminTab) adminTab.hidden = true;
+    setNoticesBadge(0);
+    return;
+  }
+  refreshNoticeBadge();
+  try {
+    const data = await apiFetch('/api/admin/overview');
+    if (adminTab) adminTab.hidden = !(data && data.totals);
+  } catch (_e) {
+    if (adminTab) adminTab.hidden = true;
+  }
+}
+
+document.getElementById('openNoticesBtn')?.addEventListener('click', async () => {
+  await refreshNoticeBadge();
+  const list = document.getElementById('noticesList');
+  const items = state.notices || [];
+  list.innerHTML = items.length
+    ? items
+        .map(
+          (n) => `
+      <div class="pat-key-item">
+        <div>
+          <strong>${n.read ? '' : '● '}${escapeHtml(n.title)}</strong>
+          <div class="section-sub">${escapeHtml(n.body)} · ${new Date(n.createdAt).toLocaleString()}</div>
+        </div>
+      </div>`
+        )
+        .join('')
+    : `<p class="section-sub">No notifications yet. Receipts and renewal reminders will appear here.</p>`;
+  document.getElementById('noticesDialog').showModal();
+});
+
+document.getElementById('markAllNoticesReadBtn')?.addEventListener('click', async () => {
+  try {
+    await apiFetch('/api/notices/read', { method: 'POST', body: JSON.stringify({}) });
+    await refreshNoticeBadge();
+    document.getElementById('openNoticesBtn').click();
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+function showInlineMessage(id, text, isError = false) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? '#f87171' : '#34d399';
+  el.hidden = false;
+}
+
+document.getElementById('openAccountBtn')?.addEventListener('click', () => {
+  document.getElementById('changePasswordForm').reset();
+  document.getElementById('accountMessage').hidden = true;
+  document.getElementById('accountDialog').showModal();
+});
+
+document.getElementById('changePasswordForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const currentPassword = document.getElementById('currentPasswordInput').value;
+  const newPassword = document.getElementById('newPasswordInput').value;
+  if (newPassword.length < 8) {
+    showInlineMessage('accountMessage', 'New password must be at least 8 characters.', true);
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+    document.getElementById('changePasswordForm').reset();
+    showInlineMessage('accountMessage', res.message || 'Password changed.');
+  } catch (err) {
+    showInlineMessage('accountMessage', err.message, true);
+  }
+});
+
+document.getElementById('logoutAllBtn')?.addEventListener('click', async () => {
+  try {
+    await apiFetch('/api/auth/logout-all', { method: 'POST' });
+  } catch (_e) {
+    // ignore
+  }
+  document.getElementById('accountDialog').close();
+  state.user = null;
+  state.token = null;
+  localStorage.removeItem('spacehub_token');
+  updateAuthUI();
+  switchMainSection('hubView');
+  setTopNavFilter('public');
+  showToast('Signed out of all devices.');
+});
+
+document.getElementById('openForgotPasswordBtn')?.addEventListener('click', () => {
+  document.getElementById('signInDialog').close();
+  document.getElementById('forgotPasswordMessage').hidden = true;
+  document.getElementById('forgotPasswordDialog').showModal();
+});
+
+document.getElementById('forgotPasswordForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const identifier = document.getElementById('forgotIdentifierInput').value.trim();
+  if (!identifier) return;
+  try {
+    const res = await apiFetch('/api/auth/forgot', {
+      method: 'POST',
+      body: JSON.stringify({ identifier })
+    });
+    showInlineMessage('forgotPasswordMessage', res.message || 'Check your email for a reset link.');
+  } catch (err) {
+    showInlineMessage('forgotPasswordMessage', err.message, true);
+  }
+});
+
+let pendingResetToken = '';
+document.getElementById('resetPasswordForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const newPassword = document.getElementById('resetNewPasswordInput').value;
+  if (newPassword.length < 8) {
+    showInlineMessage('resetPasswordMessage', 'Password must be at least 8 characters.', true);
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/auth/reset', {
+      method: 'POST',
+      body: JSON.stringify({ token: pendingResetToken, newPassword })
+    });
+    pendingResetToken = '';
+    window.history.replaceState({}, '', window.location.pathname);
+    showInlineMessage('resetPasswordMessage', res.message || 'Password updated.');
+    setTimeout(() => {
+      document.getElementById('resetPasswordDialog').close();
+      document.getElementById('signInDialog').showModal();
+    }, 1200);
+  } catch (err) {
+    showInlineMessage('resetPasswordMessage', err.message, true);
+  }
+});
+
+async function loadAdminOverview() {
+  const statsGrid = document.getElementById('adminStatsGrid');
+  try {
+    const d = await apiFetch('/api/admin/overview');
+    const money = (n) => `$${Number(n || 0).toFixed(2)}`;
+    const cards = [
+      ['Users', d.totals.users],
+      ['Spaces (published)', `${d.totals.spaces} (${d.totals.publishedSpaces})`],
+      ['Active slots', d.hosting.active],
+      ['Grace / Expired', `${d.hosting.grace} / ${d.hosting.expired}`],
+      ['Suspended slots', d.hosting.suspended],
+      ['Revenue (all time)', money(d.revenue.allTimeUsd)],
+      ['Revenue (30 days)', money(d.revenue.last30dUsd)],
+      ['Est. monthly recurring', money(d.revenue.mrrUsd)],
+      ['Refunded / reversed', money(d.revenue.refundedUsd)]
+    ];
+    statsGrid.innerHTML = cards
+      .map(
+        ([label, value]) =>
+          `<div class="arch-card"><span class="section-sub">${escapeHtml(label)}</span><div style="font-size:1.5rem;font-weight:700;">${escapeHtml(
+            String(value)
+          )}</div></div>`
+      )
+      .join('');
+
+    document.getElementById('adminSignupsList').innerHTML =
+      (d.recentSignups || [])
+        .map(
+          (u) =>
+            `<div class="pat-key-item"><div><strong>@${escapeHtml(u.username)}</strong><div class="section-sub">${new Date(
+              u.createdAt
+            ).toLocaleString()}</div></div></div>`
+        )
+        .join('') || '<p class="section-sub">No signups yet.</p>';
+
+    document.getElementById('adminPaymentsList').innerHTML =
+      (d.recentPayments || [])
+        .map(
+          (p) =>
+            `<div class="pat-key-item"><div><strong>${money(p.amountUsd)}</strong> · @${escapeHtml(
+              p.username
+            )} · ${escapeHtml(p.planId)} (${escapeHtml(p.kind)})<div class="section-sub">${escapeHtml(
+              p.captureId || p.orderId
+            )} · ${p.capturedAt ? new Date(p.capturedAt).toLocaleString() : ''}</div></div><span class="badge-pill">${
+              p.reverted ? escapeHtml(p.revertReason || 'reverted') : 'paid'
+            }</span></div>`
+        )
+        .join('') || '<p class="section-sub">No PayPal payments yet.</p>';
+
+    const slotsEl = document.getElementById('adminSlotsList');
+    slotsEl.innerHTML =
+      (d.hostingSlots || [])
+        .map(
+          (s) =>
+            `<div class="pat-key-item"><div><strong>${escapeHtml(s.name)}</strong> · @${escapeHtml(
+              s.username
+            )}<div class="section-sub">${escapeHtml(s.state)}${
+              s.expiresAt ? ' · expires ' + new Date(s.expiresAt).toLocaleDateString() : ''
+            }${s.paymentMethod ? ' · ' + escapeHtml(s.paymentMethod) : ''}${
+              s.suspendedReason ? ' · ' + escapeHtml(s.suspendedReason) : ''
+            }</div></div><button type="button" class="btn btn-outline btn-xs" data-admin-${
+              s.state === 'suspended' ? 'reinstate' : 'revoke'
+            }="${escapeHtml(s.id)}">${s.state === 'suspended' ? 'Reinstate' : 'Revoke'}</button></div>`
+        )
+        .join('') || '<p class="section-sub">No hosting slots yet.</p>';
+
+    slotsEl.querySelectorAll('[data-admin-revoke],[data-admin-reinstate]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const revoke = btn.hasAttribute('data-admin-revoke');
+        const id = btn.getAttribute(revoke ? 'data-admin-revoke' : 'data-admin-reinstate');
+        try {
+          await apiFetch(`/api/admin/${revoke ? 'revoke' : 'reinstate'}`, {
+            method: 'POST',
+            body: JSON.stringify({ connectionId: id })
+          });
+          showToast(revoke ? 'Slot suspended.' : 'Slot reinstated.');
+          loadAdminOverview();
+        } catch (err) {
+          showToast(err.message);
+        }
+      });
+    });
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+document.getElementById('tabAdmin')?.addEventListener('click', () => {
+  document.querySelectorAll('.nav-tab').forEach((b) => b.classList.remove('active'));
+  document.getElementById('tabAdmin').classList.add('active');
+  switchMainSection('adminView');
+  loadAdminOverview();
+});
+
+document.getElementById('refreshAdminBtn')?.addEventListener('click', loadAdminOverview);
+
+document.getElementById('adminGrantForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('adminGrantUsername').value.trim();
+  if (!username) return;
+  try {
+    await apiFetch('/api/admin/grant', {
+      method: 'POST',
+      body: JSON.stringify({
+        username,
+        planId: document.getElementById('adminGrantPlan').value,
+        spaceSlug: document.getElementById('adminGrantSlug').value.trim(),
+        days: Number(document.getElementById('adminGrantDays').value) || undefined
+      })
+    });
+    document.getElementById('adminGrantForm').reset();
+    showToast(`Granted a hosting slot to @${username}.`);
+    loadAdminOverview();
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
 // Create Space Submit
 document.getElementById('createSpaceForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2965,6 +3299,11 @@ document.getElementById('copyInstallLinkBtn')?.addEventListener('click', async (
   await loadSpacesList();
 
   const params = new URLSearchParams(window.location.search);
+  if (params.get('reset')) {
+    pendingResetToken = params.get('reset');
+    document.getElementById('resetPasswordMessage').hidden = true;
+    document.getElementById('resetPasswordDialog').showModal();
+  }
   if (params.get('paypal_return') === '1' && params.get('token')) {
     if (!state.user) {
       showToast('Sign in, then reload this page to finish activating your hosting plan.');

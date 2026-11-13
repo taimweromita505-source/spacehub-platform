@@ -85,6 +85,9 @@
           <button type="button" class="nav-tab" id="tabArchitecture">
             Docs
           </button>
+          <button type="button" class="nav-tab" id="tabAdmin" hidden>
+            Admin
+          </button>
         </nav>
       </div>
 
@@ -101,6 +104,10 @@
         </div>
         <div id="userProfileBar" class="user-profile" hidden>
           <span class="user-pill" id="currentUserBadge"></span>
+          <button type="button" class="btn btn-ghost btn-sm" id="openNoticesBtn" title="Notifications &amp; receipts" aria-label="Notifications">
+            🔔 <span id="noticesBadge" hidden>0</span>
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" id="openAccountBtn">Account</button>
           <button type="button" class="btn btn-ghost btn-sm" id="logoutBtn">Sign Out</button>
         </div>
         <button type="button" class="btn btn-primary btn-sm" id="newSpaceBtn">
@@ -968,6 +975,59 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         </form>
       </div>
     </section>
+    <!-- VIEW: OWNER ADMIN DASHBOARD -->
+    <section id="adminView" hidden>
+      <div class="arch-panel">
+        <div class="section-header">
+          <div>
+            <span class="eyebrow">PLATFORM ADMIN</span>
+            <h2>Revenue &amp; Hosting Dashboard</h2>
+            <p class="arch-lead">Payments, hosting slots, and support tools. Visible only to administrator accounts.</p>
+          </div>
+          <button type="button" class="btn btn-outline btn-sm" id="refreshAdminBtn">Refresh</button>
+        </div>
+        <div id="adminStatsGrid" class="agent-hub-grid" style="margin-block-end: 1.25rem;"></div>
+        <div class="agent-hub-grid">
+          <div class="arch-card">
+            <h3>Grant a hosting slot</h3>
+            <form id="adminGrantForm" novalidate style="display: flex; flex-direction: column; gap: 0.6rem; margin-block-start: 0.75rem;">
+              <div class="field">
+                <label for="adminGrantUsername">Username</label>
+                <input type="text" id="adminGrantUsername" autocapitalize="none" spellcheck="false" required />
+              </div>
+              <div class="field">
+                <label for="adminGrantPlan">Plan</label>
+                <select id="adminGrantPlan" class="select-control">
+                  <option value="plan_monthly_1">Monthly ($1 / 30 days)</option>
+                  <option value="plan_yearly_12">Annual ($12 / 365 days)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="adminGrantSlug">Space slug (optional)</label>
+                <input type="text" id="adminGrantSlug" autocapitalize="none" spellcheck="false" />
+              </div>
+              <div class="field">
+                <label for="adminGrantDays">Custom days (optional)</label>
+                <input type="number" id="adminGrantDays" min="1" max="3650" />
+              </div>
+              <button type="submit" class="btn btn-primary btn-sm">Grant slot</button>
+            </form>
+          </div>
+          <div class="arch-card">
+            <h3>Recent signups</h3>
+            <div id="adminSignupsList" class="pat-keys-list" style="margin-block-start: 0.75rem;"></div>
+          </div>
+        </div>
+        <div class="arch-card" style="margin-block-start: 1rem;">
+          <h3>Recent payments</h3>
+          <div id="adminPaymentsList" class="pat-keys-list" style="margin-block-start: 0.75rem;"></div>
+        </div>
+        <div class="arch-card" style="margin-block-start: 1rem;">
+          <h3>Hosting slots</h3>
+          <div id="adminSlotsList" class="pat-keys-list" style="margin-block-start: 0.75rem;"></div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="site-footer">
@@ -1199,11 +1259,94 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
       <div id="signInServerError" class="server-error" role="alert" hidden></div>
 
+      <div style="margin-block-end: 0.75rem;">
+        <button type="button" class="btn-link" id="openForgotPasswordBtn">Forgot password?</button>
+      </div>
+
       <div class="dialog-footer">
         <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="signInDialog">Cancel</button>
         <button type="submit" class="btn btn-primary btn-sm">Sign In</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- DIALOG: FORGOT PASSWORD -->
+  <dialog id="forgotPasswordDialog" closedby="any" aria-labelledby="forgotPasswordTitle">
+    <form id="forgotPasswordForm" novalidate>
+      <div class="dialog-header">
+        <h2 id="forgotPasswordTitle">Reset your password</h2>
+        <button type="button" class="btn-icon" data-close-dialog="forgotPasswordDialog" aria-label="Close dialog">✕</button>
+      </div>
+      <p class="dialog-lead">
+        Enter your username or email. If your account has an email address on file, we'll send a reset link that is valid for 30 minutes.
+      </p>
+      <div class="field">
+        <label for="forgotIdentifierInput">Username or email</label>
+        <input type="text" id="forgotIdentifierInput" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+      </div>
+      <div id="forgotPasswordMessage" class="section-sub" role="status" hidden></div>
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="forgotPasswordDialog">Close</button>
+        <button type="submit" class="btn btn-primary btn-sm">Send reset link</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- DIALOG: SET NEW PASSWORD (from emailed link) -->
+  <dialog id="resetPasswordDialog" closedby="any" aria-labelledby="resetPasswordTitle">
+    <form id="resetPasswordForm" novalidate>
+      <div class="dialog-header">
+        <h2 id="resetPasswordTitle">Choose a new password</h2>
+        <button type="button" class="btn-icon" data-close-dialog="resetPasswordDialog" aria-label="Close dialog">✕</button>
+      </div>
+      <div class="field">
+        <label for="resetNewPasswordInput">New password (8+ characters)</label>
+        <input type="password" id="resetNewPasswordInput" autocomplete="new-password" minlength="8" required />
+      </div>
+      <div id="resetPasswordMessage" class="section-sub" role="status" hidden></div>
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="resetPasswordDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Update password</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- DIALOG: ACCOUNT SECURITY -->
+  <dialog id="accountDialog" closedby="any" aria-labelledby="accountDialogTitle">
+    <form id="changePasswordForm" novalidate>
+      <div class="dialog-header">
+        <h2 id="accountDialogTitle">Account &amp; Security</h2>
+        <button type="button" class="btn-icon" data-close-dialog="accountDialog" aria-label="Close dialog">✕</button>
+      </div>
+      <div class="field">
+        <label for="currentPasswordInput">Current password</label>
+        <input type="password" id="currentPasswordInput" autocomplete="current-password" required />
+      </div>
+      <div class="field">
+        <label for="newPasswordInput">New password (8+ characters)</label>
+        <input type="password" id="newPasswordInput" autocomplete="new-password" minlength="8" required />
+      </div>
+      <div id="accountMessage" class="section-sub" role="status" hidden></div>
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-outline btn-sm" id="logoutAllBtn">Sign out of all devices</button>
+        <button type="submit" class="btn btn-primary btn-sm">Change password</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- DIALOG: NOTIFICATIONS -->
+  <dialog id="noticesDialog" closedby="any" aria-labelledby="noticesDialogTitle">
+    <div style="padding: 1.25rem;">
+      <div class="dialog-header" style="padding: 0 0 0.75rem 0;">
+        <h2 id="noticesDialogTitle">Notifications &amp; Receipts</h2>
+        <button type="button" class="btn-icon" data-close-dialog="noticesDialog" aria-label="Close dialog">✕</button>
+      </div>
+      <div id="noticesList" class="pat-keys-list" style="max-height: 360px; overflow-y: auto;"></div>
+      <div class="dialog-footer" style="padding: 0; margin-block-start: 1rem;">
+        <button type="button" class="btn btn-ghost btn-sm" id="markAllNoticesReadBtn">Mark all read</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="noticesDialog">Close</button>
+      </div>
+    </div>
   </dialog>
 
   <!-- DIALOG 3: CREATE ACCOUNT -->

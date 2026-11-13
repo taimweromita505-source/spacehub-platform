@@ -19,7 +19,11 @@
   ],
   "vars": {
     "PAYPAL_BUSINESS_EMAIL": "romitat924@gmail.com",
-    "PAYPAL_MODE": "live"
+    "PAYPAL_MODE": "live",
+    "ADMIN_USERNAMES": ""
+  },
+  "triggers": {
+    "crons": ["0 */6 * * *"]
   },
   "assets": {
     "directory": "public",

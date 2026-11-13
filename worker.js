@@ -374,6 +374,7 @@ const HOSTING_PLANS = [
     name: 'Monthly Space Hosting (1 Space)',
     amountUsd: '1.00',
     billingUnit: 'M',
+    periodDays: 30,
     priceMonthly: 1,
     billingPeriod: '1 month',
     priceLabel: '$1 / month per Space',
@@ -391,6 +392,7 @@ const HOSTING_PLANS = [
     name: 'Annual Space Hosting (1 Space)',
     amountUsd: '12.00',
     billingUnit: 'Y',
+    periodDays: 365,
     priceMonthly: 1,
     priceYearly: 12,
     billingPeriod: '1 year',
@@ -457,6 +459,9 @@ let memoryDb = {
   agentKeys: [],
   hostingConnections: [],
   paypalOrders: [],
+  paypalEvents: [],
+  passwordResets: [],
+  loginFailures: {},
   spaces: []
 };
 
@@ -508,11 +513,204 @@ function provisionHostingConnection(db, user, plan, opts = {}) {
     targetUrlOrProject: cleanDomain,
     paymentMethod: opts.paymentMethod || 'paypal_card',
     paymentRef: opts.paymentRef || 'paypal_verified',
+    planId: plan.id,
+    periodDays: plan.periodDays || 30,
+    expiresAt: addDaysIso(new Date().toISOString(), plan.periodDays || 30),
     hasToken: true,
     createdAt: new Date().toISOString()
   };
   db.hostingConnections.unshift(conn);
   return conn;
+}
+
+const HOSTING_GRACE_DAYS = 3;
+
+function addDaysIso(iso, days) {
+  const base = Date.parse(iso);
+  return new Date((Number.isNaN(base) ? Date.now() : base) + days * 86400000).toISOString();
+}
+
+function hostingState(conn, nowMs = Date.now()) {
+  if (!conn || !conn.isSingleSpaceSlot) return 'none';
+  if (conn.suspended) return 'suspended';
+  if (!conn.expiresAt) return 'active';
+  const exp = Date.parse(conn.expiresAt);
+  if (Number.isNaN(exp) || nowMs <= exp) return 'active';
+  if (nowMs <= exp + HOSTING_GRACE_DAYS * 86400000) return 'grace';
+  return 'expired';
+}
+
+function spaceHostingLapse(db, slug, nowMs = Date.now()) {
+  const conns = (db.hostingConnections || []).filter(
+    (c) => c.isSingleSpaceSlot && c.assignedSpaceSlug === slug
+  );
+  if (!conns.length) return null;
+  const states = conns.map((c) => hostingState(c, nowMs));
+  if (states.some((s) => s === 'active' || s === 'grace')) return null;
+  return states.every((s) => s === 'suspended') ? 'suspended' : 'expired';
+}
+
+function hostingLapsePage(space, state) {
+  const title = String(space.title || space.slug).replace(/[<>&]/g, '');
+  const heading = state === 'suspended' ? 'Hosting Suspended' : 'Hosting Expired';
+  const text =
+    state === 'suspended'
+      ? 'This Space is temporarily unavailable while its hosting is under review.'
+      : 'This Space’s hosting plan has expired. The owner can renew it from SpaceHub to bring it back online.';
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${heading} — ${title}</title></head><body style="background:#09090b;color:#fafafa;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;padding:2rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;max-width:440px"><h1 style="font-size:1.25rem;margin-bottom:0.5rem">${heading}</h1><p style="color:#a1a1aa;font-size:0.9rem;margin-bottom:1.25rem"><strong>${title}</strong> — ${text}</p><a href="/" style="color:#818cf8;text-decoration:none;font-weight:600">← SpaceHub</a></div></body></html>`;
+}
+
+function describeHostingConn(conn, nowMs = Date.now()) {
+  const state = hostingState(conn, nowMs);
+  const exp = conn.expiresAt ? Date.parse(conn.expiresAt) : NaN;
+  return {
+    hostingState: state,
+    daysLeft: Number.isNaN(exp) ? null : Math.ceil((exp - nowMs) / 86400000),
+    canRenew: Boolean(conn.isSingleSpaceSlot && state !== 'suspended')
+  };
+}
+
+function pushUserNotice(db, userId, notice) {
+  const target = (db.users || []).find((u) => u.id === userId);
+  if (!target) return;
+  target.notices = Array.isArray(target.notices) ? target.notices : [];
+  target.notices.unshift({
+    id: 'ntc_' + randomHex(5),
+    type: String(notice.type || 'info'),
+    title: String(notice.title || '').slice(0, 140),
+    body: String(notice.body || '').slice(0, 600),
+    createdAt: new Date().toISOString(),
+    read: false
+  });
+  target.notices = target.notices.slice(0, 50);
+}
+
+async function sendPlatformEmail(env, to, subject, text) {
+  if (!env || !env.RESEND_API_KEY || !to) return false;
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.RESEND_API_KEY}`
+      },
+      body: JSON.stringify({
+        from: env.MAIL_FROM || 'SpaceHub <onboarding@resend.dev>',
+        to: [to],
+        subject,
+        text
+      })
+    });
+    return r.ok;
+  } catch (_e) {
+    return false;
+  }
+}
+
+async function notifyUser(env, db, user, notice, emailText) {
+  pushUserNotice(db, user.id, notice);
+  if (user.email) {
+    await sendPlatformEmail(env, user.email, notice.title, emailText || notice.body);
+  }
+}
+
+function isAdminUser(env, user) {
+  if (!user || !env) return false;
+  const admins = String(env.ADMIN_USERNAMES || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (!admins.includes(String(user.username || '').toLowerCase())) return false;
+  // Accounts signed in with an unverified typed email can never be admin.
+  return !(user.socialProvider && !user.socialVerified);
+}
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(text)));
+  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function extractRequestToken(request, url) {
+  const authHeader = request.headers.get('authorization') || '';
+  const agentKey = request.headers.get('x-agent-key') || '';
+  if (agentKey) return agentKey.trim();
+  if (authHeader.startsWith('Bearer ')) return authHeader.slice(7).trim();
+  const cookies = parseCookies(request.headers.get('cookie') || '');
+  return cookies.spacehub_token || url.searchParams.get('token') || null;
+}
+
+function revokeUserSessions(db, userId, exceptToken = null) {
+  Object.entries(db.sessions || {}).forEach(([t, uid]) => {
+    if (uid === userId && t !== exceptToken) delete db.sessions[t];
+  });
+}
+
+async function verifyPaypalWebhook(env, request, event) {
+  if (!env.PAYPAL_WEBHOOK_ID || !paypalConfigured(env)) return false;
+  const h = request.headers;
+  const token = await paypalAccessToken(env);
+  const r = await fetch(`${paypalApiBase(env)}/v1/notifications/verify-webhook-signature`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      auth_algo: h.get('paypal-auth-algo'),
+      cert_url: h.get('paypal-cert-url'),
+      transmission_id: h.get('paypal-transmission-id'),
+      transmission_sig: h.get('paypal-transmission-sig'),
+      transmission_time: h.get('paypal-transmission-time'),
+      webhook_id: env.PAYPAL_WEBHOOK_ID,
+      webhook_event: event
+    })
+  });
+  const data = await r.json().catch(() => ({}));
+  return r.ok && data.verification_status === 'SUCCESS';
+}
+
+function findPaypalRecordForEvent(db, event) {
+  const res = event.resource || {};
+  const ids = new Set();
+  if (res.id) ids.add(String(res.id));
+  const up = (res.links || []).find((l) => l.rel === 'up');
+  if (up && up.href) ids.add(String(up.href).split('/').pop());
+  (res.disputed_transactions || []).forEach((t) => {
+    if (t.seller_transaction_id) ids.add(String(t.seller_transaction_id));
+  });
+  const orderId = res.supplementary_data?.related_ids?.order_id;
+  return (
+    (db.paypalOrders || []).find(
+      (o) => o.status === 'COMPLETED' && ((o.captureId && ids.has(o.captureId)) || (orderId && o.id === orderId))
+    ) || null
+  );
+}
+
+function applyPaypalReversal(db, rec, reason) {
+  const conn = db.hostingConnections.find((c) => c.id === rec.connectionId);
+  if (!conn || rec.reverted) return null;
+  rec.reverted = true;
+  rec.revertReason = reason;
+  if (rec.kind === 'renewal') {
+    conn.expiresAt = addDaysIso(conn.expiresAt || new Date().toISOString(), -(rec.periodDays || 30));
+    return { conn, action: 'extension_removed' };
+  }
+  conn.suspended = true;
+  conn.suspendedReason = reason;
+  conn.suspendedAt = new Date().toISOString();
+  return { conn, action: 'suspended' };
+}
+
+function applyPaypalReinstatement(db, rec) {
+  const conn = db.hostingConnections.find((c) => c.id === rec.connectionId);
+  if (!conn || !rec.reverted) return null;
+  rec.reverted = false;
+  delete rec.revertReason;
+  if (rec.kind === 'renewal') {
+    conn.expiresAt = addDaysIso(conn.expiresAt || new Date().toISOString(), rec.periodDays || 30);
+    return { conn, action: 'extension_restored' };
+  }
+  conn.suspended = false;
+  delete conn.suspendedReason;
+  delete conn.suspendedAt;
+  return { conn, action: 'reinstated' };
 }
 
 const KV_KEY = 'spacehub_prod_state_v2';
@@ -528,6 +726,9 @@ async function loadDb(env) {
           agentKeys: Array.isArray(raw.agentKeys) ? raw.agentKeys : [],
           hostingConnections: Array.isArray(raw.hostingConnections) ? raw.hostingConnections : [],
           paypalOrders: Array.isArray(raw.paypalOrders) ? raw.paypalOrders : [],
+          paypalEvents: Array.isArray(raw.paypalEvents) ? raw.paypalEvents : [],
+          passwordResets: Array.isArray(raw.passwordResets) ? raw.passwordResets : [],
+          loginFailures: raw.loginFailures && typeof raw.loginFailures === 'object' ? raw.loginFailures : {},
           spaces: Array.isArray(raw.spaces) ? raw.spaces : []
         };
       }
@@ -1289,9 +1490,71 @@ function jsonResponse(data, status = 200, extraHeaders = {}) {
 }
 
 const spaceHubWorker = {
+  async scheduled(_event, env) {
+    const db = await loadDb(env);
+    const nowMs = Date.now();
+    let changed = false;
+    for (const conn of db.hostingConnections) {
+      if (!conn.isSingleSpaceSlot || conn.suspended || !conn.expiresAt) continue;
+      const owner = db.users.find((u) => u.id === conn.userId);
+      if (!owner) continue;
+      const msLeft = Date.parse(conn.expiresAt) - nowMs;
+      if (Number.isNaN(msLeft)) continue;
+      const daysLeft = Math.ceil(msLeft / 86400000);
+      const dateText = conn.expiresAt.slice(0, 10);
+      if (msLeft <= 0) {
+        if (!conn.notifiedExpired) {
+          conn.notifiedExpired = true;
+          changed = true;
+          await notifyUser(env, db, owner, {
+            type: 'billing',
+            title: 'Your hosting has expired',
+            body: `${conn.name} expired on ${dateText}. It stays online for a ${HOSTING_GRACE_DAYS}-day grace period — renew in Pricing & Hosting to keep it live.`
+          });
+        }
+      } else if (daysLeft <= 1) {
+        if (!conn.reminded1) {
+          conn.reminded1 = true;
+          conn.reminded7 = true;
+          changed = true;
+          await notifyUser(env, db, owner, {
+            type: 'billing',
+            title: 'Hosting expires within 1 day',
+            body: `${conn.name} expires on ${dateText}. Renew in Pricing & Hosting to avoid downtime.`
+          });
+        }
+      } else if (daysLeft <= 7) {
+        if (!conn.reminded7) {
+          conn.reminded7 = true;
+          changed = true;
+          await notifyUser(env, db, owner, {
+            type: 'billing',
+            title: 'Hosting expires in 7 days or less',
+            body: `${conn.name} expires on ${dateText}. Renew in Pricing & Hosting to keep it online.`
+          });
+        }
+      }
+    }
+    if (changed) await saveDb(env, db);
+  },
+
   async fetch(request, env) {
     const wUrl = new URL(request.url);
     const wMethod = request.method.toUpperCase();
+    if (
+      wMethod === 'POST' &&
+      /^\/api\/auth\/(login|register|social|forgot|reset|change-password)$/.test(wUrl.pathname)
+    ) {
+      const authIp = request.headers.get('cf-connecting-ip') || 'anon';
+      const authRl = checkRateLimit(`auth:${authIp}`, 30, 10 * 60000);
+      if (!authRl.allowed) {
+        return jsonResponse(
+          { error: 'Too many attempts from this network. Please wait a few minutes and try again.' },
+          429,
+          { 'Retry-After': String(Math.max(1, Math.ceil((authRl.resetAt - Date.now()) / 1000))) }
+        );
+      }
+    }
     const wMatch = wUrl.pathname.match(/^\/(?:live|s)\/([^/]+)\//i);
     if (wMatch && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(wMethod)) {
       const ip = request.headers.get('cf-connecting-ip') || 'anon';
@@ -2256,6 +2519,13 @@ const spaceHubWorker = {
           { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
         );
       }
+      const lapseState = spaceHostingLapse(db, space.slug);
+      if (lapseState && mode !== 'draft') {
+        return new Response(hostingLapsePage(space, lapseState), {
+          status: 402,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
       const baseFiles =
         (mode === 'draft' && canAccess) ? space.draftFiles : space.publishedFiles || space.draftFiles;
       const hasAb = Boolean(baseFiles && baseFiles['index.b.html'] !== undefined);
@@ -2293,6 +2563,13 @@ const spaceHubWorker = {
       const space = [...db.spaces].reverse().find((s) => s.slug === slug);
       if (space) {
         const files = space.publishedFiles || space.draftFiles || {};
+        const subpathLapse = spaceHostingLapse(db, space.slug);
+        if (subpathLapse) {
+          return new Response(hostingLapsePage(space, subpathLapse), {
+            status: 402,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' }
+          });
+        }
         const redirectRule = resolveSpaceRedirect(files, space.slug, fileName);
         if (redirectRule) {
           return new Response(null, {
@@ -2406,6 +2683,9 @@ const spaceHubWorker = {
         }
 
         const baseHandle = slugify(preferredUsername || email.split('@')[0] || provider).slice(0, 20);
+        const socialVerifiedNow = Boolean(
+          (provider === 'google' && idToken) || (provider === 'github' && accessToken)
+        );
         let foundUser = db.users.find(
           (u) => (email && u.email && u.email.toLowerCase() === email) || (u.socialProvider === provider && u.username === baseHandle)
         );
@@ -2422,6 +2702,7 @@ const spaceHubWorker = {
             displayName: displayName || email.split('@')[0] || finalUsername,
             email,
             socialProvider: provider,
+            socialVerified: socialVerifiedNow,
             salt,
             passwordHash: hash,
             createdAt: new Date().toISOString()
@@ -2429,6 +2710,7 @@ const spaceHubWorker = {
           db.users.push(foundUser);
         } else {
           foundUser.socialProvider = foundUser.socialProvider || provider;
+          if (socialVerifiedNow) foundUser.socialVerified = true;
           if (email && !foundUser.email) foundUser.email = email;
           if (displayName) foundUser.displayName = displayName;
         }
@@ -2476,9 +2758,37 @@ const spaceHubWorker = {
         const found = db.users.find(
           (u) => u.username === cleanUser || (u.email && u.email.toLowerCase() === cleanUser)
         );
+        const failKey = cleanUser.slice(0, 64);
+        db.loginFailures = db.loginFailures && typeof db.loginFailures === 'object' ? db.loginFailures : {};
+        const nowMs = Date.now();
+        const failRec = db.loginFailures[failKey];
+        if (failRec && failRec.until && nowMs < failRec.until) {
+          const mins = Math.max(1, Math.ceil((failRec.until - nowMs) / 60000));
+          return jsonResponse(
+            { error: `Too many failed attempts. Try again in ${mins} minute${mins === 1 ? '' : 's'}.` },
+            429,
+            { 'Retry-After': String(Math.ceil((failRec.until - nowMs) / 1000)) }
+          );
+        }
         if (!found || !(await verifyPasswordEdge(body.password || '', found.salt, found.passwordHash))) {
+          const stillCounting = failRec && nowMs - failRec.firstAt < 15 * 60000;
+          const next = {
+            count: (stillCounting ? failRec.count : 0) + 1,
+            firstAt: stillCounting ? failRec.firstAt : nowMs
+          };
+          if (next.count >= 8) next.until = nowMs + 15 * 60000;
+          db.loginFailures[failKey] = next;
+          const keys = Object.keys(db.loginFailures);
+          if (keys.length > 2000) {
+            keys
+              .sort((a, b) => db.loginFailures[a].firstAt - db.loginFailures[b].firstAt)
+              .slice(0, keys.length - 2000)
+              .forEach((k) => delete db.loginFailures[k]);
+          }
+          await saveDb(env, db);
           return jsonResponse({ error: 'Invalid username/email or password.' }, 401);
         }
+        delete db.loginFailures[failKey];
         const token = randomHex(24);
         db.sessions[token] = found.id;
         await saveDb(env, db);
@@ -2542,6 +2852,281 @@ const spaceHubWorker = {
         );
       }
 
+      if (pathname === '/api/paypal/webhook' && method === 'POST') {
+        if (!env.PAYPAL_WEBHOOK_ID) {
+          return jsonResponse({ error: 'PayPal webhook is not configured.' }, 503);
+        }
+        let verified = false;
+        try {
+          verified = await verifyPaypalWebhook(env, request, body);
+        } catch (_e) {
+          verified = false;
+        }
+        if (!verified) return jsonResponse({ error: 'Invalid webhook signature.' }, 400);
+
+        db.paypalEvents = Array.isArray(db.paypalEvents) ? db.paypalEvents : [];
+        if (body.id && db.paypalEvents.includes(body.id)) {
+          return jsonResponse({ ok: true, duplicate: true });
+        }
+        const type = String(body.event_type || '');
+        const rec = findPaypalRecordForEvent(db, body);
+        let outcome = 'ignored';
+        if (rec) {
+          const owner = db.users.find((u) => u.id === rec.userId);
+          const tell = async (title, text) => {
+            if (owner) await notifyUser(env, db, owner, { type: 'billing', title, body: text }, text);
+          };
+          if (type === 'PAYMENT.CAPTURE.REFUNDED') {
+            const refunded = Number(body.resource?.amount?.value || 0);
+            if (refunded >= Number(rec.amountUsd)) {
+              const r = applyPaypalReversal(db, rec, 'refunded');
+              outcome = r ? r.action : 'noop';
+              if (r) await tell('Payment refunded', 'Your payment was refunded, so the related hosting has been removed or shortened.');
+            } else {
+              rec.partialRefundUsd = Math.round(((rec.partialRefundUsd || 0) + refunded) * 100) / 100;
+              outcome = 'partial_refund_recorded';
+            }
+          } else if (type === 'PAYMENT.CAPTURE.REVERSED' || type === 'PAYMENT.CAPTURE.DENIED') {
+            const r = applyPaypalReversal(db, rec, 'payment_reversed');
+            outcome = r ? r.action : 'noop';
+            if (r) await tell('Payment reversed', 'PayPal reversed a payment, so the related hosting has been suspended.');
+          } else if (type === 'CUSTOMER.DISPUTE.CREATED') {
+            const r = applyPaypalReversal(db, rec, 'dispute');
+            outcome = r ? r.action : 'noop';
+            if (r) await tell('Payment dispute opened', 'A dispute was opened on a payment, so the related hosting is paused until it is resolved.');
+          } else if (type === 'CUSTOMER.DISPUTE.RESOLVED') {
+            if (body.resource?.dispute_outcome?.outcome_code === 'RESOLVED_SELLER_FAVOUR') {
+              const r = applyPaypalReinstatement(db, rec);
+              outcome = r ? r.action : 'noop';
+              if (r) await tell('Dispute resolved', 'The dispute was resolved in our favour and your hosting has been restored.');
+            } else {
+              outcome = 'dispute_not_in_seller_favour';
+            }
+          }
+        }
+        if (body.id) db.paypalEvents.push(body.id);
+        db.paypalEvents = db.paypalEvents.slice(-200);
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, eventType: type, outcome });
+      }
+
+      if (pathname.startsWith('/api/admin/')) {
+        if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+        if (!isAdminUser(env, user)) return jsonResponse({ error: 'Administrator access required.' }, 403);
+        const nowMs = Date.now();
+        const nameOf = (id) => (db.users.find((u) => u.id === id) || {}).username || 'unknown';
+
+        if (pathname === '/api/admin/overview' && method === 'GET') {
+          const orders = (db.paypalOrders || []).filter((o) => o.status === 'COMPLETED');
+          const sumUsd = (arr) =>
+            Math.round(arr.reduce((s, o) => s + Number(o.amountUsd || 0), 0) * 100) / 100;
+          const kept = orders.filter((o) => !o.reverted);
+          const cutoff = nowMs - 30 * 86400000;
+          const slots = db.hostingConnections.filter((c) => c.isSingleSpaceSlot);
+          const counts = { active: 0, grace: 0, expired: 0, suspended: 0 };
+          slots.forEach((c) => {
+            const s = hostingState(c, nowMs);
+            if (counts[s] !== undefined) counts[s] += 1;
+          });
+          const mrr = slots
+            .filter((c) => c.paymentMethod === 'paypal_api' && ['active', 'grace'].includes(hostingState(c, nowMs)))
+            .reduce((s, c) => s + Number((HOSTING_PLANS.find((p) => p.id === c.planId) || {}).priceMonthly || 1), 0);
+          return jsonResponse({
+            totals: {
+              users: db.users.length,
+              spaces: db.spaces.length,
+              publishedSpaces: db.spaces.filter((s) => s.status === 'published').length
+            },
+            hosting: counts,
+            revenue: {
+              allTimeUsd: sumUsd(kept),
+              last30dUsd: sumUsd(kept.filter((o) => Date.parse(o.capturedAt || 0) >= cutoff)),
+              refundedUsd: sumUsd(orders.filter((o) => o.reverted)),
+              mrrUsd: Math.round(mrr * 100) / 100
+            },
+            recentPayments: [...orders]
+              .sort((a, b) => String(b.capturedAt).localeCompare(String(a.capturedAt)))
+              .slice(0, 20)
+              .map((o) => ({
+                orderId: o.id,
+                captureId: o.captureId,
+                username: nameOf(o.userId),
+                planId: o.planId,
+                kind: o.kind || 'purchase',
+                amountUsd: o.amountUsd,
+                capturedAt: o.capturedAt,
+                reverted: Boolean(o.reverted),
+                revertReason: o.revertReason || null
+              })),
+            hostingSlots: slots.slice(0, 40).map((c) => ({
+              id: c.id,
+              username: nameOf(c.userId),
+              name: c.name,
+              spaceSlug: c.assignedSpaceSlug || null,
+              state: hostingState(c, nowMs),
+              expiresAt: c.expiresAt || null,
+              paymentMethod: c.paymentMethod || null,
+              suspendedReason: c.suspendedReason || null
+            })),
+            recentSignups: [...db.users]
+              .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+              .slice(0, 10)
+              .map((u) => ({ username: u.username, createdAt: u.createdAt }))
+          });
+        }
+
+        if (pathname === '/api/admin/grant' && method === 'POST') {
+          const target = db.users.find((u) => u.username === String(body.username || '').trim().toLowerCase());
+          if (!target) return jsonResponse({ error: 'User not found.' }, 404);
+          const plan = HOSTING_PLANS.find((p) => p.id === body.planId) || HOSTING_PLANS[0];
+          const conn = provisionHostingConnection(db, target, plan, {
+            spaceSlug: body.spaceSlug || '',
+            host: url.host,
+            paymentMethod: 'admin_grant',
+            paymentRef: `granted_by_${user.username}`
+          });
+          const days = Math.floor(Number(body.days) || 0);
+          if (days >= 1 && days <= 3650) conn.expiresAt = addDaysIso(new Date().toISOString(), days);
+          await notifyUser(env, db, target, {
+            type: 'billing',
+            title: 'Hosting slot granted',
+            body: `You were granted a hosting slot (${conn.name}) valid until ${conn.expiresAt.slice(0, 10)}.`
+          });
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, connection: conn }, 201);
+        }
+
+        if ((pathname === '/api/admin/revoke' || pathname === '/api/admin/reinstate') && method === 'POST') {
+          const conn = db.hostingConnections.find((c) => c.id === body.connectionId && c.isSingleSpaceSlot);
+          if (!conn) return jsonResponse({ error: 'Hosting slot not found.' }, 404);
+          const revoke = pathname === '/api/admin/revoke';
+          if (revoke) {
+            conn.suspended = true;
+            conn.suspendedReason = 'admin';
+            conn.suspendedAt = new Date().toISOString();
+          } else {
+            conn.suspended = false;
+            delete conn.suspendedReason;
+            delete conn.suspendedAt;
+          }
+          const owner = db.users.find((u) => u.id === conn.userId);
+          if (owner) {
+            await notifyUser(env, db, owner, {
+              type: 'billing',
+              title: revoke ? 'Hosting slot suspended' : 'Hosting slot restored',
+              body: `${conn.name} was ${revoke ? 'suspended' : 'restored'} by an administrator.`
+            });
+          }
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, connection: conn });
+        }
+        return jsonResponse({ error: 'Unknown admin endpoint.' }, 404);
+      }
+
+      if (pathname === '/api/notices' && method === 'GET') {
+        if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+        const list = Array.isArray(user.notices) ? user.notices : [];
+        return jsonResponse({ notices: list, unread: list.filter((n) => !n.read).length });
+      }
+
+      if (pathname === '/api/notices/read' && method === 'POST') {
+        if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+        (user.notices || []).forEach((n) => {
+          if (!body.id || n.id === body.id) n.read = true;
+        });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true });
+      }
+
+      if (pathname === '/api/auth/change-password' && method === 'POST') {
+        if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+        const newPassword = String(body.newPassword || '');
+        if (newPassword.length < 8) {
+          return jsonResponse({ error: 'New password must be at least 8 characters.' }, 400);
+        }
+        if (!(await verifyPasswordEdge(String(body.currentPassword || ''), user.salt, user.passwordHash))) {
+          return jsonResponse({ error: 'Current password is incorrect.' }, 403);
+        }
+        const { salt, hash } = await hashPasswordEdge(newPassword);
+        user.salt = salt;
+        user.passwordHash = hash;
+        revokeUserSessions(db, user.id, extractRequestToken(request, url));
+        pushUserNotice(db, user.id, {
+          type: 'security',
+          title: 'Password changed',
+          body: 'Your password was changed and other devices were signed out.'
+        });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, message: 'Password changed. Other devices were signed out.' });
+      }
+
+      if (pathname === '/api/auth/logout-all' && method === 'POST') {
+        if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+        revokeUserSessions(db, user.id, null);
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true },
+          200,
+          { 'Set-Cookie': 'spacehub_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' }
+        );
+      }
+
+      if (pathname === '/api/auth/forgot' && method === 'POST') {
+        const generic = {
+          ok: true,
+          message: 'If an account with a verified email exists, a reset link has been sent.'
+        };
+        const ident = String(body.identifier || '').trim().toLowerCase();
+        const found = ident
+          ? db.users.find((u) => u.username === ident || (u.email && u.email.toLowerCase() === ident))
+          : null;
+        if (found && found.email && env.RESEND_API_KEY) {
+          const token = randomHex(24);
+          db.passwordResets = (Array.isArray(db.passwordResets) ? db.passwordResets : []).filter(
+            (r) => r.expiresAt > Date.now() && r.userId !== found.id
+          );
+          db.passwordResets.push({
+            tokenHash: await sha256Hex(token),
+            userId: found.id,
+            expiresAt: Date.now() + 30 * 60000
+          });
+          await saveDb(env, db);
+          await sendPlatformEmail(
+            env,
+            found.email,
+            'Reset your SpaceHub password',
+            `Use this link within 30 minutes to choose a new password:\n\n${url.origin}/?reset=${token}\n\nIf you did not request this, you can ignore this email.`
+          );
+        }
+        return jsonResponse(generic);
+      }
+
+      if (pathname === '/api/auth/reset' && method === 'POST') {
+        const newPassword = String(body.newPassword || '');
+        if (newPassword.length < 8) {
+          return jsonResponse({ error: 'New password must be at least 8 characters.' }, 400);
+        }
+        const tokenHash = await sha256Hex(String(body.token || ''));
+        db.passwordResets = Array.isArray(db.passwordResets) ? db.passwordResets : [];
+        const rec = db.passwordResets.find((r) => r.tokenHash === tokenHash && r.expiresAt > Date.now());
+        if (!rec) return jsonResponse({ error: 'This reset link is invalid or has expired.' }, 400);
+        const target = db.users.find((u) => u.id === rec.userId);
+        if (!target) return jsonResponse({ error: 'This reset link is invalid or has expired.' }, 400);
+        const { salt, hash } = await hashPasswordEdge(newPassword);
+        target.salt = salt;
+        target.passwordHash = hash;
+        db.passwordResets = db.passwordResets.filter((r) => r.tokenHash !== tokenHash);
+        revokeUserSessions(db, target.id, null);
+        delete db.loginFailures[String(target.username).toLowerCase()];
+        pushUserNotice(db, target.id, {
+          type: 'security',
+          title: 'Password reset',
+          body: 'Your password was reset and all devices were signed out.'
+        });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, message: 'Password updated. You can sign in now.' });
+      }
+
       if (pathname === '/api/hosting-plans' && method === 'GET') {
         const paypalEmail = env?.PAYPAL_BUSINESS_EMAIL || 'romitat924@gmail.com';
         return jsonResponse({
@@ -2561,8 +3146,25 @@ const spaceHubWorker = {
         if (!paypalConfigured(env)) {
           return jsonResponse({ error: 'PayPal API checkout is not configured yet.', fallback: true }, 503);
         }
-        const plan = HOSTING_PLANS.find((p) => p.id === body.planId) || HOSTING_PLANS[0];
-        const spaceSlug = body.spaceSlug ? slugify(body.spaceSlug) : '';
+        const renewConn = body.renewConnectionId
+          ? db.hostingConnections.find(
+              (c) => c.id === body.renewConnectionId && c.userId === user.id && c.isSingleSpaceSlot
+            )
+          : null;
+        if (body.renewConnectionId && !renewConn) {
+          return jsonResponse({ error: 'Hosting slot to renew was not found on this account.' }, 404);
+        }
+        if (renewConn && renewConn.suspended) {
+          return jsonResponse({ error: 'This hosting slot is suspended and cannot be renewed. Contact support.' }, 403);
+        }
+        const plan =
+          HOSTING_PLANS.find((p) => p.id === (renewConn ? renewConn.planId || body.planId : body.planId)) ||
+          HOSTING_PLANS[0];
+        const spaceSlug = renewConn
+          ? renewConn.assignedSpaceSlug || ''
+          : body.spaceSlug
+            ? slugify(body.spaceSlug)
+            : '';
         try {
           const accessToken = await paypalAccessToken(env);
           const orderRes = await fetch(`${paypalApiBase(env)}/v2/checkout/orders`, {
@@ -2612,6 +3214,9 @@ const spaceHubWorker = {
             planId: plan.id,
             spaceSlug,
             amountUsd: plan.amountUsd,
+            kind: renewConn ? 'renewal' : 'purchase',
+            connectionId: renewConn ? renewConn.id : null,
+            periodDays: plan.periodDays || 30,
             status: 'CREATED',
             createdAt: new Date().toISOString()
           });
@@ -2679,20 +3284,48 @@ const spaceHubWorker = {
               402
             );
           }
-          const conn = provisionHostingConnection(db, user, plan, {
-            spaceSlug: rec.spaceSlug,
-            host: url.host,
-            paymentMethod: 'paypal_api',
-            paymentRef: capture.id || orderId
-          });
+          let conn;
+          let message;
+          if (rec.kind === 'renewal') {
+            conn = db.hostingConnections.find((c) => c.id === rec.connectionId && c.userId === user.id);
+            if (!conn) {
+              return jsonResponse({ error: 'The hosting slot for this renewal no longer exists.' }, 404);
+            }
+            const nowMs = Date.now();
+            const currentExp = conn.expiresAt ? Date.parse(conn.expiresAt) : nowMs;
+            const base = Math.max(nowMs, Number.isNaN(currentExp) ? nowMs : currentExp);
+            conn.expiresAt = addDaysIso(new Date(base).toISOString(), plan.periodDays || 30);
+            conn.planId = conn.planId || plan.id;
+            delete conn.reminded7;
+            delete conn.reminded1;
+            delete conn.notifiedExpired;
+            message = `Payment confirmed — renewed ${conn.name} until ${conn.expiresAt.slice(0, 10)}`;
+          } else {
+            conn = provisionHostingConnection(db, user, plan, {
+              spaceSlug: rec.spaceSlug,
+              host: url.host,
+              paymentMethod: 'paypal_api',
+              paymentRef: capture.id || orderId
+            });
+            message = `Payment confirmed — activated ${plan.name} (${plan.priceLabel})`;
+          }
           rec.status = 'COMPLETED';
           rec.connectionId = conn.id;
+          rec.captureId = capture.id || orderId;
           rec.capturedAt = new Date().toISOString();
-          await saveDb(env, db);
-          return jsonResponse(
-            { message: `Payment confirmed — activated ${plan.name} (${plan.priceLabel})`, connection: conn },
-            201
+          await notifyUser(
+            env,
+            db,
+            user,
+            {
+              type: 'receipt',
+              title: `SpaceHub receipt — $${plan.amountUsd} (${plan.name})`,
+              body: `Payment ${rec.captureId} received. ${conn.name} is active until ${String(conn.expiresAt).slice(0, 10)}.`
+            },
+            `Thanks for your payment!\n\nPlan: ${plan.name}\nAmount: $${plan.amountUsd} USD\nPayPal reference: ${rec.captureId}\nHosting active until: ${String(conn.expiresAt).slice(0, 10)}\n\nManage or renew at ${url.origin}`
           );
+          await saveDb(env, db);
+          return jsonResponse({ message, connection: conn }, 201);
         } catch (err) {
           return jsonResponse({ error: err.message || 'PayPal capture failed.' }, 502);
         }
@@ -2729,6 +3362,9 @@ const spaceHubWorker = {
           targetUrlOrProject: cleanDomain,
           paymentMethod,
           paymentRef,
+          planId: plan.id,
+          periodDays: plan.periodDays || 30,
+          expiresAt: addDaysIso(now, plan.periodDays || 30),
           hasToken: true,
           createdAt: now
         };
@@ -2745,7 +3381,11 @@ const spaceHubWorker = {
         return jsonResponse({
           connections: db.hostingConnections
             .filter((c) => c.userId === user.id)
-            .map(({ apiToken, ...rest }) => ({ ...rest, hasToken: Boolean(apiToken || rest.hasToken) }))
+            .map(({ apiToken, ...rest }) => ({
+              ...rest,
+              hasToken: Boolean(apiToken || rest.hasToken),
+              ...describeHostingConn(rest)
+            }))
         });
       }
 
@@ -3303,6 +3943,18 @@ const spaceHubWorker = {
             conn = db.hostingConnections.find((c) => c.id === body.connectionId && c.userId === user.id);
           }
           if (conn && conn.isSingleSpaceSlot) {
+            const slotState = hostingState(conn, Date.now());
+            if (slotState === 'expired' || slotState === 'suspended') {
+              return jsonResponse(
+                {
+                  error:
+                    slotState === 'suspended'
+                      ? 'This hosting slot is suspended. Contact support.'
+                      : 'This hosting plan has expired. Renew it from Pricing & Hosting to publish again.'
+                },
+                402
+              );
+            }
             if (conn.assignedSpaceSlug && conn.assignedSpaceSlug !== space.slug) {
               return jsonResponse(
                 {
