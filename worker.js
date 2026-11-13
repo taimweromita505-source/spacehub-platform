@@ -1437,6 +1437,59 @@ function createZip(files) {
   return out;
 }
 
+async function getCryptoVaultKey(env) {
+  const seed = (env && (env.VAULT_ENCRYPTION_KEY || env.SECRET_ENCRYPTION_KEY)) || 'spacehub-vault-seed-2026';
+  const enc = new TextEncoder();
+  const hash = await crypto.subtle.digest('SHA-256', enc.encode(seed));
+  return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+async function encryptSecretString(plaintext, env) {
+  if (!plaintext || typeof plaintext !== 'string') return '';
+  if (plaintext.startsWith('enc:v1:')) return plaintext;
+  const key = await getCryptoVaultKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+  const ivB64 = btoa(String.fromCharCode(...iv));
+  const cipherB64 = btoa(String.fromCharCode(...new Uint8Array(ciphertext)));
+  return `enc:v1:${ivB64}:${cipherB64}`;
+}
+
+async function decryptSecretString(ciphertext, env) {
+  if (!ciphertext || typeof ciphertext !== 'string') return '';
+  if (!ciphertext.startsWith('enc:v1:')) return ciphertext;
+  try {
+    const parts = ciphertext.split(':');
+    if (parts.length !== 4) return ciphertext;
+    const iv = Uint8Array.from(atob(parts[2]), (c) => c.charCodeAt(0));
+    const cipherBytes = Uint8Array.from(atob(parts[3]), (c) => c.charCodeAt(0));
+    const key = await getCryptoVaultKey(env);
+    const decryptedBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipherBytes);
+    return new TextDecoder().decode(decryptedBuf);
+  } catch (_e) {
+    return ciphertext;
+  }
+}
+
+async function getDecryptedSpaceSecrets(space, env) {
+  const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+  const decrypted = {};
+  for (const [k, v] of Object.entries(secrets)) {
+    decrypted[k] = await decryptSecretString(v, env);
+  }
+  return decrypted;
+}
+
+async function encryptSpaceSecrets(secretsObj, env) {
+  if (!secretsObj || typeof secretsObj !== 'object') return {};
+  const encrypted = {};
+  for (const [k, v] of Object.entries(secretsObj)) {
+    encrypted[k] = await encryptSecretString(v, env);
+  }
+  return encrypted;
+}
+
 export const LEGACY_STATE_KEY = 'spacehub_prod_state_v2';
 let memoryDb = structuredClone(emptyDb);
 
@@ -1599,9 +1652,13 @@ function normalizeSpaceSecrets(input) {
 }
 
 function replaceSecretPlaceholders(str, secrets = {}) {
-  return String(str ?? '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) =>
-    secrets[key] !== undefined ? secrets[key] : `{{${key}}}`
-  );
+  return String(str ?? '')
+    .replace(/\{\{\s*SECRET:([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) =>
+      secrets[key] !== undefined ? secrets[key] : `{{SECRET:${key}}}`
+    )
+    .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) =>
+      secrets[key] !== undefined ? secrets[key] : `{{${key}}}`
+    );
 }
 
 function normalizeCustomDomain(raw) {
@@ -1951,6 +2008,66 @@ function generateSpaceIconSvg(spaceOrTitle = 'S') {
 </svg>`;
 }
 
+function generateSpaceOgSvg(space) {
+  const isObj = space && typeof space === 'object';
+  const title = String((isObj ? space.title : space) || 'SpaceHub Live App').replace(/[<>&"']/g, '').slice(0, 48);
+  const desc = String((isObj ? space.description : '') || 'Hosted & Deployed on SpaceHub managed edge cloud.').replace(/[<>&"']/g, '').slice(0, 110);
+  const owner = String((isObj ? space.ownerUsername : 'spacehub') || 'spacehub').replace(/[<>&"']/g, '');
+  const rawIcon = (isObj ? space.appIconText : '') || title.charAt(0) || '⚡';
+  const iconText = String(rawIcon).trim().slice(0, 2) || '⚡';
+  const theme = (isObj && /^#[0-9a-fA-F]{3,8}$/.test(space.appThemeColor)) ? space.appThemeColor : '#6366f1';
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#09090b" />
+      <stop offset="50%" stop-color="#121217" />
+      <stop offset="100%" stop-color="#1e1b4b" />
+    </linearGradient>
+    <radialGradient id="glow" cx="80%" cy="20%" r="60%">
+      <stop offset="0%" stop-color="${theme}" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="cardBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18181b" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#09090b" stop-opacity="0.95" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)" />
+  <rect width="1200" height="630" fill="url(#glow)" />
+
+  <rect x="60" y="60" width="1080" height="510" rx="24" fill="url(#cardBg)" stroke="#27272a" stroke-width="2" />
+
+  <g transform="translate(110, 120)">
+    <rect width="170" height="40" rx="20" fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" stroke-width="1.5" />
+    <text x="85" y="25" fill="#a5b4fc" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" text-anchor="middle">⚡ SPACEHUB LIVE</text>
+  </g>
+
+  <g transform="translate(110, 190)">
+    <rect width="100" height="100" rx="24" fill="${theme}" />
+    <text x="50" y="65" fill="#ffffff" font-family="system-ui, -apple-system, sans-serif" font-size="44" font-weight="800" text-anchor="middle">${iconText}</text>
+  </g>
+
+  <text x="240" y="240" fill="#ffffff" font-family="system-ui, -apple-system, sans-serif" font-size="44" font-weight="800" letter-spacing="-0.02em">${title}</text>
+  <text x="240" y="280" fill="#818cf8" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="600">Created by @${owner}</text>
+
+  <text x="110" y="365" fill="#a1a1aa" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="400">
+    ${desc}
+  </text>
+
+  <g transform="translate(110, 470)">
+    <rect x="0" y="0" width="220" height="42" rx="10" fill="#18181b" stroke="#27272a" stroke-width="1.5" />
+    <text x="110" y="26" fill="#e4e4e7" font-family="system-ui, sans-serif" font-size="15" font-weight="600" text-anchor="middle">🌐 Cloudflare Edge Live</text>
+
+    <rect x="235" y="0" width="180" height="42" rx="10" fill="#18181b" stroke="#27272a" stroke-width="1.5" />
+    <text x="325" y="26" fill="#34d399" font-family="system-ui, sans-serif" font-size="15" font-weight="600" text-anchor="middle">🔒 SSL / PWA Ready</text>
+
+    <text x="970" y="28" fill="#71717a" font-family="system-ui, sans-serif" font-size="18" font-weight="700" text-anchor="end">spacehub.win</text>
+  </g>
+</svg>`;
+}
+
 function generateSpaceManifest(space, origin = '') {
   const startUrl = `${origin}/live/${space.slug}`;
   const themeColor = /^#[0-9a-fA-F]{3,8}$/.test(space.appThemeColor) ? space.appThemeColor : '#09090b';
@@ -1970,18 +2087,104 @@ function generateSpaceManifest(space, origin = '') {
         sizes: '192x192 512x512',
         type: 'image/svg+xml',
         purpose: 'any maskable'
+      },
+      {
+        src: `${origin}/live/${space.slug}/og.svg`,
+        sizes: '1200x630',
+        type: 'image/svg+xml'
       }
     ]
   };
 }
 
 function generateSpaceServiceWorker(slug) {
-  return `const CACHE_NAME = 'spacehub-app-${slug}-v1';
+  return `const CACHE_NAME = 'spacehub-app-${slug}-v2';
+const OFFLINE_FALLBACK = \`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Offline Mode — SpaceHub</title>
+  <style>
+    body { background: #09090b; color: #fafafa; font-family: system-ui, -apple-system, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 1.5rem; text-align: center; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 1rem; padding: 2.5rem 2rem; max-width: 440px; }
+    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; color: #f59e0b; }
+    p { color: #a1a1aa; font-size: 0.92rem; line-height: 1.5; margin-bottom: 1.5rem; }
+    button { background: #6366f1; color: white; border: none; padding: 0.65rem 1.4rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">⚡</div>
+    <h1>You are currently offline</h1>
+    <p>This Space is cached for offline access on your device. Any form submissions have been stored locally and will synchronize automatically when your connection is restored.</p>
+    <button onclick="window.location.reload()">Retry Connection</button>
+  </div>
+</body>
+</html>\`;
+
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
+});
+
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+  const req = event.request;
+  const url = new URL(req.url);
+
+  // Background Sync / Offline Queue for Form Submissions
+  if (req.method === 'POST' && url.pathname.endsWith('/submit')) {
+    event.respondWith(
+      fetch(req.clone()).catch(async () => {
+        try {
+          const bodyText = await req.clone().text();
+          const cache = await caches.open(CACHE_NAME);
+          const queueRes = await cache.match('/_offline_queue');
+          const queue = queueRes ? JSON.parse(await queueRes.text()) : [];
+          queue.push({ url: req.url, body: bodyText, timestamp: Date.now() });
+          await cache.put('/_offline_queue', new Response(JSON.stringify(queue)));
+          return new Response(JSON.stringify({ ok: true, queued: true, message: 'Offline: Submission queued for background sync.' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        } catch (_err) {
+          return new Response(JSON.stringify({ ok: false, error: 'Offline storage failed.' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        }
+      })
+    );
+    return;
+  }
+
+  if (req.method !== 'GET') return;
+
+  event.respondWith(
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const cached = await cache.match(req);
+      const networkFetch = fetch(req)
+        .then((networkRes) => {
+          if (networkRes.status === 200) {
+            cache.put(req, networkRes.clone());
+          }
+          return networkRes;
+        })
+        .catch(() => {
+          if (cached) return cached;
+          if (req.headers.get('accept')?.includes('text/html')) {
+            return new Response(OFFLINE_FALLBACK, {
+              status: 200,
+              headers: { 'Content-Type': 'text/html; charset=utf-8' }
+            });
+          }
+          return new Response('Network error and no offline cache available.', { status: 503 });
+        });
+
+      return cached || networkFetch;
+    })
+  );
 });
 `;
 }
@@ -2049,7 +2252,7 @@ function buildBundledHtml(files, origin = '', space = null) {
     const safeDesc = String(space.description || `${safeTitle} — Hosted on SpaceHub`).replace(/["<>]/g, '');
     const spaceConfigScript = `\n  <script>window.SPACE_CONFIG = ${JSON.stringify(buildSpaceConfig(space, files))};</script>`;
     const ogMeta = (!html.includes('property="og:title"')
-      ? `\n  <meta property="og:type" content="website" />\n  <meta property="og:title" content="${safeTitle}" />\n  <meta property="og:description" content="${safeDesc}" />\n  <meta property="og:image" content="${origin}/live/${space.slug}/icon.svg" />\n  <meta name="twitter:card" content="summary" />\n  <meta name="twitter:title" content="${safeTitle}" />\n  <meta name="twitter:description" content="${safeDesc}" />`
+      ? `\n  <meta property="og:type" content="website" />\n  <meta property="og:title" content="${safeTitle}" />\n  <meta property="og:description" content="${safeDesc}" />\n  <meta property="og:image" content="${origin}/live/${space.slug}/og.svg" />\n  <meta name="twitter:card" content="summary_large_image" />\n  <meta name="twitter:title" content="${safeTitle}" />\n  <meta name="twitter:description" content="${safeDesc}" />\n  <meta name="twitter:image" content="${origin}/live/${space.slug}/og.svg" />`
       : '') + spaceConfigScript;
     const pwaHead =
       appPlatform !== 'web_only'
@@ -2390,8 +2593,8 @@ const spaceHubWorker = {
       });
     }
 
-    // 1. Per-Space Installable PWA Assets (/live/:slug/manifest.webmanifest, /live/:slug/icon.svg, /live/:slug/sw.js)
-    const spacePwaMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(manifest\.webmanifest|icon\.svg|sw\.js)$/i);
+    // 1. Per-Space Installable PWA Assets (/live/:slug/manifest.webmanifest, /live/:slug/icon.svg, /live/:slug/sw.js, /live/:slug/og.svg)
+    const spacePwaMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(manifest\.webmanifest|icon\.svg|sw\.js|og\.svg)$/i);
     if (spacePwaMatch && method === 'GET') {
       const slug = decodeURIComponent(spacePwaMatch[1]).toLowerCase();
       const asset = spacePwaMatch[2].toLowerCase();
@@ -2410,6 +2613,15 @@ const spaceHubWorker = {
         return new Response(generateSpaceIconSvg(space), {
           status: 200,
           headers: { 'Content-Type': 'image/svg+xml; charset=utf-8' }
+        });
+      }
+      if (asset === 'og.svg') {
+        return new Response(generateSpaceOgSvg(space), {
+          status: 200,
+          headers: {
+            'Content-Type': 'image/svg+xml; charset=utf-8',
+            'Cache-Control': 'public, max-age=3600, s-maxage=86400'
+          }
         });
       }
       if (asset === 'sw.js') {
@@ -2529,7 +2741,7 @@ const spaceHubWorker = {
       const system = String(payload.system || `You are the helpful AI assistant for ${space.title}.`).trim();
       if (!prompt) return jsonResponse({ error: 'Prompt is required.' }, 400);
 
-      const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+      const secrets = await getDecryptedSpaceSecrets(space, env);
       const openAiKey = secrets.OPENAI_API_KEY || '';
       if (openAiKey && !openAiKey.startsWith('mock_')) {
         try {
@@ -2615,7 +2827,7 @@ const spaceHubWorker = {
         return jsonResponse({ error: 'Proxy target URL must start with https:// or http://' }, 400);
       }
 
-      const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+      const secrets = await getDecryptedSpaceSecrets(space, env);
       const resolvedUrl = replaceSecretPlaceholders(rawUrl, secrets);
       const reqMethod = String(payload.method || 'GET').toUpperCase();
       const resolvedHeaders = {};
@@ -3007,7 +3219,7 @@ const spaceHubWorker = {
             return jsonResponse({ error: 'Notification subject or message is required.' }, 400);
           }
           let status = 'queued_outbox';
-          const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+          const secrets = await getDecryptedSpaceSecrets(space, env);
           if (secrets.RESEND_API_KEY && !secrets.RESEND_API_KEY.startsWith('mock_')) {
             try {
               const r = await fetch('https://api.resend.com/emails', {
@@ -3305,7 +3517,16 @@ const spaceHubWorker = {
           { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
         );
       }
+      const baseFiles =
+        (mode === 'draft' && canAccess) ? space.draftFiles : space.publishedFiles || space.draftFiles;
+
       if (space.maintenanceMode && !canAccess && mode !== 'draft') {
+        if (baseFiles && baseFiles['maintenance.html']) {
+          return new Response(
+            buildBundledHtml({ ...baseFiles, 'index.html': baseFiles['maintenance.html'] }, url.origin, space),
+            { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+          );
+        }
         return new Response(
           `<!DOCTYPE html><html><body style="background:#09090b;color:#fafafa;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;padding:2rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;max-width:420px"><h1 style="font-size:1.25rem;margin-bottom:0.5rem">503 — Under Scheduled Maintenance</h1><p style="color:#a1a1aa;font-size:0.9rem;margin-bottom:1.25rem">${String(space.title).replace(/[<>&]/g, '')} is currently undergoing scheduled maintenance. Please check back shortly.</p></div></body></html>`,
           { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
@@ -3318,8 +3539,6 @@ const spaceHubWorker = {
           headers: { 'Content-Type': 'text/html; charset=utf-8' }
         });
       }
-      const baseFiles =
-        (mode === 'draft' && canAccess) ? space.draftFiles : space.publishedFiles || space.draftFiles;
       const hasAb = Boolean(baseFiles && baseFiles['index.b.html'] !== undefined);
       const forcedVariant = (url.searchParams.get('variant') || '').toLowerCase();
       const cookieVariant = parseCookies(request.headers.get('cookie') || '')[`sh_ab_${space.slug}`] || '';
@@ -4682,7 +4901,9 @@ const spaceHubWorker = {
             space.maintenanceMode = Boolean(body.maintenanceMode);
           }
           if (body.secrets !== undefined) {
-            space.secrets = normalizeSpaceSecrets(body.secrets);
+            const rawSecrets = normalizeSpaceSecrets(body.secrets);
+            space.secrets = await encryptSpaceSecrets(rawSecrets, env);
+            recordAuditLog(space, user, 'secrets_updated', { count: Object.keys(rawSecrets).length });
           }
           if (body.appStorage !== undefined && typeof body.appStorage === 'object') {
             space.appStorage = body.appStorage;

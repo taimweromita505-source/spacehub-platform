@@ -1219,6 +1219,72 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'custom_404') {
+    state.workingFiles['404.html'] = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>404 — Page Not Found</title>
+  <style>
+    body { background: #09090b; color: #fafafa; font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; text-align: center; padding: 1.5rem; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 1rem; padding: 2.5rem 2rem; max-width: 440px; }
+    h1 { font-size: 3rem; margin: 0; color: #818cf8; }
+    h2 { font-size: 1.25rem; margin-top: 0.5rem; }
+    p { color: #a1a1aa; margin: 1rem 0 1.5rem; }
+    a { background: #6366f1; color: white; padding: 0.65rem 1.25rem; border-radius: 0.5rem; text-decoration: none; font-weight: 600; display: inline-block; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>404</h1>
+    <h2>Page Not Found</h2>
+    <p>The page or resource you requested could not be located on this Space.</p>
+    <a href="/">← Return to Home</a>
+  </div>
+</body>
+</html>`;
+    state.activeFile = '404.html';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['404.html'];
+    showToast('Created custom 404.html page!');
+    return;
+  }
+
+  if (stack === 'custom_maintenance') {
+    state.workingFiles['maintenance.html'] = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scheduled Maintenance</title>
+  <style>
+    body { background: #09090b; color: #fafafa; font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; text-align: center; padding: 1.5rem; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 1rem; padding: 2.5rem 2rem; max-width: 440px; }
+    .icon { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    h1 { font-size: 1.35rem; margin-bottom: 0.5rem; }
+    p { color: #a1a1aa; line-height: 1.5; margin-bottom: 1.5rem; }
+    .badge { background: rgba(99,102,241,0.15); border: 1px solid #6366f1; color: #818cf8; font-size: 0.75rem; padding: 0.25rem 0.6rem; border-radius: 999px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🛠️</div>
+    <div class="badge">SYSTEM UPDATE</div>
+    <h1 style="margin-top: 1rem;">Under Scheduled Maintenance</h1>
+    <p>We are performing infrastructure optimizations. All services will resume shortly with zero data loss.</p>
+  </div>
+</body>
+</html>`;
+    state.activeFile = 'maintenance.html';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['maintenance.html'];
+    showToast('Created custom maintenance.html page!');
+    return;
+  }
+
   const tag = snippets[stack];
   if (!tag) return;
   let html = state.workingFiles['index.html'] || '';
