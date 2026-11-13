@@ -4040,6 +4040,12 @@ const spaceHubWorker = {
           }
           const history = space.releaseHistory || [];
           if (method === 'GET') {
+            const selected = url.searchParams.get('release');
+            if (selected) {
+              const release = history.find(({ id }) => id === selected);
+              if (!release) return jsonResponse({ error: 'Release no longer available.' }, 404);
+              return jsonResponse({ files: release.files }, 200, { 'Cache-Control': 'no-store' });
+            }
             return jsonResponse({
               current: space.releaseId || null,
               releases: history.map(({ id, publishedAt }) => ({ id, publishedAt }))

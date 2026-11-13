@@ -1,4 +1,4 @@
-const CACHE_NAME = 'spacehub-pwa-v6';
+const CACHE_NAME = 'spacehub-pwa-v7';
 const PRECACHE_URLS = ['/', '/styles.css', '/app.js', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
