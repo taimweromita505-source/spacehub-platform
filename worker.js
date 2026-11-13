@@ -159,45 +159,34 @@ p { color: #a1a1aa; font-size: 0.95rem; line-height: 1.5; }`,
 
 const HOSTING_PLANS = [
   {
-    id: 'plan_starter_edge',
-    name: 'Starter Edge Plan',
-    priceMonthly: 5,
-    priceLabel: '$5 / month',
+    id: 'plan_monthly_1',
+    name: 'Monthly Account Hosting',
+    priceMonthly: 1,
+    billingPeriod: '1 month',
+    priceLabel: '$1 / month',
     provider: 'cloudflare_pages',
-    providerLabel: 'Cloudflare Edge CDN',
+    providerLabel: 'SpaceHub Managed Edge Hosting',
     features: [
-      'Global Edge CDN + automatic SSL',
-      'Up to 5 production Spaces',
-      'Custom subdomain (.spacehub-edge.app)',
-      '100 GB monthly bandwidth'
+      'Host your account websites & apps for 1 full month',
+      'Clean shareable production URL (/live/your-app)',
+      'Global Cloudflare Edge CDN + automatic SSL',
+      'Instant publishing from Staging & Coding Agents'
     ]
   },
   {
-    id: 'plan_pro_cloud',
-    name: 'Pro Cloud Plan',
-    priceMonthly: 15,
-    priceLabel: '$15 / month',
-    provider: 'netlify',
-    providerLabel: 'Managed Pro Cloud',
+    id: 'plan_yearly_12',
+    name: 'Annual Account Hosting',
+    priceMonthly: 1,
+    priceYearly: 12,
+    billingPeriod: '1 year',
+    priceLabel: '$12 / year',
+    provider: 'cloudflare_pages',
+    providerLabel: 'SpaceHub Managed Edge Hosting (1 Year)',
     features: [
-      'Unlimited Spaces & custom apex domains',
-      'Continuous Coding Agent deployments',
-      '1 TB monthly bandwidth + DDoS protection',
-      'Private access controls'
-    ]
-  },
-  {
-    id: 'plan_dedicated_custom',
-    name: 'Business Dedicated Cloud',
-    priceMonthly: 39,
-    priceLabel: '$39 / month',
-    provider: 'vercel',
-    providerLabel: 'Dedicated Global Edge',
-    features: [
-      'Dedicated edge compute & custom domains',
-      '99.99% uptime SLA + analytics',
-      'Team staging environments',
-      'Unlimited bandwidth'
+      'Full 12 months of account hosting ($1/month rate)',
+      'Unlimited hosted Spaces & clean /live/ URLs',
+      'Custom domain routing & priority global CDN',
+      'Continuous Coding Agent auto-deployments'
     ]
   }
 ];
@@ -534,20 +523,32 @@ export default {
     const method = request.method.toUpperCase();
 
     // Fast path for static files
-    if (!pathname.startsWith('/api/') && !pathname.startsWith('/spaces/')) {
+    if (
+      !pathname.startsWith('/api/') &&
+      !pathname.startsWith('/spaces/') &&
+      !pathname.startsWith('/live/') &&
+      !pathname.startsWith('/s/')
+    ) {
       return env.ASSETS.fetch(request);
     }
 
     const db = await loadDb(env);
     const user = getCurrentUser(db, request, url);
 
-    // 1. Live Space Preview Route (/spaces/:username/:slug/live)
+    // 1. Short Clean Live URL Route (/live/:slug or /s/:slug) & Full Route (/spaces/:username/:slug/live)
+    const shortLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/?$/i);
     const liveMatch = pathname.match(/^\/spaces\/([^/]+)\/([^/]+)\/live$/i);
-    if (liveMatch && method === 'GET') {
-      const username = decodeURIComponent(liveMatch[1]).toLowerCase();
-      const slug = decodeURIComponent(liveMatch[2]).toLowerCase();
+    if ((shortLiveMatch || liveMatch) && method === 'GET') {
       const mode = url.searchParams.get('mode') === 'draft' ? 'draft' : 'published';
-      const space = db.spaces.find((s) => s.ownerUsername === username && s.slug === slug);
+      let space = null;
+      if (shortLiveMatch) {
+        const slug = decodeURIComponent(shortLiveMatch[1]).toLowerCase();
+        space = db.spaces.find((s) => s.slug === slug);
+      } else {
+        const username = decodeURIComponent(liveMatch[1]).toLowerCase();
+        const slug = decodeURIComponent(liveMatch[2]).toLowerCase();
+        space = db.spaces.find((s) => s.ownerUsername === username && s.slug === slug);
+      }
       const isOwner = Boolean(user && space && space.ownerId === user.id);
       if (!space || (space.visibility === 'private' && !isOwner) || (space.status === 'draft' && !isOwner)) {
         return new Response(
@@ -571,7 +572,14 @@ export default {
 
       if (pathname === '/api/auth/me' && method === 'GET') {
         return jsonResponse({
-          user: user ? { id: user.id, username: user.username, displayName: user.displayName } : null
+          user: user
+            ? {
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                hostingPlan: user.hostingPlan || null
+              }
+            : null
         });
       }
 
@@ -644,7 +652,15 @@ export default {
         const plan = HOSTING_PLANS.find((p) => p.id === body.planId) || HOSTING_PLANS[0];
         const cleanDomain =
           String(body.customDomain || '').trim().toLowerCase().replace(/^https?:\/\//, '') ||
-          `${user.username}.spacehub-edge.app`;
+          `${url.host}/live`;
+        const now = new Date().toISOString();
+        user.hostingPlan = {
+          planId: plan.id,
+          name: plan.name,
+          priceLabel: plan.priceLabel,
+          billingPeriod: plan.billingPeriod,
+          activatedAt: now
+        };
         const conn = {
           id: 'host_' + randomHex(6),
           userId: user.id,
@@ -653,12 +669,13 @@ export default {
           name: `${plan.name} — ${cleanDomain}`,
           targetUrlOrProject: cleanDomain,
           hasToken: true,
-          createdAt: new Date().toISOString()
+          createdAt: now
         };
         db.hostingConnections.unshift(conn);
         await saveDb(env, db);
         return jsonResponse({
-          message: `Activated ${plan.name} (${plan.priceLabel}) for ${cleanDomain}`,
+          message: `Activated ${plan.name} (${plan.priceLabel}) for your account`,
+          hostingPlan: user.hostingPlan,
           connection: conn
         }, 201);
       }
@@ -955,7 +972,7 @@ export default {
           const apiToken = body.apiToken || conn?.apiToken || '';
           const targetProject = body.customLiveUrl || conn?.targetUrlOrProject || space.slug;
 
-          let liveUrl = `${url.origin}/spaces/${space.ownerUsername}/${space.slug}/live`;
+          let liveUrl = `${url.origin}/live/${space.slug}`;
           let deployNote = `Published on ${providerLabel}`;
 
           if (provider === 'github_pages' && apiToken) {

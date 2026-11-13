@@ -1279,45 +1279,34 @@ app.delete('/api/agent-keys/:id', (req, res) => {
 
 const HOSTING_PLANS = [
   {
-    id: 'plan_starter_edge',
-    name: 'Starter Static Edge Hosting',
-    priceMonthly: 5,
-    priceLabel: '$5 / month',
-    provider: 'vercel',
-    providerLabel: 'Managed Edge CDN (Vercel Partner)',
-    features: [
-      'Instant global CDN + automatic SSL',
-      'Connect up to 5 launched Spaces',
-      'Custom subdomain (.spacehub-edge.app)',
-      '100 GB monthly bandwidth'
-    ]
-  },
-  {
-    id: 'plan_pro_cloud',
-    name: 'Pro Web & Agent Cloud Hosting',
-    priceMonthly: 15,
-    priceLabel: '$15 / month',
-    provider: 'netlify',
-    providerLabel: 'Managed Pro Cloud (Netlify Partner)',
-    features: [
-      'Unlimited launched Spaces & custom domains',
-      'Continuous Coding Agent auto-deploys',
-      '1 TB monthly bandwidth + DDOS protection',
-      'Private password-protected live deployments'
-    ]
-  },
-  {
-    id: 'plan_dedicated_custom',
-    name: 'Dedicated Business Cloud',
-    priceMonthly: 39,
-    priceLabel: '$39 / month',
+    id: 'plan_monthly_1',
+    name: 'Monthly Account Hosting',
+    priceMonthly: 1,
+    billingPeriod: '1 month',
+    priceLabel: '$1 / month',
     provider: 'cloudflare_pages',
-    providerLabel: 'Dedicated Global Edge (Cloudflare Partner)',
+    providerLabel: 'SpaceHub Managed Edge Hosting',
     features: [
-      'Dedicated edge workers & custom apex domains',
-      '99.99% uptime SLA + analytics',
-      'Team workspace & staging environments',
-      'Unlimited bandwidth'
+      'Host your account websites & apps for 1 full month',
+      'Clean shareable production URL (/live/your-app)',
+      'Global Cloudflare Edge CDN + automatic SSL',
+      'Instant publishing from Staging & Coding Agents'
+    ]
+  },
+  {
+    id: 'plan_yearly_12',
+    name: 'Annual Account Hosting',
+    priceMonthly: 1,
+    priceYearly: 12,
+    billingPeriod: '1 year',
+    priceLabel: '$12 / year',
+    provider: 'cloudflare_pages',
+    providerLabel: 'SpaceHub Managed Edge Hosting (1 Year)',
+    features: [
+      'Full 12 months of account hosting ($1/month rate)',
+      'Unlimited hosted Spaces & clean /live/ URLs',
+      'Custom domain routing & priority global CDN',
+      'Continuous Coding Agent auto-deployments'
     ]
   }
 ];
@@ -2058,15 +2047,17 @@ function buildBundledHtml(files) {
   return html;
 }
 
-app.get('/spaces/:username/:slug/live', (req, res) => {
+app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) => {
   const db = loadDb();
   const user = getCurrentUser(req, db);
   const { username, slug } = req.params;
   const mode = req.query.mode === 'draft' ? 'draft' : 'published';
 
-  const space = db.spaces.find(
-    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
-  );
+  const space = username
+    ? db.spaces.find(
+        (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+      )
+    : db.spaces.find((s) => s.slug === slug.toLowerCase());
 
   const isOwner = Boolean(user && space && space.ownerId === user.id);
 

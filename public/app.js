@@ -469,7 +469,7 @@ function updateStudioHeaderBadges(space) {
   }
 
   const liveLink = document.getElementById('openStandaloneLink');
-  liveLink.href = space.stagingPreviewUrl;
+  liveLink.href = space.liveUrl || space.stagingPreviewUrl;
 }
 
 async function openSpaceStudio(username, slug) {
@@ -928,8 +928,8 @@ async function loadHostingMarketplace() {
               ${p.features.map((f) => `<li>✓ ${escapeHtml(f)}</li>`).join('')}
             </ul>
           </div>
-          <button type="button" class="btn btn-primary" data-buy-plan="${escapeHtml(p.id)}">
-            🛒 Buy &amp; Auto-Connect (${escapeHtml(p.priceLabel)})
+          <button type="button" class="btn btn-primary btn-sm" data-buy-plan="${escapeHtml(p.id)}">
+            Activate Plan (${escapeHtml(p.priceLabel)})
           </button>
         </article>
       `

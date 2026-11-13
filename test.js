@@ -53,7 +53,9 @@ function request(server, method, path, body = null, token = null) {
 
     const plansRes = await request(server, 'GET', '/api/hosting-plans');
     assert.strictEqual(plansRes.status, 200);
-    assert.strictEqual(plansRes.body.plans.length, 3, 'Should offer 3 hosting plans to buy');
+    assert.strictEqual(plansRes.body.plans.length, 2, 'Should offer $1/month and $12/year hosting plans');
+    assert.strictEqual(plansRes.body.plans[0].priceLabel, '$1 / month');
+    assert.strictEqual(plansRes.body.plans[1].priceLabel, '$12 / year');
 
     console.log('2. Registering a new user...');
     const uniqueUser = 'maker_' + Math.floor(Math.random() * 100000);
