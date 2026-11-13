@@ -533,6 +533,7 @@ function updateLiveStagingPreview() {
 }
 
 function updateStudioHeaderBadges(space) {
+  renderStudioHosting(space);
   document.getElementById('studioEmoji').textContent = space.emoji || '🚀';
   document.getElementById('studioOwner').textContent = `@${space.ownerUsername}`;
   document.getElementById('studioTitle').textContent = space.title;
@@ -1678,6 +1679,37 @@ const restoreButton = document.getElementById('restoreReleaseBtn');
 const historySelect = document.getElementById('releaseHistorySelect');
 const historyPanel = document.getElementById('releaseHistoryPanel');
 let pendingVerification;
+const hostingCheck = document.getElementById('studioHostingCheck');
+const hostingStatus = document.getElementById('studioHostingStatus');
+let verifiedReleaseId;
+
+function renderStudioHosting(space) {
+  const panel = document.getElementById('studioHostingPanel');
+  panel.hidden = !space.isOwner;
+  if (panel.hidden) return;
+
+  const host = space.externalHost;
+  document.getElementById('studioHostingProvider').textContent = host?.providerLabel || 'No provider connected';
+  document.getElementById('studioHostingUrl').textContent = host?.liveUrl || 'Available after publishing';
+  document.getElementById('studioHostingRelease').textContent = space.publishedAt
+    ? new Date(space.publishedAt).toLocaleString() : 'Awaiting first publish';
+  document.getElementById('studioHostingVisibility').textContent = space.visibility === 'private' ? 'Private' : 'Public';
+  hostingCheck.hidden = !space.releaseId || !host?.liveUrl;
+  hostingStatus.textContent = space.maintenanceMode ? 'Maintenance mode is enabled.' :
+    space.releaseId && verifiedReleaseId === space.releaseId ? 'Live release verified.' :
+    host ? 'Ready for a live check.' : 'Publish this Space to make a release available.';
+}
+
+hostingCheck.addEventListener('click', async () => {
+  const space = state.currentSpace;
+  if (!space?.releaseId || !space.externalHost?.liveUrl) return;
+  hostingCheck.disabled = true;
+  try {
+    await verifyRelease({ liveUrl: space.externalHost.liveUrl, releaseId: space.releaseId }, hostingStatus);
+  } finally {
+    hostingCheck.disabled = false;
+  }
+});
 
 function releaseEndpoint(space) {
   return '/api/spaces/' + encodeURIComponent(space.ownerUsername) + '/' +
@@ -1701,16 +1733,21 @@ async function loadReleaseHistory(space) {
   }
 }
 
-async function verifyRelease() {
-  if (!pendingVerification) return;
-  const { liveUrl, releaseId } = pendingVerification;
-  const destination = new URL(liveUrl, location.origin);
-  verifyButton.hidden = true;
-  if (destination.origin !== location.origin || !destination.pathname.startsWith('/live/') || !releaseId) {
-    publishStatus.textContent = 'Release saved. Open the destination to check the external site.';
+async function verifyRelease(release = pendingVerification, status = publishStatus) {
+  if (!release) return;
+  const { liveUrl, releaseId } = release;
+  const space = state.currentSpace;
+  let destination;
+  try { destination = new URL(liveUrl, location.origin); } catch {
+    status.textContent = 'The destination URL is invalid.';
     return;
   }
-  publishStatus.textContent = 'Checking the live release…';
+  if (status === publishStatus) verifyButton.hidden = true;
+  if (destination.origin !== location.origin || !destination.pathname.startsWith('/live/') || !releaseId) {
+    status.textContent = 'Check the external site at its destination URL.';
+    return;
+  }
+  status.textContent = 'Checking the live release…';
   try {
     const response = await fetch(destination, {
       cache: 'no-store',
@@ -1720,14 +1757,18 @@ async function verifyRelease() {
     if (!response.ok || response.headers.get('X-SpaceHub-Release') !== releaseId) {
       throw Error('Live release differs');
     }
-    publishStatus.textContent = 'Verified that SpaceHub serves this release.';
+    if (state.currentSpace !== space) return;
+    verifiedReleaseId = releaseId;
+    status.textContent = 'Verified that SpaceHub serves this release.';
+    if (status === publishStatus) renderStudioHosting(space);
   } catch {
-    publishStatus.textContent = 'Release saved. The live check could not confirm it yet.';
-    verifyButton.hidden = false;
+    if (state.currentSpace !== space) return;
+    status.textContent = 'The live check could not confirm this release. Try checking again.';
+    if (status === publishStatus) verifyButton.hidden = false;
   }
 }
 
-verifyButton.addEventListener('click', verifyRelease);
+verifyButton.addEventListener('click', () => verifyRelease());
 restoreButton.addEventListener('click', async () => {
   const space = state.currentSpace;
   if (!historySelect.value || !window.confirm('Restore these files to the live Space? Your draft will stay as it is.')) return;
