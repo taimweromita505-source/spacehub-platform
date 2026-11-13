@@ -1050,23 +1050,156 @@ export default {
                 id: user.id,
                 username: user.username,
                 displayName: user.displayName,
+                email: user.email || null,
+                socialProvider: user.socialProvider || null,
                 hostingPlan: user.hostingPlan || null
               }
             : null
         });
       }
 
+      if (pathname === '/api/auth/social' && method === 'POST') {
+        const provider = ['google', 'github', 'apple'].includes(body.provider) ? body.provider : 'google';
+        let email = String(body.email || '').trim().toLowerCase();
+        let displayName = String(body.displayName || '').trim();
+        let preferredUsername = String(body.username || '').trim().toLowerCase();
+        const accessToken = String(body.accessToken || '').trim();
+        const idToken = String(body.idToken || '').trim();
+
+        // Optional real Google ID Token verification
+        if (provider === 'google' && idToken) {
+          const gRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+          if (!gRes.ok) {
+            return jsonResponse({ error: 'Invalid Google ID token.' }, 401);
+          }
+          const gInfo = await gRes.json();
+          email = String(gInfo.email || email).toLowerCase();
+          displayName = gInfo.name || displayName;
+        }
+
+        // Optional real GitHub Access Token verification
+        if (provider === 'github' && accessToken) {
+          const ghRes = await fetch('https://api.github.com/user', {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: 'application/vnd.github+json',
+              'User-Agent': 'SpaceHub-Cloudflare-Edge'
+            }
+          });
+          if (!ghRes.ok) {
+            return jsonResponse({ error: 'Invalid GitHub token.' }, 401);
+          }
+          const ghUser = await ghRes.json();
+          preferredUsername = String(ghUser.login || preferredUsername).toLowerCase();
+          displayName = ghUser.name || ghUser.login || displayName;
+          email = String(ghUser.email || email || `${preferredUsername}@users.noreply.github.com`).toLowerCase();
+        }
+
+        if (!email && !preferredUsername) {
+          return jsonResponse({ error: 'Please enter your Gmail / social email or account handle.' }, 400);
+        }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          // If user typed just the Gmail handle without @gmail.com, append @gmail.com for Google
+          if (provider === 'google' && /^[a-z0-9._-]+$/i.test(email)) {
+            email = `${email}@gmail.com`;
+          } else if (provider === 'apple' && /^[a-z0-9._-]+$/i.test(email)) {
+            email = `${email}@icloud.com`;
+          } else if (provider === 'github' && /^[a-z0-9_-]+$/i.test(email)) {
+            preferredUsername = email;
+            email = `${email}@users.noreply.github.com`;
+          } else {
+            return jsonResponse({ error: 'Please enter a valid email address (e.g. you@gmail.com).' }, 400);
+          }
+        }
+
+        const baseHandle = slugify(preferredUsername || email.split('@')[0] || provider).slice(0, 20);
+        let foundUser = db.users.find(
+          (u) => (email && u.email && u.email.toLowerCase() === email) || (u.socialProvider === provider && u.username === baseHandle)
+        );
+
+        if (!foundUser) {
+          let finalUsername = baseHandle.length >= 3 ? baseHandle : `${baseHandle}_${randomHex(2)}`;
+          if (db.users.some((u) => u.username === finalUsername)) {
+            finalUsername = `${baseHandle.slice(0, 16)}_${randomHex(2)}`;
+          }
+          const { salt, hash } = await hashPasswordEdge(randomHex(16));
+          foundUser = {
+            id: 'usr_' + randomHex(8),
+            username: finalUsername,
+            displayName: displayName || email.split('@')[0] || finalUsername,
+            email,
+            socialProvider: provider,
+            salt,
+            passwordHash: hash,
+            createdAt: new Date().toISOString()
+          };
+          db.users.push(foundUser);
+        } else {
+          foundUser.socialProvider = foundUser.socialProvider || provider;
+          if (email && !foundUser.email) foundUser.email = email;
+          if (displayName) foundUser.displayName = displayName;
+        }
+
+        if (provider === 'github' && accessToken) {
+          const existingGh = db.hostingConnections.find(
+            (c) => c.userId === foundUser.id && c.provider === 'github_pages'
+          );
+          if (!existingGh) {
+            db.hostingConnections.push({
+              id: 'host_' + randomHex(6),
+              userId: foundUser.id,
+              provider: 'github_pages',
+              providerLabel: 'GitHub Pages',
+              name: `GitHub (@${foundUser.username})`,
+              targetUrlOrProject: `${foundUser.username}-space`,
+              apiToken: accessToken,
+              hasToken: true,
+              createdAt: new Date().toISOString()
+            });
+          }
+        }
+
+        const token = randomHex(24);
+        db.sessions[token] = foundUser.id;
+        await saveDb(env, db);
+        return jsonResponse(
+          {
+            token,
+            user: {
+              id: foundUser.id,
+              username: foundUser.username,
+              displayName: foundUser.displayName,
+              email: foundUser.email || null,
+              socialProvider: foundUser.socialProvider || provider
+            }
+          },
+          200,
+          { 'Set-Cookie': `spacehub_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800` }
+        );
+      }
+
       if (pathname === '/api/auth/login' && method === 'POST') {
         const cleanUser = String(body.username || '').trim().toLowerCase();
-        const found = db.users.find((u) => u.username === cleanUser);
+        const found = db.users.find(
+          (u) => u.username === cleanUser || (u.email && u.email.toLowerCase() === cleanUser)
+        );
         if (!found || !(await verifyPasswordEdge(body.password || '', found.salt, found.passwordHash))) {
-          return jsonResponse({ error: 'Invalid username or password.' }, 401);
+          return jsonResponse({ error: 'Invalid username/email or password.' }, 401);
         }
         const token = randomHex(24);
         db.sessions[token] = found.id;
         await saveDb(env, db);
         return jsonResponse(
-          { token, user: { id: found.id, username: found.username, displayName: found.displayName } },
+          {
+            token,
+            user: {
+              id: found.id,
+              username: found.username,
+              displayName: found.displayName,
+              email: found.email || null,
+              socialProvider: found.socialProvider || null
+            }
+          },
           200,
           { 'Set-Cookie': `spacehub_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800` }
         );

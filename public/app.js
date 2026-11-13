@@ -240,7 +240,11 @@ function updateAuthUI() {
   if (state.user) {
     guestActions.hidden = true;
     userProfileBar.hidden = false;
-    currentUserBadge.textContent = `@${state.user.username}`;
+    const provLabels = { google: 'Google', github: 'GitHub', apple: 'Apple' };
+    const provPrefix = state.user.socialProvider && provLabels[state.user.socialProvider]
+      ? `${provLabels[state.user.socialProvider]} · `
+      : '';
+    currentUserBadge.textContent = `${provPrefix}@${state.user.username}`;
     tabMySpaces.hidden = false;
     tabPrivateSpaces.hidden = false;
   } else {
@@ -1505,6 +1509,103 @@ document.getElementById('openSignInBtn').addEventListener('click', () => {
 document.getElementById('openSignUpBtn').addEventListener('click', () => {
   document.getElementById('signUpServerError').hidden = true;
   document.getElementById('signUpDialog').showModal();
+});
+
+// Social Account Sign-In (Google / Gmail, GitHub, Apple)
+document.querySelectorAll('.social-auth-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const provider = btn.getAttribute('data-social-provider') || 'google';
+    document.getElementById('signInDialog')?.close();
+    document.getElementById('signUpDialog')?.close();
+
+    const titleEl = document.getElementById('socialAuthDialogTitle');
+    const leadEl = document.getElementById('socialAuthDialogLead');
+    const provInput = document.getElementById('socialProviderInput');
+    const emailLabel = document.getElementById('socialEmailLabel');
+    const emailInput = document.getElementById('socialEmailInput');
+    const ghTokenField = document.getElementById('socialGithubTokenField');
+    const submitBtn = document.getElementById('socialAuthSubmitBtn');
+    const errBox = document.getElementById('socialAuthServerError');
+
+    if (errBox) errBox.hidden = true;
+    if (provInput) provInput.value = provider;
+
+    if (provider === 'github') {
+      if (titleEl) titleEl.textContent = 'Continue with GitHub';
+      if (leadEl) {
+        leadEl.textContent =
+          'Enter your GitHub username or email (or paste a GitHub token to auto-connect GitHub Pages hosting).';
+      }
+      if (emailLabel) emailLabel.innerHTML = 'GitHub Username or Email <span aria-hidden="true">*</span>';
+      if (emailInput) emailInput.placeholder = 'octocat or octocat@github.com';
+      if (ghTokenField) ghTokenField.hidden = false;
+      if (submitBtn) submitBtn.textContent = 'Continue with GitHub';
+    } else if (provider === 'apple') {
+      if (titleEl) titleEl.textContent = 'Continue with Apple';
+      if (leadEl) {
+        leadEl.textContent =
+          'Enter your Apple ID email (e.g. @icloud.com or @me.com) to sign in or create your linked SpaceHub account.';
+      }
+      if (emailLabel) emailLabel.innerHTML = 'Apple ID Email <span aria-hidden="true">*</span>';
+      if (emailInput) emailInput.placeholder = 'you@icloud.com';
+      if (ghTokenField) ghTokenField.hidden = true;
+      if (submitBtn) submitBtn.textContent = 'Continue with Apple';
+    } else {
+      if (titleEl) titleEl.textContent = 'Continue with Google (Gmail)';
+      if (leadEl) {
+        leadEl.textContent =
+          'Enter your Gmail address to sign in or automatically create your linked SpaceHub account.';
+      }
+      if (emailLabel) emailLabel.innerHTML = 'Gmail Address <span aria-hidden="true">*</span>';
+      if (emailInput) emailInput.placeholder = 'you@gmail.com';
+      if (ghTokenField) ghTokenField.hidden = true;
+      if (submitBtn) submitBtn.textContent = 'Continue with Google';
+    }
+
+    document.getElementById('socialAuthDialog')?.showModal();
+    emailInput?.focus();
+  });
+});
+
+document.getElementById('socialAuthForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const provider = document.getElementById('socialProviderInput')?.value || 'google';
+  const email = document.getElementById('socialEmailInput')?.value.trim() || '';
+  const displayName = document.getElementById('socialDisplayNameInput')?.value.trim() || '';
+  const accessToken = document.getElementById('socialGithubTokenInput')?.value.trim() || '';
+  const errBox = document.getElementById('socialAuthServerError');
+  if (errBox) errBox.hidden = true;
+
+  if (!email && !accessToken) {
+    if (errBox) {
+      errBox.textContent = 'Please enter your email or account handle.';
+      errBox.hidden = false;
+    }
+    return;
+  }
+
+  try {
+    const data = await apiFetch('/api/auth/social', {
+      method: 'POST',
+      body: JSON.stringify({ provider, email, displayName, accessToken })
+    });
+    state.user = data.user;
+    state.token = data.token;
+    localStorage.setItem('spacehub_token', data.token);
+    updateAuthUI();
+    document.getElementById('socialAuthDialog')?.close();
+    e.target.reset();
+    loadSpacesList();
+    loadAgentKeys();
+    loadHostingConnections();
+    const provLabels = { google: 'Google (Gmail)', github: 'GitHub', apple: 'Apple' };
+    showToast(`Signed in with ${provLabels[provider] || provider} as @${data.user.username}!`);
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message;
+      errBox.hidden = false;
+    }
+  }
 });
 
 // Sign In Submit

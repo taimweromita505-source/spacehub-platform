@@ -1402,14 +1402,135 @@ app.post('/api/auth/register', (req, res) => {
   });
 });
 
+app.post('/api/auth/social', async (req, res) => {
+  const body = req.body || {};
+  const provider = ['google', 'github', 'apple'].includes(body.provider) ? body.provider : 'google';
+  let email = String(body.email || '').trim().toLowerCase();
+  let displayName = String(body.displayName || '').trim();
+  let preferredUsername = String(body.username || '').trim().toLowerCase();
+  const accessToken = String(body.accessToken || '').trim();
+  const idToken = String(body.idToken || '').trim();
+
+  try {
+    if (provider === 'google' && idToken) {
+      const gRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+      if (!gRes.ok) {
+        return res.status(401).json({ error: 'Invalid Google ID token.' });
+      }
+      const gInfo = await gRes.json();
+      email = String(gInfo.email || email).toLowerCase();
+      displayName = gInfo.name || displayName;
+    }
+
+    if (provider === 'github' && accessToken) {
+      const ghRes = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'SpaceHub-Platform'
+        }
+      });
+      if (!ghRes.ok) {
+        return res.status(401).json({ error: 'Invalid GitHub token.' });
+      }
+      const ghUser = await ghRes.json();
+      preferredUsername = String(ghUser.login || preferredUsername).toLowerCase();
+      displayName = ghUser.name || ghUser.login || displayName;
+      email = String(ghUser.email || email || `${preferredUsername}@users.noreply.github.com`).toLowerCase();
+    }
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Social verification failed.' });
+  }
+
+  if (!email && !preferredUsername) {
+    return res.status(400).json({ error: 'Please enter your Gmail / social email or account handle.' });
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (provider === 'google' && /^[a-z0-9._-]+$/i.test(email)) {
+      email = `${email}@gmail.com`;
+    } else if (provider === 'apple' && /^[a-z0-9._-]+$/i.test(email)) {
+      email = `${email}@icloud.com`;
+    } else if (provider === 'github' && /^[a-z0-9_-]+$/i.test(email)) {
+      preferredUsername = email;
+      email = `${email}@users.noreply.github.com`;
+    } else {
+      return res.status(400).json({ error: 'Please enter a valid email address (e.g. you@gmail.com).' });
+    }
+  }
+
+  const db = loadDb();
+  const baseHandle = slugify(preferredUsername || email.split('@')[0] || provider).slice(0, 20);
+  let foundUser = db.users.find(
+    (u) => (email && u.email && u.email.toLowerCase() === email) || (u.socialProvider === provider && u.username === baseHandle)
+  );
+
+  if (!foundUser) {
+    let finalUsername = baseHandle.length >= 3 ? baseHandle : `${baseHandle}_${crypto.randomBytes(2).toString('hex')}`;
+    if (db.users.some((u) => u.username === finalUsername)) {
+      finalUsername = `${baseHandle.slice(0, 16)}_${crypto.randomBytes(2).toString('hex')}`;
+    }
+    foundUser = {
+      id: 'usr_' + crypto.randomBytes(6).toString('hex'),
+      username: finalUsername,
+      displayName: displayName || email.split('@')[0] || finalUsername,
+      email,
+      socialProvider: provider,
+      passwordHash: hashPassword(crypto.randomBytes(16).toString('hex')),
+      createdAt: new Date().toISOString()
+    };
+    db.users.push(foundUser);
+  } else {
+    foundUser.socialProvider = foundUser.socialProvider || provider;
+    if (email && !foundUser.email) foundUser.email = email;
+    if (displayName) foundUser.displayName = displayName;
+  }
+
+  if (provider === 'github' && accessToken) {
+    const existingGh = db.hostingConnections.find(
+      (c) => c.userId === foundUser.id && c.provider === 'github_pages'
+    );
+    if (!existingGh) {
+      db.hostingConnections.push({
+        id: 'host_' + crypto.randomBytes(6).toString('hex'),
+        userId: foundUser.id,
+        provider: 'github_pages',
+        providerLabel: 'GitHub Pages',
+        name: `GitHub (@${foundUser.username})`,
+        targetUrlOrProject: `${foundUser.username}-space`,
+        apiToken: accessToken,
+        hasToken: true,
+        createdAt: new Date().toISOString()
+      });
+    }
+  }
+
+  const token = crypto.randomBytes(24).toString('hex');
+  db.sessions[token] = foundUser.id;
+  saveDb(db);
+
+  res.setHeader('Set-Cookie', `spacehub_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+  res.json({
+    token,
+    user: {
+      id: foundUser.id,
+      username: foundUser.username,
+      displayName: foundUser.displayName,
+      email: foundUser.email || null,
+      socialProvider: foundUser.socialProvider || provider
+    }
+  });
+});
+
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body || {};
   const cleanUser = String(username || '').trim().toLowerCase();
   const db = loadDb();
-  const user = db.users.find((u) => u.username === cleanUser);
+  const user = db.users.find(
+    (u) => u.username === cleanUser || (u.email && u.email.toLowerCase() === cleanUser)
+  );
 
   if (!user || !verifyPassword(String(password || ''), user.passwordHash)) {
-    return res.status(401).json({ error: 'Invalid username or password.' });
+    return res.status(401).json({ error: 'Invalid username/email or password.' });
   }
 
   const token = crypto.randomBytes(24).toString('hex');
@@ -1419,7 +1540,13 @@ app.post('/api/auth/login', (req, res) => {
   res.setHeader('Set-Cookie', `spacehub_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
   res.json({
     token,
-    user: { id: user.id, username: user.username, displayName: user.displayName }
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      email: user.email || null,
+      socialProvider: user.socialProvider || null
+    }
   });
 });
 
@@ -1441,7 +1568,13 @@ app.get('/api/auth/me', (req, res) => {
   const user = getCurrentUser(req, db);
   if (!user) return res.json({ user: null });
   res.json({
-    user: { id: user.id, username: user.username, displayName: user.displayName }
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      email: user.email || null,
+      socialProvider: user.socialProvider || null
+    }
   });
 });
 

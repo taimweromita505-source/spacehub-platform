@@ -270,6 +270,16 @@ function request(server, method, path, body = null, token = null) {
     );
     assert.strictEqual(extCreate.status, 201);
 
+    console.log('10. Testing Sign In with Gmail / Social Account (POST /api/auth/social)...');
+    const gmailAuth = await request(server, 'POST', '/api/auth/social', {
+      provider: 'google',
+      email: `creator_${Date.now()}@gmail.com`,
+      displayName: 'Gmail Creator'
+    });
+    assert.strictEqual(gmailAuth.status, 200);
+    assert.ok(gmailAuth.body.token, 'Should return session token for Gmail sign-in');
+    assert.strictEqual(gmailAuth.body.user.socialProvider, 'google');
+
     console.log('ALL TESTS PASSED!');
   } finally {
     server.close();
