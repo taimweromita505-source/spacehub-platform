@@ -1183,6 +1183,16 @@ function formatSpaceSummary(space, user) {
   };
 }
 
+function recordPreviousRelease(space) {
+  if (!space.publishedFiles || !space.publishedAt) return;
+  const history = [{
+    id: space.releaseId || crypto.randomUUID(),
+    publishedAt: space.publishedAt,
+    files: space.publishedFiles
+  }, ...(space.releaseHistory || [])];
+  space.releaseHistory = history.slice(0, 5);
+}
+
 function pushSpaceSnapshot(space, label = 'Previous version') {
   if (!space.draftFiles) return;
   space.snapshots = Array.isArray(space.snapshots) ? space.snapshots : [];
@@ -2551,6 +2561,10 @@ const spaceHubWorker = {
       const targetFiles =
         hasAb && variant === 'b' ? { ...baseFiles, 'index.html': baseFiles['index.b.html'] } : baseFiles;
       const liveHeaders = { 'Content-Type': 'text/html; charset=utf-8' };
+      if (mode !== 'draft' && space.releaseId) {
+        liveHeaders['X-SpaceHub-Release'] = space.releaseId;
+        liveHeaders['Cache-Control'] = 'no-store';
+      }
       if (hasAb && mode !== 'draft') {
         liveHeaders['Set-Cookie'] = `sh_ab_${space.slug}=${variant}; Path=/; Max-Age=2592000; SameSite=Lax`;
       }
@@ -3970,6 +3984,33 @@ const spaceHubWorker = {
           });
         }
 
+        if (action === 'releases' && (method === 'GET' || method === 'POST')) {
+          if (!space || !user || user.id !== space.ownerId) {
+            return jsonResponse({ error: 'Release history is available to the Space owner.' }, 403);
+          }
+          const history = space.releaseHistory || [];
+          if (method === 'GET') {
+            return jsonResponse({
+              current: space.releaseId || null,
+              releases: history.map(({ id, publishedAt }) => ({ id, publishedAt }))
+            });
+          }
+          const release = history.find(({ id }) => id === body.releaseId);
+          const liveUrl = new URL('/live/' + space.slug, url.origin).href;
+          if (!release || space.externalHost?.liveUrl !== liveUrl || spaceHostingLapse(db, space.slug)) {
+            return jsonResponse({ error: 'Restore requires an available SpaceHub hosted release.' }, 409);
+          }
+          recordPreviousRelease(space);
+          space.publishedFiles = release.files;
+          space.releaseId = crypto.randomUUID();
+          space.publishedAt = space.updatedAt = new Date().toISOString();
+          space.externalHost.lastDeployedAt = space.publishedAt;
+          const names = new Set([...Object.keys(space.draftFiles || {}), ...Object.keys(release.files)]);
+          space.hasUnpublishedChanges = [...names].some((name) => space.draftFiles?.[name] !== release.files[name]);
+          await saveDb(env, db);
+          return jsonResponse({ releaseId: space.releaseId, liveUrl });
+        }
+
         if ((action === 'deploy-external' || action === 'publish') && method === 'POST') {
           if (!user || !space || space.ownerId !== user.id) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
@@ -4032,6 +4073,8 @@ const spaceHubWorker = {
           }
 
           const now = new Date().toISOString();
+          recordPreviousRelease(space);
+          space.releaseId = crypto.randomUUID();
           space.externalHost = {
             provider,
             providerLabel,
@@ -4047,6 +4090,7 @@ const spaceHubWorker = {
           space.hasUnpublishedChanges = false;
           await saveDb(env, db);
           return jsonResponse({
+            releaseId: space.releaseId,
             message: `${deployNote} → ${liveUrl}`,
             externalHost: space.externalHost,
             space: {
