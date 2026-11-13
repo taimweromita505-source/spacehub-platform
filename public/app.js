@@ -986,6 +986,52 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'space_orders') {
+    const ordersSdk = `\n// --- SpaceHub Storefront & Order Checkout SDK (/live/:slug/orders) ---\nasync function createSpaceOrder(items, buyerEmail = '') {\n  const res = await fetch('/live/${state.currentSpace.slug}/orders', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ items, buyerEmail })\n  });\n  return res.json();\n}\nasync function getSpaceOrder(id) {\n  const res = await fetch('/live/${state.currentSpace.slug}/orders?id=' + encodeURIComponent(id));\n  return res.json();\n}\n// Usage: const { order } = await SpaceOrders.create([{ name: 'Pro Plan', priceUsd: 10, qty: 1 }], 'buyer@example.com'); window.location = order.checkoutUrl;\nwindow.SpaceOrders = { create: createSpaceOrder, get: getSpaceOrder };\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + ordersSdk;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    updateLiveStagingPreview();
+    showToast('Added SpaceOrders.create(items, email) SDK! Set PAYPAL_EMAIL in the Secrets Vault to receive payments.');
+    return;
+  }
+
+  if (stack === 'ab_variant') {
+    if (state.workingFiles['index.b.html'] !== undefined) {
+      showToast('index.b.html already exists — edit it to change Variant B.');
+    } else {
+      state.workingFiles['index.b.html'] = state.workingFiles['index.html'] || '';
+      showToast('Created index.b.html (Variant B). Publish to split live traffic 50/50 — use ?variant=a|b to force.');
+    }
+    state.activeFile = 'index.b.html';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['index.b.html'];
+    return;
+  }
+
+  if (stack === 'redirects_json') {
+    if (state.workingFiles['redirects.json'] === undefined) {
+      state.workingFiles['redirects.json'] = JSON.stringify(
+        {
+          '/pricing': '/index.html#pricing',
+          '/twitter': 'https://x.com/yourhandle',
+          '/old-page': { to: '/', status: 301 }
+        },
+        null,
+        2
+      );
+    }
+    state.activeFile = 'redirects.json';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['redirects.json'];
+    showToast('Created redirects.json — single-segment paths like /pricing redirect after publish.');
+    return;
+  }
+
   if (stack === 'edge_fn') {
     state.workingFiles['routes.json'] = JSON.stringify(
       {
@@ -2012,6 +2058,92 @@ document.getElementById('restoreBackupFileInput')?.addEventListener('change', as
   }
 });
 
+// In-Studio API Playground & Endpoint Tester
+function getApiTesterEndpoints() {
+  const slug = state.currentSpace?.slug || 'your-space';
+  const base = `/live/${slug}`;
+  return [
+    { label: 'GET /health', path: `${base}/health`, method: 'GET', body: '' },
+    { label: 'GET /storage', path: `${base}/storage`, method: 'GET', body: '' },
+    { label: 'POST /storage', path: `${base}/storage`, method: 'POST', body: '{"hello":"world"}' },
+    { label: 'GET /db/items', path: `${base}/db/items`, method: 'GET', body: '' },
+    { label: 'POST /db/items', path: `${base}/db/items`, method: 'POST', body: '{"title":"First row","status":"active"}' },
+    { label: 'POST /ai', path: `${base}/ai`, method: 'POST', body: '{"prompt":"Say hello"}' },
+    { label: 'POST /fn?action=ping', path: `${base}/fn?action=ping`, method: 'POST', body: '{}' },
+    { label: 'POST /events', path: `${base}/events`, method: 'POST', body: '{"event":"button_clicked"}' },
+    { label: 'GET /events', path: `${base}/events`, method: 'GET', body: '' },
+    { label: 'POST /notify', path: `${base}/notify`, method: 'POST', body: '{"to":"you@example.com","subject":"Hi","message":"Test"}' },
+    { label: 'POST /orders', path: `${base}/orders`, method: 'POST', body: '{"items":[{"name":"Pro Plan","priceUsd":10,"qty":1}]}' },
+    { label: 'GET /search?q=', path: `${base}/search?q=hello`, method: 'GET', body: '' },
+    { label: 'GET /config.json', path: `${base}/config.json`, method: 'GET', body: '' },
+    { label: 'GET /feed.json', path: `${base}/feed.json`, method: 'GET', body: '' },
+    { label: 'GET /sitemap.xml', path: `${base}/sitemap.xml`, method: 'GET', body: '' }
+  ];
+}
+
+function openApiTester() {
+  if (!state.currentSpace) return;
+  const select = document.getElementById('apiTesterEndpointSelect');
+  if (!select) return;
+  const endpoints = getApiTesterEndpoints();
+  select.innerHTML = endpoints
+    .map((ep, i) => `<option value="${i}">${escapeHtml(ep.label)}</option>`)
+    .join('');
+  const applyPreset = () => {
+    const ep = endpoints[Number(select.value)] || endpoints[0];
+    document.getElementById('apiTesterMethodSelect').value = ep.method;
+    document.getElementById('apiTesterBodyInput').value = ep.body || '{}';
+  };
+  select.onchange = applyPreset;
+  applyPreset();
+  document.getElementById('apiTesterResponse').textContent = 'Response will appear here.';
+  document.getElementById('apiTesterStatus').textContent = '';
+  document.getElementById('apiTesterDialog')?.showModal();
+}
+
+document.getElementById('apiTesterBtn')?.addEventListener('click', openApiTester);
+
+document.getElementById('apiTesterSendBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace) return;
+  const endpoints = getApiTesterEndpoints();
+  const ep = endpoints[Number(document.getElementById('apiTesterEndpointSelect').value)] || endpoints[0];
+  const method = document.getElementById('apiTesterMethodSelect').value;
+  const bodyText = document.getElementById('apiTesterBodyInput').value.trim();
+  const statusEl = document.getElementById('apiTesterStatus');
+  const outEl = document.getElementById('apiTesterResponse');
+  const options = { method, headers: {} };
+  if (state.token) options.headers.Authorization = `Bearer ${state.token}`;
+  if (method !== 'GET' && method !== 'DELETE' && bodyText) {
+    try {
+      JSON.parse(bodyText);
+    } catch (err) {
+      statusEl.textContent = 'Invalid JSON body';
+      outEl.textContent = String(err.message);
+      return;
+    }
+    options.headers['Content-Type'] = 'application/json';
+    options.body = bodyText;
+  }
+  statusEl.textContent = 'Sending...';
+  const startedAt = performance.now();
+  try {
+    const res = await fetch(ep.path, options);
+    const text = await res.text();
+    let pretty = text;
+    try {
+      pretty = JSON.stringify(JSON.parse(text), null, 2);
+    } catch (_e) {
+      // not JSON
+    }
+    const remaining = res.headers.get('X-RateLimit-Remaining');
+    statusEl.textContent = `${res.status} ${res.statusText || ''} · ${Math.round(performance.now() - startedAt)} ms${remaining ? ` · rate-limit remaining ${remaining}` : ''}`;
+    outEl.textContent = pretty.slice(0, 8000) || '(empty response)';
+  } catch (err) {
+    statusEl.textContent = 'Request failed';
+    outEl.textContent = String(err.message);
+  }
+});
+
 // In-Studio Command Palette (Ctrl+K / ⌘K)
 function getAvailablePaletteCommands() {
   const cmds = [
@@ -2060,6 +2192,11 @@ function getAvailablePaletteCommands() {
         label: 'Inspect Staging vs. Live Code Diff',
         category: `Studio (${state.currentSpace.slug})`,
         run: () => document.getElementById('diffSpaceBtn')?.click()
+      },
+      {
+        label: 'Open API Playground & Endpoint Tester',
+        category: `Studio (${state.currentSpace.slug})`,
+        run: () => document.getElementById('apiTesterBtn')?.click()
       },
       {
         label: 'Toggle Visual Inline Text Editor',

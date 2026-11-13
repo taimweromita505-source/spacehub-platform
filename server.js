@@ -57,6 +57,21 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Edge API rate limiting on Space write endpoints (X-RateLimit-* headers)
+app.use(['/live', '/s'], (req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  const slugSeg = String(req.path.split('/')[1] || '').toLowerCase();
+  const rl = checkRateLimit(`${slugSeg}:${req.ip}`);
+  res.setHeader('X-RateLimit-Limit', String(rl.limit));
+  res.setHeader('X-RateLimit-Remaining', String(rl.remaining));
+  res.setHeader('X-RateLimit-Reset', String(Math.ceil(rl.resetAt / 1000)));
+  if (!rl.allowed) {
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))));
+    return res.status(429).json({ error: 'Rate limit exceeded. Please retry shortly.' });
+  }
+  next();
+});
+
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -878,6 +893,96 @@ function searchSpaceContent(space, rawQuery) {
   return results.slice(0, 25);
 }
 
+const rateLimitBuckets = new Map();
+function checkRateLimit(key, limit = 120, windowMs = 60000) {
+  const now = Date.now();
+  let bucket = rateLimitBuckets.get(key);
+  if (!bucket || now > bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + windowMs };
+    rateLimitBuckets.set(key, bucket);
+  }
+  bucket.count += 1;
+  if (rateLimitBuckets.size > 5000) {
+    for (const [k, b] of rateLimitBuckets) {
+      if (now > b.resetAt) rateLimitBuckets.delete(k);
+    }
+  }
+  return {
+    allowed: bucket.count <= limit,
+    limit,
+    remaining: Math.max(0, limit - bucket.count),
+    resetAt: bucket.resetAt
+  };
+}
+
+function pickAbVariant(files, forced, cookieVal) {
+  if (!files || files['index.b.html'] === undefined) return 'a';
+  if (forced === 'a' || forced === 'b') return forced;
+  if (cookieVal === 'a' || cookieVal === 'b') return cookieVal;
+  return Math.random() < 0.5 ? 'a' : 'b';
+}
+
+function resolveSpaceRedirect(files, slug, fileName) {
+  if (!files || files['redirects.json'] === undefined) return null;
+  let map;
+  try {
+    map = JSON.parse(files['redirects.json']);
+  } catch (_e) {
+    return null;
+  }
+  if (!map || typeof map !== 'object') return null;
+  const rule = map['/' + fileName] !== undefined ? map['/' + fileName] : map[fileName];
+  if (rule === undefined || rule === null) return null;
+  const isObj = typeof rule === 'object';
+  const to = String(isObj ? rule.to : rule || '').trim();
+  const status = isObj && Number(rule.status) === 301 ? 301 : 302;
+  if (/^https?:\/\//i.test(to)) return { status, location: to };
+  if (to.startsWith('/') && !to.startsWith('//')) {
+    const hashIdx = to.indexOf('#');
+    const hash = hashIdx > -1 ? to.slice(hashIdx) : '';
+    const pathPart = (hashIdx > -1 ? to.slice(0, hashIdx) : to) || '/';
+    const internal = pathPart === '/' || pathPart === '/index.html' ? '' : pathPart;
+    if (internal === '/' + fileName) return null;
+    return { status, location: `/live/${slug}${internal}${hash}` };
+  }
+  return null;
+}
+
+function buildSpaceOrder(db, space, payload, orderId, origin) {
+  const rawItems = Array.isArray(payload.items) ? payload.items.slice(0, 20) : [];
+  const items = rawItems.map((it) => ({
+    name: String((it && it.name) || 'Item').trim().slice(0, 80),
+    priceUsd: Math.min(10000, Math.max(0, Number(it && it.priceUsd) || 0)),
+    qty: Math.min(99, Math.max(1, Math.floor(Number(it && it.qty) || 1)))
+  }));
+  if (!items.length) return { error: 'At least one item is required.' };
+  const amountUsd = Math.round(items.reduce((s, i) => s + i.priceUsd * i.qty, 0) * 100) / 100;
+  const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+  const owner = (db.users || []).find((u) => u.id === space.ownerId);
+  const recipient = String(secrets.PAYPAL_EMAIL || (owner && owner.email) || '').trim();
+  let checkoutUrl = null;
+  if (recipient && amountUsd > 0) {
+    checkoutUrl =
+      `https://www.paypal.com/cgi-bin/webscr?cmd=_xclick` +
+      `&business=${encodeURIComponent(recipient)}` +
+      `&item_name=${encodeURIComponent(`${space.title} Order ${orderId}`)}` +
+      `&amount=${amountUsd.toFixed(2)}&currency_code=USD&no_shipping=1` +
+      `&custom=${encodeURIComponent(orderId)}` +
+      `&return=${encodeURIComponent(`${origin}/live/${space.slug}?order=${orderId}`)}`;
+  }
+  return {
+    order: {
+      id: orderId,
+      items,
+      amountUsd,
+      buyerEmail: String(payload.buyerEmail || '').trim().slice(0, 160),
+      status: 'pending',
+      checkoutUrl,
+      createdAt: new Date().toISOString()
+    }
+  };
+}
+
 function generateSpaceFeedItems(space, origin = '') {
   const rawPosts =
     (space.dbTables && Array.isArray(space.dbTables.posts) ? space.dbTables.posts : null) ||
@@ -948,6 +1053,9 @@ function formatSpaceSummary(space, user) {
     likes: space.likes || 0,
     views: space.views || 0,
     installs: space.installs || 0,
+    abViewsA: space.abViewsA || 0,
+    abViewsB: space.abViewsB || 0,
+    orderCount: (space.orders || []).length,
     assetCount: Object.keys(assetsObj).length,
     eventCounts: space.eventCounts || {},
     notificationCount: (space.notifications || []).length,
@@ -3868,6 +3976,72 @@ app.post(['/live/:slug/notify', '/s/:slug/notify'], async (req, res) => {
   res.status(201).json({ ok: true, notification: notifRecord, count: space.notifications.length });
 });
 
+// Wave 9: Built-in E-Commerce & Order Checkout API (/live/:slug/orders)
+app.post(['/live/:slug/orders', '/s/:slug/orders'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.orders = Array.isArray(space.orders) ? space.orders : [];
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const built = buildSpaceOrder(db, space, req.body || {}, 'ord_' + crypto.randomBytes(5).toString('hex'), origin);
+  if (built.error) return res.status(400).json({ error: built.error });
+  space.orders.unshift(built.order);
+  if (space.orders.length > 200) space.orders = space.orders.slice(0, 200);
+  saveDb(db);
+  res.status(201).json({ ok: true, order: built.order });
+});
+
+app.get(['/live/:slug/orders', '/s/:slug/orders'], (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const orders = Array.isArray(space.orders) ? space.orders : [];
+  const orderId = req.query.id;
+  if (orderId) {
+    const found = orders.find((o) => o.id === orderId);
+    if (!found) return res.status(404).json({ error: 'Order not found.' });
+    return res.json({
+      ok: true,
+      order: {
+        id: found.id,
+        status: found.status,
+        amountUsd: found.amountUsd,
+        items: found.items,
+        checkoutUrl: found.checkoutUrl,
+        createdAt: found.createdAt
+      }
+    });
+  }
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the Space owner or collaborators can list orders.' });
+  }
+  res.json({ ok: true, orders });
+});
+
+app.patch(['/live/:slug/orders', '/s/:slug/orders'], (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the Space owner or collaborators can update orders.' });
+  }
+  const payload = req.body || {};
+  const targetId = String(req.query.id || payload.id || '');
+  const found = (space.orders || []).find((o) => o.id === targetId);
+  if (!found) return res.status(404).json({ error: 'Order not found.' });
+  if (['pending', 'paid', 'fulfilled', 'cancelled'].includes(payload.status)) {
+    found.status = payload.status;
+  }
+  found.updatedAt = new Date().toISOString();
+  saveDb(db);
+  res.json({ ok: true, order: found });
+});
+
 // Wave 8: Structured Table DB API (/live/:slug/db/:table) & RSS/JSON Feeds (/rss.xml, /feed.json)
 app.get(['/live/:slug/db/:table', '/s/:slug/db/:table'], (req, res) => {
   const db = loadDb();
@@ -4048,15 +4222,32 @@ app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) 
     return;
   }
 
+  const baseFiles = (mode === 'draft' && canAccess)
+    ? space.draftFiles
+    : (space.publishedFiles || space.draftFiles);
+  const hasAb = Boolean(baseFiles && baseFiles['index.b.html'] !== undefined);
+  const forcedVariant = String(req.query.variant || '').toLowerCase();
+  const cookieVariant = parseCookies(req)[`sh_ab_${space.slug}`] || '';
+  const variant = mode === 'draft'
+    ? (hasAb && forcedVariant === 'b' ? 'b' : 'a')
+    : pickAbVariant(baseFiles, forcedVariant, cookieVariant);
+
   if (mode !== 'draft') {
     space.views = (space.views || 0) + 1;
+    if (hasAb) {
+      if (variant === 'b') space.abViewsB = (space.abViewsB || 0) + 1;
+      else space.abViewsA = (space.abViewsA || 0) + 1;
+    }
     saveDb(db);
   }
 
-  const targetFiles = (mode === 'draft' && canAccess)
-    ? space.draftFiles
-    : (space.publishedFiles || space.draftFiles);
+  const targetFiles = hasAb && variant === 'b'
+    ? { ...baseFiles, 'index.html': baseFiles['index.b.html'] }
+    : baseFiles;
 
+  if (hasAb && mode !== 'draft') {
+    res.setHeader('Set-Cookie', `sh_ab_${space.slug}=${variant}; Path=/; Max-Age=2592000; SameSite=Lax`);
+  }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(buildBundledHtml(targetFiles, space));
 });
@@ -4067,6 +4258,10 @@ app.get(['/live/:slug/:filename', '/s/:slug/:filename'], (req, res) => {
   if (!space) return res.status(404).send('Not found');
   const files = space.publishedFiles || space.draftFiles || {};
   const fileName = req.params.filename;
+  const redirectRule = resolveSpaceRedirect(files, space.slug, fileName);
+  if (redirectRule) {
+    return res.redirect(redirectRule.status, redirectRule.location);
+  }
   if (files[fileName] !== undefined) {
     const ext = fileName.split('.').pop().toLowerCase();
     const mimeMap = {

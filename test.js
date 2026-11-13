@@ -33,7 +33,7 @@ function request(server, method, path, body = null, token = null) {
           } catch (_e) {
             // HTML response
           }
-          resolve({ status: res.statusCode, body: json, raw });
+          resolve({ status: res.statusCode, body: json, raw, headers: res.headers });
         });
       }
     );
@@ -572,6 +572,92 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(maintAnon.status, 503);
     const maintOwner = await request(server, 'GET', `/live/${space.slug}`, null, token);
     assert.strictEqual(maintOwner.status, 200);
+
+    console.log('18. Testing Wave 9: Orders API (/orders), A/B Split Testing, redirects.json & Rate-Limit Headers...');
+    const wave9Setup = await request(
+      server,
+      'PUT',
+      `/api/spaces/${uniqueUser}/${space.slug}`,
+      {
+        maintenanceMode: false,
+        secrets: 'PAYPAL_EMAIL=seller@example.com',
+        draftFiles: {
+          'index.b.html': '<!DOCTYPE html><html><head><title>B</title></head><body><h1>VARIANT_B_MARK</h1></body></html>',
+          'redirects.json': JSON.stringify({
+            '/twitter': 'https://x.com/spacehub',
+            '/pricing': '/index.html#pricing'
+          })
+        }
+      },
+      token
+    );
+    assert.strictEqual(wave9Setup.status, 200);
+    const wave9Publish = await request(
+      server,
+      'POST',
+      `/api/spaces/${uniqueUser}/${space.slug}/deploy-external`,
+      { connectionId: purchasedConnId },
+      token
+    );
+    assert.strictEqual(wave9Publish.status, 200);
+
+    const orderCreate = await request(server, 'POST', `/live/${space.slug}/orders`, {
+      items: [
+        { name: 'Pro Plan', priceUsd: 10, qty: 2 },
+        { name: 'Sticker', priceUsd: 5.5, qty: 1 }
+      ],
+      buyerEmail: 'buyer@example.com'
+    });
+    assert.strictEqual(orderCreate.status, 201);
+    assert.strictEqual(orderCreate.body.order.amountUsd, 25.5);
+    assert.ok(orderCreate.body.order.checkoutUrl.includes('paypal.com'));
+    assert.ok(orderCreate.body.order.checkoutUrl.includes('seller%40example.com'));
+    assert.ok(orderCreate.headers['x-ratelimit-limit']);
+    assert.ok(orderCreate.headers['x-ratelimit-remaining']);
+    const orderId = orderCreate.body.order.id;
+
+    const orderEmpty = await request(server, 'POST', `/live/${space.slug}/orders`, { items: [] });
+    assert.strictEqual(orderEmpty.status, 400);
+
+    const orderPublic = await request(server, 'GET', `/live/${space.slug}/orders?id=${orderId}`);
+    assert.strictEqual(orderPublic.status, 200);
+    assert.strictEqual(orderPublic.body.order.status, 'pending');
+    assert.strictEqual(orderPublic.body.order.buyerEmail, undefined);
+
+    const orderListAnon = await request(server, 'GET', `/live/${space.slug}/orders`);
+    assert.strictEqual(orderListAnon.status, 403);
+    const orderListOwner = await request(server, 'GET', `/live/${space.slug}/orders`, null, token);
+    assert.strictEqual(orderListOwner.status, 200);
+    assert.strictEqual(orderListOwner.body.orders.length, 1);
+
+    const orderPatchAnon = await request(server, 'PATCH', `/live/${space.slug}/orders?id=${orderId}`, {
+      status: 'paid'
+    });
+    assert.strictEqual(orderPatchAnon.status, 403);
+    const orderPatchOwner = await request(
+      server,
+      'PATCH',
+      `/live/${space.slug}/orders?id=${orderId}`,
+      { status: 'paid' },
+      token
+    );
+    assert.strictEqual(orderPatchOwner.status, 200);
+    assert.strictEqual(orderPatchOwner.body.order.status, 'paid');
+
+    const abB = await request(server, 'GET', `/live/${space.slug}?variant=b`);
+    assert.strictEqual(abB.status, 200);
+    assert.ok(String(abB.raw).includes('VARIANT_B_MARK'));
+    assert.ok(String(abB.headers['set-cookie'] || '').includes(`sh_ab_${space.slug}=b`));
+    const abA = await request(server, 'GET', `/live/${space.slug}?variant=a`);
+    assert.strictEqual(abA.status, 200);
+    assert.ok(!String(abA.raw).includes('VARIANT_B_MARK'));
+
+    const redirExternal = await request(server, 'GET', `/live/${space.slug}/twitter`);
+    assert.strictEqual(redirExternal.status, 302);
+    assert.strictEqual(redirExternal.headers.location, 'https://x.com/spacehub');
+    const redirInternal = await request(server, 'GET', `/live/${space.slug}/pricing`);
+    assert.strictEqual(redirInternal.status, 302);
+    assert.strictEqual(redirInternal.headers.location, `/live/${space.slug}#pricing`);
 
     console.log('ALL TESTS PASSED!');
   } finally {
