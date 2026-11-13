@@ -262,6 +262,9 @@ function updateAuthUI() {
   const tabMySpaces = document.getElementById('tabMySpaces');
   const tabPrivateSpaces = document.getElementById('tabPrivateSpaces');
 
+  document.querySelectorAll('[data-hosting-account]').forEach((panel) => { panel.hidden = !state.user; });
+  document.getElementById('hostingGuestNote').hidden = Boolean(state.user);
+
   if (state.user) {
     guestActions.hidden = true;
     userProfileBar.hidden = false;
@@ -285,26 +288,12 @@ function updateAuthUI() {
   refreshAccountExtras();
 }
 
-async function refreshStats() {
-  try {
-    const pubData = await apiFetch('/api/spaces?filter=public');
-    document.getElementById('statPublicCount').textContent = pubData.spaces.length;
-    if (state.user) {
-      const myData = await apiFetch('/api/spaces?filter=mine');
-      document.getElementById('statMyCount').textContent = myData.spaces.length;
-    } else {
-      document.getElementById('statMyCount').textContent = '0';
-    }
-  } catch (_err) {
-    // Ignore stat errors
-  }
-}
-
 async function loadSpacesList() {
   const grid = document.getElementById('spacesGrid');
   const heading = document.getElementById('gridHeading');
   const sub = document.getElementById('gridSubtext');
 
+  document.getElementById('hubIntroduction').hidden = state.filter !== 'public';
   if (state.filter === 'mine') {
     heading.textContent = 'My Spaces';
     sub.textContent = 'Your staging drafts, private projects, and deployed applications';
@@ -321,7 +310,6 @@ async function loadSpacesList() {
     const data = await apiFetch(`/api/spaces?filter=${state.filter}&search=${q}`);
     state.spaces = data.spaces || [];
     renderSpacesGrid();
-    refreshStats();
   } catch (err) {
     grid.innerHTML = `<p>${escapeHtml(err.message)}</p>`;
   }
@@ -330,24 +318,21 @@ async function loadSpacesList() {
 function renderSpacesGrid() {
   const grid = document.getElementById('spacesGrid');
   if (!state.spaces.length) {
-    const actionLabel = state.user ? '+ Create Space' : 'Create Account to Get Started';
+    const actionLabel = state.user ? 'Create a Space' : 'Try the workspace demo';
     grid.innerHTML = `
       <div class="empty-state">
-        <h3>No Spaces yet</h3>
+        <h3>${state.searchQuery ? 'No matching Spaces' : 'No Spaces yet'}</h3>
         <p>${
           state.user
             ? 'Create a Space to start building in your private staging workspace.'
-            : 'Create an account or sign in to stage your web applications and connect your hosting provider.'
+            : 'Published community projects will appear here. You can explore a sample workspace now.'
         }</p>
         <button type="button" class="btn btn-primary btn-sm" id="emptyStateCtaBtn">${actionLabel}</button>
       </div>
     `;
-    document.getElementById('emptyStateCtaBtn')?.addEventListener('click', () => {
-      if (state.user) {
-        document.getElementById('createSpaceDialog').showModal();
-      } else {
-        document.getElementById('signUpDialog').showModal();
-      }
+    document.getElementById('emptyStateCtaBtn').addEventListener('click', () => {
+      if (state.user) startSpaceCreation();
+      else showWorkspaceDemo();
     });
     return;
   }
@@ -505,7 +490,7 @@ window.addEventListener('message', (event) => {
     const newText = String(data.newText || '');
     if (oldText && newText && state.workingFiles['index.html']?.includes(oldText)) {
       state.workingFiles['index.html'] = state.workingFiles['index.html'].replace(oldText, newText);
-      state.isDirty = true;
+      recordDraftEdit();
       document.getElementById('dirtyIndicator').textContent = '● Unsaved visual text edit';
       if (state.activeFile === 'index.html') {
         document.getElementById('codeEditorTextarea').value = state.workingFiles['index.html'];
@@ -550,6 +535,12 @@ function updateLiveStagingPreview() {
 }
 
 function updateStudioHeaderBadges(space) {
+  renderStudioHosting(space);
+  renderLaunchChecklist(space);
+  document.getElementById('phoneSaveDraft').hidden = !space.isOwner;
+  const reviewPanel = document.getElementById('draftReviewPanel');
+  reviewPanel.hidden = !space.isPrimaryOwner;
+  reviewPanel.open = false;
   document.getElementById('studioEmoji').textContent = space.emoji || '🚀';
   document.getElementById('studioOwner').textContent = `@${space.ownerUsername}`;
   document.getElementById('studioTitle').textContent = space.title;
@@ -700,18 +691,112 @@ function renderFileTabs() {
   });
 }
 
+let guidedProject = null;
+const recoveryPanel = document.getElementById('draftRecovery');
+
+function recoveryKey(space = state.currentSpace) {
+  if (!state.user || !space?.isOwner) return null;
+  return 'spacehub-draft:' + JSON.stringify([state.user.username, space.ownerUsername, space.slug]);
+}
+
+function readRecovery(key) {
+  try { return key ? JSON.parse(localStorage.getItem(key)) : null; }
+  catch { return null; }
+}
+
+function clearRecovery(key) {
+  try { if (key) localStorage.removeItem(key); } catch {}
+}
+
+function recordDraftEdit() {
+  state.isDirty = true;
+  renderLaunchChecklist(state.currentSpace);
+  const key = recoveryKey();
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify({ files: state.workingFiles, savedAt: Date.now() }));
+    recoveryPanel.hidden = true;
+  } catch {
+    recoveryPanel.hidden = false;
+    document.getElementById('draftRecoveryMessage').textContent = 'Browser storage is unavailable. Save the draft to keep your edits.';
+    document.getElementById('restoreLocalDraft').hidden = true;
+    document.getElementById('discardLocalDraft').hidden = true;
+  }
+}
+
+function showDraftRecovery() {
+  const key = recoveryKey();
+  const copy = readRecovery(key);
+  recoveryPanel.hidden = !copy?.files;
+  if (recoveryPanel.hidden) return;
+  const message = document.getElementById('draftRecoveryMessage');
+  message.textContent = 'Unsaved edits from ' + new Date(copy.savedAt).toLocaleString() + ' are available on this browser.';
+  const restore = document.getElementById('restoreLocalDraft');
+  const discard = document.getElementById('discardLocalDraft');
+  restore.hidden = discard.hidden = false;
+  restore.onclick = () => {
+    if (recoveryKey() !== key) return;
+    state.workingFiles = copy.files;
+    state.activeFile = Object.hasOwn(copy.files, state.activeFile) ? state.activeFile : Object.keys(copy.files)[0] || 'index.html';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = copy.files[state.activeFile] || '';
+    document.getElementById('dirtyIndicator').textContent = 'Recovered edits · unsaved';
+    updateLiveStagingPreview();
+    renderFirstProjectGuide();
+  };
+  discard.onclick = () => {
+    clearRecovery(key);
+    recoveryPanel.hidden = true;
+  };
+}
+
+function renderFirstProjectGuide() {
+  const guide = document.getElementById('firstProjectGuide');
+  guide.hidden = !guidedProject || state.currentSpace?.slug !== guidedProject.slug ||
+    state.currentSpace?.ownerUsername !== guidedProject.owner || !state.currentSpace.isOwner;
+  if (guide.hidden) return;
+
+  const step = state.isDirty
+    ? ['Save your changes before checking the preview.', 'Save draft', 'saveDraftBtn']
+    : guidedProject.saved
+      ? ['Your draft is saved. Check how it looks on a phone.', 'Preview on a phone', null]
+      : ['Edit a line in index.html to make this starter your own.', 'Go to editor', 'codeEditorTextarea'];
+  document.getElementById('firstProjectStep').textContent = step[0];
+  const action = document.getElementById('firstProjectAction');
+  action.textContent = step[1];
+  action.onclick = () => {
+    if (step[2] === 'codeEditorTextarea') document.getElementById(step[2]).focus();
+    else if (step[2]) document.getElementById(step[2]).click();
+    else {
+      const phone = document.querySelector('.vp-btn[data-vp="mobile"]');
+      phone.click();
+      phone.focus();
+      guidedProject = null;
+      renderFirstProjectGuide();
+    }
+  };
+}
+
+document.getElementById('codeEditorTextarea').addEventListener('input', () => {
+  queueMicrotask(renderFirstProjectGuide);
+});
+
 async function openSpaceStudio(username, slug) {
   try {
     const data = await apiFetch(`/api/spaces/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`);
     const space = data.space;
     state.currentSpace = space;
 
+    selectPhonePane('editor');
     const sourceFiles = space.isOwner
       ? space.draftFiles || space.publishedFiles || {}
       : space.publishedFiles || {};
     state.workingFiles = JSON.parse(JSON.stringify(sourceFiles));
     state.activeFile = 'index.html';
     state.isDirty = false;
+    renderFirstProjectGuide();
+    showDraftRecovery();
 
     updateStudioHeaderBadges(space);
     renderFileTabs();
@@ -819,7 +904,7 @@ document.getElementById('addCustomFileBtn')?.addEventListener('click', () => {
     }
   }
   state.activeFile = cleanName;
-  state.isDirty = true;
+  recordDraftEdit();
   renderFileTabs();
   document.getElementById('codeEditorTextarea').value = state.workingFiles[cleanName];
   updateLiveStagingPreview();
@@ -858,7 +943,7 @@ async function handleImportedFileList(fileList) {
     return;
   }
   state.activeFile = lastImportedName;
-  state.isDirty = true;
+  recordDraftEdit();
   renderFileTabs();
   document.getElementById('codeEditorTextarea').value = state.workingFiles[state.activeFile] || '';
   document.getElementById('dirtyIndicator').textContent = `● Imported ${importedCount} file(s) (Unsaved)`;
@@ -920,7 +1005,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const proxyCode = `\n// --- SpaceHub Server-Side API Proxy Helper (replaces {{SECRET_NAME}} server-side) ---\nasync function callSpaceProxy(url, options = {}) {\n  const res = await fetch('/live/${slug}/proxy', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      url,\n      method: options.method || 'GET',\n      headers: options.headers || { Authorization: 'Bearer {{API_KEY}}' },\n      body: options.body || null\n    })\n  });\n  return res.json();\n}\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + proxyCode;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added callSpaceProxy() helper to script.js! Configure secrets in Settings.');
@@ -932,7 +1017,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const authCode = `\n// --- SpaceHub Built-in Member Login & Auth SDK (/live/${slug}/auth) ---\nasync function spaceMemberAuth(email, password, name = '') {\n  const res = await fetch('/live/${slug}/auth', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ email, password, name })\n  });\n  const data = await res.json();\n  if (data.token) localStorage.setItem('space_member_token', data.token);\n  return data;\n}\nasync function getCurrentSpaceMember() {\n  const tok = localStorage.getItem('space_member_token') || '';\n  if (!tok) return null;\n  const res = await fetch('/live/${slug}/auth/me', {\n    headers: { Authorization: 'Bearer ' + tok }\n  });\n  if (!res.ok) return null;\n  return (await res.json()).user;\n}\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + authCode;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added spaceMemberAuth() & getCurrentSpaceMember() SDK to script.js!');
@@ -944,7 +1029,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const aiCode = `\n// --- SpaceHub Built-in AI Assistant SDK (/live/${slug}/ai) ---\nasync function askSpaceAI(prompt, system = '') {\n  const res = await fetch('/live/${slug}/ai', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ prompt, system })\n  });\n  return (await res.json()).reply;\n}\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + aiCode;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added askSpaceAI(prompt) helper to script.js!');
@@ -956,7 +1041,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const roomCode = `\n// --- SpaceHub Real-Time Multiplayer & Live Chat Room SDK (/live/${slug}/room) ---\nasync function sendRoomEvent(sender, text, payload = {}) {\n  const res = await fetch('/live/${slug}/room', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ sender, text, payload })\n  });\n  return (await res.json()).events || [];\n}\nasync function getRoomEvents() {\n  const res = await fetch('/live/${slug}/room');\n  return (await res.json()).events || [];\n}\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + roomCode;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added sendRoomEvent() & getRoomEvents() SDK to script.js!');
@@ -968,7 +1053,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const currentJs = state.workingFiles['script.js'] || '';
     state.workingFiles['script.js'] = currentJs + assetsSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -981,7 +1066,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const currentJs = state.workingFiles['script.js'] || '';
     state.workingFiles['script.js'] = currentJs + searchSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -993,7 +1078,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const tableSdk = `\n// --- SpaceHub Structured Table DB SDK (/live/:slug/db/:table) ---\nfunction getSpaceTable(tableName = 'items') {\n  const base = '/live/${state.currentSpace.slug}/db/' + encodeURIComponent(tableName);\n  return {\n    async list(where = '', sort = '') {\n      const q = new URLSearchParams();\n      if (where) q.set('where', where);\n      if (sort) q.set('sort', sort);\n      const res = await fetch(base + (q.toString() ? '?' + q.toString() : ''));\n      const json = await res.json();\n      return json.rows || [];\n    },\n    async insert(row) {\n      const res = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row) });\n      return res.json();\n    },\n    async update(id, patch) {\n      const res = await fetch(base + '?id=' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });\n      return res.json();\n    },\n    async remove(id) {\n      const res = await fetch(base + '?id=' + encodeURIComponent(id), { method: 'DELETE' });\n      return res.json();\n    }\n  };\n}\nwindow.SpaceDB = { table: getSpaceTable };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + tableSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1005,7 +1090,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const ordersSdk = `\n// --- SpaceHub Storefront & Order Checkout SDK (/live/:slug/orders) ---\nasync function createSpaceOrder(items, buyerEmail = '') {\n  const res = await fetch('/live/${state.currentSpace.slug}/orders', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ items, buyerEmail })\n  });\n  return res.json();\n}\nasync function getSpaceOrder(id) {\n  const res = await fetch('/live/${state.currentSpace.slug}/orders?id=' + encodeURIComponent(id));\n  return res.json();\n}\n// Usage: const { order } = await SpaceOrders.create([{ name: 'Pro Plan', priceUsd: 10, qty: 1 }], 'buyer@example.com'); window.location = order.checkoutUrl;\nwindow.SpaceOrders = { create: createSpaceOrder, get: getSpaceOrder };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + ordersSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1021,7 +1106,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
       showToast('Created index.b.html (Variant B). Publish to split live traffic 50/50 — use ?variant=a|b to force.');
     }
     state.activeFile = 'index.b.html';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['index.b.html'];
     return;
@@ -1040,7 +1125,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
       );
     }
     state.activeFile = 'redirects.json';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['redirects.json'];
     showToast('Created redirects.json — single-segment paths like /pricing redirect after publish.');
@@ -1059,7 +1144,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const fnSdk = `\n// --- SpaceHub Serverless Edge Function SDK (/live/:slug/fn) ---\nasync function callSpaceFn(action = 'ping', payload = {}) {\n  const res = await fetch('/live/${state.currentSpace.slug}/fn?action=' + encodeURIComponent(action), {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ action, ...payload })\n  });\n  return res.json();\n}\nwindow.SpaceFn = { call: callSpaceFn };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + fnSdk;
     state.activeFile = 'routes.json';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['routes.json'];
     updateLiveStagingPreview();
@@ -1071,7 +1156,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const analyticsSdk = `\n// --- SpaceHub Custom Event & Funnel Analytics SDK (/live/:slug/events) ---\nasync function trackSpaceEvent(event, props = {}) {\n  const res = await fetch('/live/${state.currentSpace.slug}/events', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ event, props })\n  });\n  return res.json();\n}\nasync function getSpaceAnalytics() {\n  const res = await fetch('/live/${state.currentSpace.slug}/events');\n  return res.json();\n}\nwindow.SpaceAnalytics = { track: trackSpaceEvent, getSummary: getSpaceAnalytics };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + analyticsSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1083,7 +1168,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const notifySdk = `\n// --- SpaceHub Transactional Email & Notification SDK (/live/:slug/notify) ---\nasync function sendSpaceNotification(to, subject, message) {\n  const res = await fetch('/live/${state.currentSpace.slug}/notify', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ to, subject, message })\n  });\n  return res.json();\n}\nwindow.SpaceNotify = { send: sendSpaceNotification };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + notifySdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1104,7 +1189,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     }
     state.workingFiles['index.html'] = html;
     state.activeFile = 'index.html';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = html;
     updateLiveStagingPreview();
@@ -1125,7 +1210,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     html = `${tag}\n` + html;
   }
   state.workingFiles['index.html'] = html;
-  state.isDirty = true;
+  recordDraftEdit();
   if (state.activeFile === 'index.html') {
     document.getElementById('codeEditorTextarea').value = html;
   }
@@ -1152,7 +1237,7 @@ document.getElementById('themePresetSelect')?.addEventListener('change', (e) => 
   let currentCss = state.workingFiles['style.css'] || '';
   currentCss = currentCss.replace(/\/\* --- SpaceHub Theme Preset:[\s\S]*$/, '').trim();
   state.workingFiles['style.css'] = `${currentCss}\n\n${cssBlock}\n`;
-  state.isDirty = true;
+  recordDraftEdit();
   if (state.activeFile === 'style.css') {
     document.getElementById('codeEditorTextarea').value = state.workingFiles['style.css'];
   }
@@ -1165,7 +1250,7 @@ let previewDebounce;
 document.getElementById('codeEditorTextarea').addEventListener('input', (e) => {
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
   state.workingFiles[state.activeFile] = e.target.value;
-  state.isDirty = true;
+  recordDraftEdit();
   document.getElementById('dirtyIndicator').textContent = '● Unsaved edits (Live in staging check)';
   clearTimeout(previewDebounce);
   previewDebounce = setTimeout(updateLiveStagingPreview, 220);
@@ -1248,9 +1333,11 @@ document.getElementById('auditSpaceBtn')?.addEventListener('click', () => {
 });
 
 // Staging vs. Published Live Code Diff Viewer
-function openSpaceDiffViewer() {
+function openSpaceDiffViewer(forPublish = false, releaseFiles) {
   if (!state.currentSpace) return;
-  const draft = state.workingFiles || state.currentSpace.draftFiles || {};
+  const draft = releaseFiles || (forPublish
+    ? { ...state.currentSpace.draftFiles, ...state.workingFiles }
+    : state.workingFiles || state.currentSpace.draftFiles || {});
   const live = state.currentSpace.publishedFiles || {};
   const allFileNames = Array.from(new Set([...Object.keys(draft), ...Object.keys(live)]));
   const summaryEl = document.getElementById('spaceDiffSummaryText');
@@ -1303,7 +1390,7 @@ function openSpaceDiffViewer() {
   document.getElementById('spaceDiffDialog')?.showModal();
 }
 
-document.getElementById('diffSpaceBtn')?.addEventListener('click', openSpaceDiffViewer);
+document.getElementById('diffSpaceBtn')?.addEventListener('click', () => openSpaceDiffViewer());
 
 let visualEditEnabled = false;
 document.getElementById('visualEditSpaceBtn')?.addEventListener('click', () => {
@@ -1353,7 +1440,7 @@ document.getElementById('autoFixAuditBtn')?.addEventListener('click', () => {
   }
 
   state.workingFiles['index.html'] = html;
-  state.isDirty = true;
+  recordDraftEdit();
   if (state.activeFile === 'index.html') {
     document.getElementById('codeEditorTextarea').value = html;
   }
@@ -1482,14 +1569,21 @@ document.getElementById('saveDraftBtn').addEventListener('click', async () => {
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
   try {
     const { ownerUsername, slug } = state.currentSpace;
+    const key = recoveryKey();
+    const submitted = JSON.stringify(state.workingFiles);
     const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}`, {
       method: 'PUT',
-      body: JSON.stringify({ draftFiles: state.workingFiles })
+      body: '{"draftFiles":' + submitted + '}'
     });
+    if (recoveryKey() !== key || JSON.stringify(state.workingFiles) !== submitted) return;
+    clearRecovery(key);
+    recoveryPanel.hidden = true;
     state.currentSpace = data.space;
     state.isDirty = false;
     document.getElementById('dirtyIndicator').textContent = '✓ Staging draft saved';
     updateStudioHeaderBadges(data.space);
+    if (guidedProject?.slug === slug && guidedProject.owner === ownerUsername) guidedProject.saved = true;
+    renderFirstProjectGuide();
     showToast('Staging draft saved! Connect or buy hosting when ready to launch.');
   } catch (err) {
     showToast(err.message);
@@ -1659,9 +1753,415 @@ document.getElementById('copyEmbedSnippetBtn')?.addEventListener('click', async 
 });
 
 // Open "Ready to Launch: Connect or Buy Hosting" Dialog
+const deployForm = document.getElementById('deployHostingForm');
+const deployDialog = document.getElementById('deployHostingDialog');
+const publishStatus = document.getElementById('publishStatus');
+const verifyButton = document.getElementById('publishVerifyBtn');
+const restoreButton = document.getElementById('restoreReleaseBtn');
+const historySelect = document.getElementById('releaseHistorySelect');
+const historyPanel = document.getElementById('releaseHistoryPanel');
+let pendingVerification;
+
+const phoneButtons = [...document.querySelectorAll('.phone-workspace-controls [data-phone-pane]')];
+function selectPhonePane(pane) {
+  document.querySelector('.workspace-split').dataset.phonePane = pane;
+  phoneButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.phonePane === pane)));
+}
+phoneButtons.forEach((button) => button.addEventListener('click', () => selectPhonePane(button.dataset.phonePane)));
+document.getElementById('fileTabsList').addEventListener('click', (event) => {
+  if (event.target.closest('.file-tab')) selectPhonePane('editor');
+});
+document.getElementById('phoneSaveDraft').addEventListener('click', () => document.getElementById('saveDraftBtn').click());
+
+const domainResult = document.getElementById('domainCheckResult');
+document.getElementById('checkCustomDomain').addEventListener('click', async (event) => {
+  const domain = state.currentSpace?.customDomain;
+  if (!domain || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain)) return;
+  const report = (message) => {
+    if (state.currentSpace?.customDomain === domain) domainResult.textContent = message;
+  };
+  const button = event.currentTarget;
+  button.disabled = true;
+  report('Checking public DNS…');
+  try {
+    const query = new URL('https://cloudflare-dns.com/dns-query');
+    query.search = new URLSearchParams({ name: domain, type: 'CNAME' });
+    const response = await fetch(query, { headers: { Accept: 'application/dns-json' }, signal: AbortSignal.timeout(7000) });
+    if (!response.ok) throw Error('DNS lookup failed');
+    const dns = await response.json();
+    const target = dns.Answer?.find(({ type }) => type === 5)?.data?.replace(/\.$/, '').toLowerCase();
+    if (target !== 'spacehub.win') {
+      report(target ? 'CNAME points to ' + target + '. Check the expected target before retrying.' :
+        'No public CNAME found. Check the DNS record or whether your provider flattens it.');
+      return;
+    }
+    try {
+      await fetch('https://' + domain + '/', { mode: 'no-cors', credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(7000) });
+      report('DNS points to SpaceHub and HTTPS responded. Open your domain to confirm it serves this Space.');
+    } catch {
+      report('DNS points to SpaceHub. HTTPS could not be reached. Check certificate and hostname routing, then retry.');
+    }
+  } catch {
+    report('DNS lookup unavailable. Try again.');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function findPublishIssues(files) {
+  const findings = [];
+  const site = 'https://spacehub-preflight.invalid';
+  const paths = new Set(Object.keys(files).map((name) => new URL(name, site).pathname));
+  if (!paths.has('/index.html')) findings.push('Missing index.html.');
+  for (const [file, source] of Object.entries(files)) {
+    if (!/\.html?$/i.test(file) || typeof source !== 'string') continue;
+    const template = document.createElement('template');
+    template.innerHTML = source;
+    if (!template.content.querySelector('title')?.textContent.trim()) findings.push(file + ' is missing a page title.');
+    for (const element of template.content.querySelectorAll('a[href], img[src], script[src], link[rel="stylesheet"][href], source[src]')) {
+      const ref = (element.getAttribute('src') || element.getAttribute('href') || '').trim();
+      if (!ref || ref.startsWith('#')) continue;
+      let target;
+      try { target = new URL(ref, new URL(file, site)); } catch { continue; }
+      if (target.origin !== site) continue;
+      const path = target.pathname.endsWith('/') ? target.pathname + 'index.html' : target.pathname;
+      if (!paths.has(path)) findings.push(file + ' references missing ' + ref);
+    }
+  }
+  return [...new Set(findings)];
+}
+
+function renderPublishPreflight(files) {
+  const unique = findPublishIssues(files);
+  checklistPreflight = { space: state.currentSpace, files: JSON.stringify(files), count: unique.length };
+  renderLaunchChecklist(state.currentSpace);
+  document.getElementById('publishPreflightStatus').textContent = unique.length
+    ? 'Preflight found ' + unique.length + ' possible issue(s).' : 'Preflight found no missing titles or local files.';
+  const list = document.getElementById('publishPreflightFindings');
+  list.replaceChildren(...unique.slice(0, 20).map((issue) => {
+    const row = document.createElement('li');
+    row.textContent = issue;
+    return row;
+  }));
+}
+const draftReviewPanel = document.getElementById('draftReviewPanel');
+const draftReviewStatus = document.getElementById('draftReviewStatus');
+const draftReviewLinks = document.getElementById('draftReviewLinks');
+const launchChecklist = document.getElementById('launchChecklist');
+let checklistPreflight;
+let checklistFeedback;
+
+function renderLaunchChecklist(space) {
+  launchChecklist.hidden = !space?.isOwner;
+  if (launchChecklist.hidden) return;
+  const preflight = checklistPreflight;
+  const currentFiles = () => JSON.stringify({ ...space.draftFiles, ...state.workingFiles });
+  document.getElementById('checklistDraftStatus').textContent = state.isDirty ? 'Unsaved edits' : 'Saved';
+  document.getElementById('checklistPreflightStatus').textContent =
+    preflight?.space === space && preflight.files === currentFiles()
+      ? preflight.count ? preflight.count + ' possible issue(s)' : 'No issues found'
+      : 'Check current files';
+  document.getElementById('checklistFeedback').disabled = !space.isPrimaryOwner;
+  document.getElementById('checklistFeedbackStatus').textContent = !space.isPrimaryOwner
+    ? 'Space owner only'
+    : checklistFeedback?.space === space ? checklistFeedback.count + ' unresolved' : 'Check feedback';
+  document.getElementById('checklistLiveStatus').textContent = !space.publishedAt ? 'Awaiting first publish'
+    : space.releaseId && space.releaseId === verifiedReleaseId ? 'Verified in this session' : 'Check hosting status';
+}
+
+launchChecklist.addEventListener('toggle', () => {
+  if (launchChecklist.open) refreshChecklistFeedback(state.currentSpace);
+});
+
+async function refreshChecklistFeedback(space) {
+  if (!space?.isPrimaryOwner) return;
+  try {
+    const { reviews } = await apiFetch(releaseEndpoint(space).replace(/releases$/, 'draft-reviews'));
+    if (state.currentSpace === space) updateChecklistFeedback(space, reviews);
+  } catch {
+    if (state.currentSpace === space) document.getElementById('checklistFeedbackStatus').textContent = 'Could not load feedback';
+  }
+}
+
+function updateChecklistFeedback(space, reviews) {
+  const count = reviews.reduce((total, review) =>
+    total + (review.comments || []).filter((comment) => !comment.resolved).length, 0);
+  checklistFeedback = { space, count };
+  renderLaunchChecklist(space);
+}
+
+document.getElementById('checklistSave').addEventListener('click', () => {
+  if (state.isDirty) document.getElementById('saveDraftBtn').click();
+});
+document.getElementById('checklistPreflight').addEventListener('click', () => {
+  document.getElementById('launchSpaceBtn').click();
+});
+document.getElementById('checklistFeedback').addEventListener('click', () => {
+  draftReviewPanel.open = true;
+  draftReviewPanel.querySelector('summary').focus();
+});
+document.getElementById('checklistLive').addEventListener('click', () => {
+  const hosting = document.getElementById('studioHostingPanel');
+  hosting.open = true;
+  hosting.querySelector('summary').focus();
+  if (!hostingCheck.hidden) hostingCheck.click();
+});
+const createDraftReview = document.getElementById('createDraftReview');
+
+async function updateDraftReviews(method = 'GET', token, commentId) {
+  const space = state.currentSpace;
+  if (!space?.isPrimaryOwner) return;
+  const endpoint = releaseEndpoint(space).replace(/releases$/, 'draft-reviews');
+  createDraftReview.disabled = true;
+  draftReviewLinks.inert = true;
+  draftReviewStatus.textContent = '';
+  try {
+    if (method !== 'GET') {
+      await apiFetch(endpoint, { method, body: JSON.stringify({ token, commentId }) });
+    }
+    const { reviews } = await apiFetch(endpoint);
+    if (state.currentSpace !== space) return;
+    updateChecklistFeedback(space, reviews);
+    draftReviewLinks.replaceChildren(...reviews.map((review) => {
+      const row = document.createElement('li');
+      const link = document.createElement('input');
+      const feedbackUrl = review.url + '/feedback';
+      link.value = feedbackUrl;
+      link.readOnly = true;
+      link.setAttribute('aria-label', 'Draft review URL');
+      const expiry = document.createElement('span');
+      expiry.textContent = 'Expires ' + new Date(review.expiresAt).toLocaleString();
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.textContent = 'Copy link';
+      copy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(feedbackUrl);
+          draftReviewStatus.textContent = 'Review link copied.';
+        } catch {
+          link.select();
+          draftReviewStatus.textContent = 'Copy the selected URL.';
+        }
+      };
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.textContent = 'Revoke';
+      revoke.onclick = () => updateDraftReviews('DELETE', review.token);
+      row.append(link, expiry, copy, revoke);
+      const comments = document.createElement('ul');
+      for (const comment of (review.comments || []).filter((entry) => !entry.resolved)) {
+        const item = document.createElement('li');
+        const message = document.createElement('span');
+        message.textContent = comment.message + ' ';
+        const resolve = document.createElement('button');
+        resolve.type = 'button';
+        resolve.textContent = 'Resolve';
+        resolve.onclick = () => updateDraftReviews('PUT', review.token, comment.id);
+        item.append(message, resolve);
+        comments.append(item);
+      }
+      if (comments.childElementCount) row.append(comments);
+      return row;
+    }));
+    draftReviewStatus.textContent = method === 'POST' ? 'Review link created.' :
+      method === 'DELETE' ? 'Review link revoked.' : method === 'PUT' ? 'Comment resolved.' : reviews.length ? '' : 'No active review links.';
+  } catch (error) {
+    if (state.currentSpace === space) draftReviewStatus.textContent = error.message;
+  } finally {
+    createDraftReview.disabled = false;
+    draftReviewLinks.inert = false;
+  }
+}
+
+draftReviewPanel.addEventListener('toggle', () => {
+  if (draftReviewPanel.open) {
+    draftReviewLinks.replaceChildren();
+    updateDraftReviews();
+  }
+});
+createDraftReview.addEventListener('click', () => updateDraftReviews('POST'));
+const hostingCheck = document.getElementById('studioHostingCheck');
+const hostingStatus = document.getElementById('studioHostingStatus');
+let verifiedReleaseId;
+
+function renderStudioHosting(space) {
+  const panel = document.getElementById('studioHostingPanel');
+  panel.hidden = !space.isOwner;
+  if (panel.hidden) return;
+
+  const diagnostics = document.getElementById('domainDiagnostics');
+  diagnostics.hidden = !space.customDomain;
+  if (domainResult.dataset.domain !== space.customDomain) {
+    domainResult.textContent = '';
+    domainResult.dataset.domain = space.customDomain || '';
+  }
+  document.getElementById('domainInstructions').textContent = space.customDomain
+    ? 'Expected DNS record: CNAME ' + space.customDomain + ' → spacehub.win' : '';
+
+  const host = space.externalHost;
+  document.getElementById('studioHostingProvider').textContent = host?.providerLabel || 'No provider connected';
+  document.getElementById('studioHostingUrl').textContent = host?.liveUrl || 'Available after publishing';
+  document.getElementById('studioHostingRelease').textContent = space.publishedAt
+    ? new Date(space.publishedAt).toLocaleString() : 'Awaiting first publish';
+  document.getElementById('studioHostingVisibility').textContent = space.visibility === 'private' ? 'Private' : 'Public';
+  hostingCheck.hidden = !space.releaseId || !host?.liveUrl;
+  hostingStatus.textContent = space.maintenanceMode ? 'Maintenance mode is enabled.' :
+    space.releaseId && verifiedReleaseId === space.releaseId ? 'Live release verified.' :
+    host ? 'Ready for a live check.' : 'Publish this Space to make a release available.';
+}
+
+hostingCheck.addEventListener('click', async () => {
+  const space = state.currentSpace;
+  if (!space?.releaseId || !space.externalHost?.liveUrl) return;
+  hostingCheck.disabled = true;
+  try {
+    await verifyRelease({ liveUrl: space.externalHost.liveUrl, releaseId: space.releaseId }, hostingStatus);
+  } finally {
+    hostingCheck.disabled = false;
+  }
+});
+
+function releaseEndpoint(space) {
+  return '/api/spaces/' + encodeURIComponent(space.ownerUsername) + '/' +
+    encodeURIComponent(space.slug) + '/releases';
+}
+
+async function loadReleaseHistory(space) {
+  historyPanel.hidden = true;
+  if (!space.isPrimaryOwner) return;
+  try {
+    const { releases } = await apiFetch(releaseEndpoint(space));
+    if (state.currentSpace !== space || !deployDialog.open) return;
+    historySelect.replaceChildren(...releases.map(({ id, publishedAt }) =>
+      new Option(new Date(publishedAt).toLocaleString(), id)
+    ));
+    historyPanel.hidden = !releases.length;
+    restoreButton.disabled = space.externalHost?.liveUrl !==
+      new URL('/live/' + space.slug, location.origin).href;
+  } catch (error) {
+    publishStatus.textContent = error.message;
+  }
+}
+
+async function verifyRelease(release = pendingVerification, status = publishStatus) {
+  if (!release) return;
+  const { liveUrl, releaseId } = release;
+  const space = state.currentSpace;
+  let destination;
+  try { destination = new URL(liveUrl, location.origin); } catch {
+    status.textContent = 'The destination URL is invalid.';
+    return;
+  }
+  if (status === publishStatus) verifyButton.hidden = true;
+  if (destination.origin !== location.origin || !destination.pathname.startsWith('/live/') || !releaseId) {
+    status.textContent = 'Check the external site at its destination URL.';
+    return;
+  }
+  status.textContent = 'Checking the live release…';
+  try {
+    const response = await fetch(destination, {
+      cache: 'no-store',
+      redirect: 'error',
+      headers: state.token ? { Authorization: 'Bearer ' + state.token } : {}
+    });
+    if (!response.ok || response.headers.get('X-SpaceHub-Release') !== releaseId) {
+      throw Error('Live release differs');
+    }
+    if (state.currentSpace !== space) return;
+    verifiedReleaseId = releaseId;
+    renderLaunchChecklist(space);
+    status.textContent = 'Verified that SpaceHub serves this release.';
+    if (status === publishStatus) renderStudioHosting(space);
+  } catch {
+    if (state.currentSpace !== space) return;
+    status.textContent = 'The live check could not confirm this release. Try checking again.';
+    if (status === publishStatus) verifyButton.hidden = false;
+  }
+}
+
+document.getElementById('compareReleaseBtn').addEventListener('click', async () => {
+  const space = state.currentSpace;
+  const id = historySelect.value;
+  if (!space || !id) return;
+  try {
+    const { files } = await apiFetch(releaseEndpoint(space) + '?release=' + encodeURIComponent(id));
+    if (state.currentSpace === space && deployDialog.open && historySelect.value === id) openSpaceDiffViewer(false, files);
+  } catch (error) {
+    publishStatus.textContent = error.message;
+  }
+});
+verifyButton.addEventListener('click', () => verifyRelease());
+restoreButton.addEventListener('click', async () => {
+  const space = state.currentSpace;
+  if (!historySelect.value || !window.confirm('Restore these files to the live Space? Your draft will stay as it is.')) return;
+  restoreButton.disabled = true;
+  try {
+    pendingVerification = await apiFetch(releaseEndpoint(space), {
+      method: 'POST',
+      body: JSON.stringify({ releaseId: historySelect.value })
+    });
+    const { space: latest } = await apiFetch(releaseEndpoint(space).replace(/\/releases$/, ''));
+    state.currentSpace = latest;
+    updateStudioHeaderBadges(latest);
+    renderPublishReview();
+    await loadReleaseHistory(latest);
+    await verifyRelease();
+  } catch (error) {
+    publishStatus.textContent = error.message;
+  } finally {
+    restoreButton.disabled = false;
+  }
+});
+
+function getPublishOptions() {
+  return {
+    connectionId: document.getElementById('deployConnectionSelect').value,
+    provider: deployForm.querySelector('input[name="provider"]:checked')?.value || 'cloudflare_pages',
+    customLiveUrl: document.getElementById('deployCustomUrlInput').value.trim(),
+    webhookUrl: document.getElementById('deployWebhookUrlInput').value.trim()
+  };
+}
+
+function renderPublishReview() {
+  const space = state.currentSpace;
+  const options = getPublishOptions();
+  const connection = state.hostingConnections.find(({ id }) => id === options.connectionId);
+  const provider = connection?.provider || options.provider;
+  const draft = { ...space.draftFiles, ...state.workingFiles };
+  renderPublishPreflight(draft);
+  const live = space.publishedFiles || {};
+  const names = new Set([...Object.keys(draft), ...Object.keys(live)]);
+  const changes = [...names].filter((name) => draft[name] !== live[name]).length;
+  const suppliedUrl = options.customLiveUrl && (options.customLiveUrl.startsWith('http')
+    ? options.customLiveUrl : 'https://' + options.customLiveUrl);
+  const target = provider === 'github_pages'
+    ? (options.customLiveUrl || connection?.targetUrlOrProject || space.slug) + ' (GitHub target)'
+    : suppliedUrl || new URL('/live/' + encodeURIComponent(space.slug), location.origin).href;
+  const details = [
+    ['Destination', target],
+    ['Space visibility', space.visibility === 'public' ? 'Public' : 'Private'],
+    ['Draft', state.isDirty ? 'Includes unsaved edits' : 'Saved'],
+    ['Live version', space.publishedAt ? new Date(space.publishedAt).toLocaleString() : 'First publish'],
+    ['Files changed', String(changes)]
+  ];
+  const review = document.getElementById('publishReview');
+  review.replaceChildren(...details.flatMap(([label, value]) => {
+    const term = document.createElement('dt');
+    const description = document.createElement('dd');
+    term.textContent = label;
+    description.textContent = value;
+    return [term, description];
+  }));
+}
+
+deployForm.addEventListener('input', renderPublishReview);
+document.getElementById('publishDiffBtn').addEventListener('click', () => openSpaceDiffViewer(true));
+
 document.getElementById('launchSpaceBtn').addEventListener('click', async () => {
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const space = state.currentSpace;
   await loadHostingConnections();
+  if (state.currentSpace !== space || deployDialog.open) return;
 
   const select = document.getElementById('deployConnectionSelect');
   select.innerHTML =
@@ -1681,7 +2181,14 @@ document.getElementById('launchSpaceBtn').addEventListener('click', async () => 
 
   document.getElementById('deployCustomUrlInput').value =
     state.currentSpace.externalHost?.liveUrl || '';
-  document.getElementById('deployHostingDialog').showModal();
+  document.getElementById('publishError').hidden = true;
+  renderPublishReview();
+  publishStatus.textContent = '';
+  verifyButton.hidden = true;
+  pendingVerification = null;
+  deployDialog.showModal();
+  document.getElementById('publishReviewHeading').focus();
+  loadReleaseHistory(space);
 });
 
 document.getElementById('goToBuyHostingFromModalBtn')?.addEventListener('click', () => {
@@ -1697,33 +2204,35 @@ document.getElementById('deployHostingForm').addEventListener('submit', async (e
   e.preventDefault();
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
 
-  const form = e.currentTarget;
-  const connectionId = document.getElementById('deployConnectionSelect').value;
-  const provider = form.querySelector('input[name="provider"]:checked')?.value || 'vercel';
-  const customLiveUrl = document.getElementById('deployCustomUrlInput').value.trim();
-  const webhookUrl = document.getElementById('deployWebhookUrlInput').value.trim();
+  const confirmButton = document.getElementById('confirmDeployHostBtn');
+  if (confirmButton.disabled) return;
+  const error = document.getElementById('publishError');
+  error.hidden = true;
+  confirmButton.disabled = true;
+  publishStatus.textContent = 'Publishing…';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
     const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/deploy-external`, {
       method: 'POST',
       body: JSON.stringify({
-        connectionId,
-        provider,
-        customLiveUrl,
-        webhookUrl,
+        ...getPublishOptions(),
         draftFiles: state.workingFiles
       })
     });
     state.currentSpace = data.space;
     state.isDirty = false;
     document.getElementById('dirtyIndicator').textContent = `✓ Deployed to ${data.externalHost.providerLabel}`;
-    document.getElementById('deployHostingDialog').close();
     updateStudioHeaderBadges(data.space);
-    refreshStats();
-    showToast(`🚀 ${data.message}`);
+    renderPublishReview();
+    pendingVerification = { liveUrl: data.externalHost.liveUrl, releaseId: data.releaseId };
+    await loadReleaseHistory(data.space);
+    await verifyRelease();
   } catch (err) {
-    showToast(err.message);
+    error.textContent = err.message;
+    error.hidden = false;
+  } finally {
+    confirmButton.disabled = false;
   }
 });
 
@@ -1741,7 +2250,6 @@ document.getElementById('quickPrivacyToggleBtn').addEventListener('click', async
     document.getElementById('visPublic').checked = nextVis === 'public';
     document.getElementById('visPrivate').checked = nextVis === 'private';
     updateStudioHeaderBadges(data.space);
-    refreshStats();
     showToast(
       nextVis === 'private'
         ? '🔒 Space is now Private and hidden from everyone else.'
@@ -2941,14 +3449,50 @@ document.getElementById('searchInput').addEventListener('input', (e) => {
 });
 
 // Open Dialogs
-document.getElementById('newSpaceBtn').addEventListener('click', () => {
-  if (!state.user) {
-    showToast('Sign in or create an account to create your own Space.');
-    document.getElementById('signInDialog').showModal();
-    return;
-  }
-  document.getElementById('createSpaceDialog').showModal();
+let pendingSpaceTemplate = null;
+
+function resumeSpaceCreation() {
+  if (pendingSpaceTemplate === null || !state.user) return;
+  const dialog = document.getElementById('createSpaceDialog');
+  const template = document.getElementById('createSpaceForm').elements.namedItem('templateId');
+  if (pendingSpaceTemplate) template.value = pendingSpaceTemplate;
+  pendingSpaceTemplate = null;
+  dialog.showModal();
+}
+
+function startSpaceCreation(template = '', register = true) {
+  pendingSpaceTemplate = template;
+  if (state.user) resumeSpaceCreation();
+  else document.getElementById(register ? 'openSignUpBtn' : 'openSignInBtn').click();
+}
+
+function showWorkspaceDemo() {
+  const demo = document.getElementById('workspaceDemo');
+  demo.scrollIntoView({ block: 'nearest' });
+  demo.querySelector('[aria-pressed="true"]').focus({ preventScroll: true });
+}
+
+document.getElementById('newSpaceBtn').addEventListener('click', () => startSpaceCreation('', false));
+document.querySelectorAll('[data-create-space]').forEach((button) => {
+  button.addEventListener('click', () => startSpaceCreation(button.dataset.createSpace));
 });
+document.getElementById('tryWorkspaceDemo').addEventListener('click', showWorkspaceDemo);
+document.querySelectorAll('[data-demo-size]').forEach((button, _, buttons) => {
+  button.addEventListener('click', () => {
+    document.querySelector('.demo-preview').dataset.size = button.dataset.demoSize;
+    buttons.forEach((control) => control.setAttribute('aria-pressed', String(control === button)));
+  });
+});
+document.getElementById('hostingSignInBtn').addEventListener('click', () => {
+  document.getElementById('openSignInBtn').click();
+});
+for (const id of ['signInDialog', 'signUpDialog', 'socialAuthDialog']) {
+  document.getElementById(id).addEventListener('close', () => {
+    if (!document.querySelector('#signInDialog[open], #signUpDialog[open], #socialAuthDialog[open]')) {
+      pendingSpaceTemplate = null;
+    }
+  });
+}
 
 document.getElementById('openSignInBtn').addEventListener('click', () => {
   document.getElementById('signInServerError').hidden = true;
@@ -3109,6 +3653,7 @@ async function handleGoogleCredentialResponse(response) {
     loadSpacesList();
     loadAgentKeys();
     loadHostingConnections();
+    resumeSpaceCreation();
     showToast(`Signed in with verified Google account @${data.user.username}!`);
   } catch (err) {
     showToast(err.message || 'Google sign-in failed');
@@ -3219,6 +3764,7 @@ document.getElementById('socialAuthForm')?.addEventListener('submit', async (e) 
     loadSpacesList();
     loadAgentKeys();
     loadHostingConnections();
+    resumeSpaceCreation();
     const provLabels = { google: 'Google (Gmail)', github: 'GitHub', apple: 'Apple' };
     showToast(`Signed in with ${provLabels[provider] || provider} as @${data.user.username}!`);
   } catch (err) {
@@ -3257,6 +3803,7 @@ document.getElementById('signInForm').addEventListener('submit', async (e) => {
     loadSpacesList();
     loadAgentKeys();
     loadHostingConnections();
+    resumeSpaceCreation();
     showToast(`Welcome back, @${data.user.username}!`);
   } catch (err) {
     errBox.textContent = err.message;
@@ -3293,6 +3840,7 @@ document.getElementById('signUpForm').addEventListener('submit', async (e) => {
     loadSpacesList();
     loadAgentKeys();
     loadHostingConnections();
+    resumeSpaceCreation();
     showToast(`Account created! Welcome, @${data.user.username}.`);
   } catch (err) {
     errBox.textContent = err.message;
@@ -3660,7 +4208,8 @@ document.getElementById('createSpaceForm').addEventListener('submit', async (e) 
     });
     document.getElementById('createSpaceDialog').close();
     form.reset();
-    showToast('Space created in Staging! Check how your website looks, then buy or connect hosting to launch.');
+    guidedProject = { slug: data.space.slug, owner: data.space.ownerUsername, saved: false };
+    showToast('Workspace created.');
     openSpaceStudio(data.space.ownerUsername, data.space.slug);
   } catch (err) {
     showToast(err.message);

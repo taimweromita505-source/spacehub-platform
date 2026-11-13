@@ -801,7 +801,7 @@ const PROVIDER_LABELS = {
 };
 
 // Fallback in-memory store if KV is unavailable in local dev
-let memoryDb = {
+const emptyDb = {
   users: [],
   sessions: {},
   agentKeys: [],
@@ -1249,39 +1249,36 @@ async function generateAppWithGeminiOrSynthesizer(env, prompt, style = 'modern')
   return synthesizeAppFromPrompt(cleanPrompt, style);
 }
 
-const KV_KEY = 'spacehub_prod_state_v2';
+export const LEGACY_STATE_KEY = 'spacehub_prod_state_v2';
+let memoryDb = structuredClone(emptyDb);
 
 async function loadDb(env) {
-  if (env && env.SPACEHUB_KV) {
-    try {
-      const raw = await env.SPACEHUB_KV.get(KV_KEY, 'json');
-      if (raw && typeof raw === 'object') {
-        return {
-          users: Array.isArray(raw.users) ? raw.users : [],
-          sessions: raw.sessions || {},
-          agentKeys: Array.isArray(raw.agentKeys) ? raw.agentKeys : [],
-          hostingConnections: Array.isArray(raw.hostingConnections) ? raw.hostingConnections : [],
-          paypalOrders: Array.isArray(raw.paypalOrders) ? raw.paypalOrders : [],
-          paypalEvents: Array.isArray(raw.paypalEvents) ? raw.paypalEvents : [],
-          stripeOrders: Array.isArray(raw.stripeOrders) ? raw.stripeOrders : [],
-          stripeEvents: Array.isArray(raw.stripeEvents) ? raw.stripeEvents : [],
-          passwordResets: Array.isArray(raw.passwordResets) ? raw.passwordResets : [],
-          loginFailures: raw.loginFailures && typeof raw.loginFailures === 'object' ? raw.loginFailures : {},
-          spaces: Array.isArray(raw.spaces) ? raw.spaces : []
-        };
-      }
-    } catch (_e) {
-      // fallback
-    }
+  if (env?.spaceHubStorage || env?.SPACEHUB_KV) {
+    const raw = env.spaceHubStorage
+      ? await env.spaceHubStorage.load()
+      : await env.SPACEHUB_KV.get(LEGACY_STATE_KEY, 'json');
+    if (!raw) return structuredClone(emptyDb);
+    return {
+      users: Array.isArray(raw.users) ? raw.users : [],
+      sessions: raw.sessions || {},
+      agentKeys: Array.isArray(raw.agentKeys) ? raw.agentKeys : [],
+      hostingConnections: Array.isArray(raw.hostingConnections) ? raw.hostingConnections : [],
+      paypalOrders: Array.isArray(raw.paypalOrders) ? raw.paypalOrders : [],
+      paypalEvents: Array.isArray(raw.paypalEvents) ? raw.paypalEvents : [],
+      stripeOrders: Array.isArray(raw.stripeOrders) ? raw.stripeOrders : [],
+      stripeEvents: Array.isArray(raw.stripeEvents) ? raw.stripeEvents : [],
+      passwordResets: Array.isArray(raw.passwordResets) ? raw.passwordResets : [],
+      loginFailures: raw.loginFailures && typeof raw.loginFailures === 'object' ? raw.loginFailures : {},
+      spaces: Array.isArray(raw.spaces) ? raw.spaces : []
+    };
   }
   return memoryDb;
 }
 
 async function saveDb(env, db) {
-  memoryDb = db;
-  if (env && env.SPACEHUB_KV) {
-    await env.SPACEHUB_KV.put(KV_KEY, JSON.stringify(db));
-  }
+  if (env?.spaceHubStorage) await env.spaceHubStorage.save(db);
+  else if (env?.SPACEHUB_KV) await env.SPACEHUB_KV.put(LEGACY_STATE_KEY, JSON.stringify(db));
+  else memoryDb = db;
 }
 
 function randomHex(bytes = 16) {
@@ -1715,6 +1712,7 @@ function formatSpaceSummary(space, user) {
     createdAt: space.createdAt,
     updatedAt: space.updatedAt,
     publishedAt: space.publishedAt,
+    releaseId: isPrimaryOwner ? space.releaseId : undefined,
     isOwner,
     isPrimaryOwner,
     stagingPreviewUrl,
@@ -1722,6 +1720,16 @@ function formatSpaceSummary(space, user) {
     externalHost: space.externalHost || null,
     agentHistoryCount: (space.agentHistory || []).length
   };
+}
+
+function recordPreviousRelease(space) {
+  if (!space.publishedFiles || !space.publishedAt) return;
+  const history = [{
+    id: space.releaseId || crypto.randomUUID(),
+    publishedAt: space.publishedAt,
+    files: space.publishedFiles
+  }, ...(space.releaseHistory || [])];
+  space.releaseHistory = history.slice(0, 5);
 }
 
 function pushSpaceSnapshot(space, label = 'Previous version') {
@@ -2076,9 +2084,17 @@ const spaceHubWorker = {
     if (changed) await saveDb(env, db);
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, dispatch) {
     const wUrl = new URL(request.url);
     const wMethod = request.method.toUpperCase();
+    const pathname = wUrl.pathname;
+    const host = normalizeCustomDomain(request.headers.get('x-custom-host') || wUrl.hostname);
+    const customRoot = pathname === '/' && wMethod === 'GET' && host &&
+      !['spacehub.win', 'www.spacehub.win', 'localhost', '127.0.0.1'].includes(host) &&
+      !host.endsWith('.workers.dev');
+    const usesState = customRoot || pathname === '/sitemap.xml' ||
+      ['/api/', '/spaces/', '/live/', '/s/'].some((prefix) => pathname.startsWith(prefix));
+    const handle = dispatch && usesState ? dispatch : (r) => spaceHubWorker.handle(r, env);
     if (
       wMethod === 'POST' &&
       /^\/api\/auth\/(login|register|social|forgot|reset|change-password)$/.test(wUrl.pathname)
@@ -2109,12 +2125,12 @@ const spaceHubWorker = {
           'Access-Control-Allow-Origin': '*'
         });
       }
-      const res = await spaceHubWorker.handle(request, env);
+      const res = await handle(request);
       const out = new Response(res.body, res);
       Object.entries(rlHeaders).forEach(([k, v]) => out.headers.set(k, v));
       return out;
     }
-    return spaceHubWorker.handle(request, env);
+    return handle(request);
   },
 
   async handle(request, env) {
@@ -3026,6 +3042,47 @@ const spaceHubWorker = {
       });
     }
 
+    const reviewMatch = pathname.match(/^\/api\/draft-review\/([a-f0-9]{64})$/);
+    const feedbackMatch = pathname.match(/^\/api\/draft-review\/([a-f0-9]{64})\/feedback$/);
+    if (feedbackMatch && ['GET', 'POST'].includes(method)) {
+      const review = db.spaces.flatMap((space) => space.draftReviews || [])
+        .find((entry) => entry.token === feedbackMatch[1] && entry.expiresAt > Date.now());
+      const headers = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+        'X-Robots-Tag': 'noindex, nofollow',
+        'Content-Security-Policy': "default-src 'none'; frame-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" };
+      if (!review) return new Response('This draft review link is unavailable.', { status: 404, headers });
+      if (method === 'POST') {
+        const form = await request.formData().catch(() => null);
+        const message = String(form?.get('message') || '').trim();
+        if (!message || message.length > 1000) return new Response('Enter a comment of 1–1000 characters.', { status: 400, headers });
+        review.comments ||= [];
+        if (review.comments.length >= 25) return new Response('This review has reached its comment limit.', { status: 409, headers });
+        review.comments.push({ id: crypto.randomUUID(), message, createdAt: Date.now(), resolved: false });
+        await saveDb(env, db);
+        return new Response(null, { status: 303, headers: { ...headers, Location: pathname + '?sent=1' } });
+      }
+      return new Response('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceHub draft feedback</title><h1>Review this draft</h1>' +
+        '<iframe title="Draft snapshot" sandbox="allow-scripts" width="95%" height="480" src="/api/draft-review/' + feedbackMatch[1] + '"></iframe>' +
+        (url.searchParams.has('sent') ? '<p role="status">Comment submitted.</p>' : '') +
+        '<form method="post"><label for="message">Feedback for the Space owner</label><br><textarea id="message" name="message" maxlength="1000" required rows="5" cols="34"></textarea><br><button>Send feedback</button></form></html>',
+        { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' } });
+    }
+    if (reviewMatch && method === 'GET') {
+      const review = db.spaces.flatMap((space) => space.draftReviews || [])
+        .find((entry) => entry.token === reviewMatch[1] && entry.expiresAt > Date.now());
+      const headers = {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Referrer-Policy': 'no-referrer',
+        'X-Robots-Tag': 'noindex, nofollow',
+        'Content-Security-Policy': "sandbox allow-scripts; base-uri 'none'; form-action 'none'"
+      };
+      return new Response(review ? buildBundledHtml(review.files) : 'This draft review link is unavailable.', {
+        status: review ? 200 : 404,
+        headers
+      });
+    }
+
     // 1c. Short Clean Live URL Route (/live/:slug or /s/:slug) & Full Route (/spaces/:username/:slug/live)
     const shortLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/?$/i);
     const liveMatch = pathname.match(/^\/spaces\/([^/]+)\/([^/]+)\/live$/i);
@@ -3084,6 +3141,10 @@ const spaceHubWorker = {
       const targetFiles =
         hasAb && variant === 'b' ? { ...baseFiles, 'index.html': baseFiles['index.b.html'] } : baseFiles;
       const liveHeaders = { 'Content-Type': 'text/html; charset=utf-8' };
+      if (mode !== 'draft' && space.releaseId) {
+        liveHeaders['X-SpaceHub-Release'] = space.releaseId;
+        liveHeaders['Cache-Control'] = 'no-store';
+      }
       if (hasAb && mode !== 'draft') {
         liveHeaders['Set-Cookie'] = `sh_ab_${space.slug}=${variant}; Path=/; Max-Age=2592000; SameSite=Lax`;
       }
@@ -4880,6 +4941,79 @@ const spaceHubWorker = {
           });
         }
 
+        if (action === 'draft-reviews') {
+          if (!space || !user || user.id !== space.ownerId) {
+            return jsonResponse({ error: 'Only the Space owner can manage draft review links.' }, 403);
+          }
+          const now = Date.now();
+          const reviews = (space.draftReviews || []).filter((review) => review.expiresAt > now);
+          const summarize = ({ token, expiresAt, comments = [] }) => ({
+            token, expiresAt, comments, url: new URL('/api/draft-review/' + token, url.origin).href
+          });
+          if (method === 'GET') return jsonResponse({ reviews: reviews.map(summarize) }, 200, { 'Cache-Control': 'no-store' });
+          if (method === 'PUT') {
+            const review = reviews.find(({ token }) => token === body.token);
+            const comment = review?.comments?.find(({ id }) => id === body.commentId);
+            if (!comment) return jsonResponse({ error: 'Comment no longer available.' }, 404);
+            comment.resolved = true;
+            await saveDb(env, db);
+            return jsonResponse({ resolved: true });
+          }
+          if (method === 'POST') {
+            if (reviews.length >= 3) return jsonResponse({ error: 'Revoke an existing link before creating another.' }, 409);
+            const review = {
+              token: randomHex(32),
+              expiresAt: now + 24 * 60 * 60 * 1000,
+              files: structuredClone(space.draftFiles || {})
+            };
+            space.draftReviews = [...reviews, review];
+            await saveDb(env, db);
+            return jsonResponse(summarize(review), 201, { 'Cache-Control': 'no-store' });
+          }
+          if (method === 'DELETE') {
+            const { token } = (await request.json().catch(() => null)) || {};
+            if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+              return jsonResponse({ error: 'A valid review token is required.' }, 400);
+            }
+            space.draftReviews = reviews.filter((review) => review.token !== token);
+            await saveDb(env, db);
+            return jsonResponse({ revoked: true });
+          }
+        }
+
+        if (action === 'releases' && (method === 'GET' || method === 'POST')) {
+          if (!space || !user || user.id !== space.ownerId) {
+            return jsonResponse({ error: 'Release history is available to the Space owner.' }, 403);
+          }
+          const history = space.releaseHistory || [];
+          if (method === 'GET') {
+            const selected = url.searchParams.get('release');
+            if (selected) {
+              const release = history.find(({ id }) => id === selected);
+              if (!release) return jsonResponse({ error: 'Release no longer available.' }, 404);
+              return jsonResponse({ files: release.files }, 200, { 'Cache-Control': 'no-store' });
+            }
+            return jsonResponse({
+              current: space.releaseId || null,
+              releases: history.map(({ id, publishedAt }) => ({ id, publishedAt }))
+            });
+          }
+          const release = history.find(({ id }) => id === body.releaseId);
+          const liveUrl = new URL('/live/' + space.slug, url.origin).href;
+          if (!release || space.externalHost?.liveUrl !== liveUrl || spaceHostingLapse(db, space.slug)) {
+            return jsonResponse({ error: 'Restore requires an available SpaceHub hosted release.' }, 409);
+          }
+          recordPreviousRelease(space);
+          space.publishedFiles = release.files;
+          space.releaseId = crypto.randomUUID();
+          space.publishedAt = space.updatedAt = new Date().toISOString();
+          space.externalHost.lastDeployedAt = space.publishedAt;
+          const names = new Set([...Object.keys(space.draftFiles || {}), ...Object.keys(release.files)]);
+          space.hasUnpublishedChanges = [...names].some((name) => space.draftFiles?.[name] !== release.files[name]);
+          await saveDb(env, db);
+          return jsonResponse({ releaseId: space.releaseId, liveUrl });
+        }
+
         if ((action === 'deploy-external' || action === 'publish') && method === 'POST') {
           if (!user || !space || space.ownerId !== user.id) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
@@ -4942,6 +5076,8 @@ const spaceHubWorker = {
           }
 
           const now = new Date().toISOString();
+          recordPreviousRelease(space);
+          space.releaseId = crypto.randomUUID();
           space.externalHost = {
             provider,
             providerLabel,
@@ -4957,6 +5093,7 @@ const spaceHubWorker = {
           space.hasUnpublishedChanges = false;
           await saveDb(env, db);
           return jsonResponse({
+            releaseId: space.releaseId,
             message: `${deployNote} → ${liveUrl}`,
             externalHost: space.externalHost,
             space: {

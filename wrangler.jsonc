@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "spacehub-platform",
-  "main": "worker.js",
+  "main": "worker-state.js",
   "compatibility_date": "2026-11-10",
   "workers_dev": true,
   "observability": {
@@ -30,6 +30,17 @@
   "assets": {
     "directory": "public",
     "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "SPACEHUB_STATE", "class_name": "SpaceHubState" }]
+  },
+  "migrations": [{ "tag": "spacehub-state-v1", "new_sqlite_classes": ["SpaceHubState"] }],
+  "previews": {
+    "vars": { "PAYPAL_MODE": "sandbox" },
+    "kv_namespaces": [],
+    "durable_objects": {
+      "bindings": [{ "name": "SPACEHUB_STATE", "class_name": "SpaceHubState" }]
+    }
   },
   "kv_namespaces": [
     {

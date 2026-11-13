@@ -7,7 +7,8 @@
     "start": "node server.js",
     "test": "node test.js && node test-paypal.mjs && node test-wave10.mjs && node test-wave11.mjs",
     "deploy": "wrangler deploy",
-    "preview": "wrangler dev"
+    "preview": "wrangler dev",
+    "test:worker": "node test-worker.mjs"
   },
   "dependencies": {
     "@google/genai": "^3.3.0",

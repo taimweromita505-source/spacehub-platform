@@ -96,7 +96,7 @@
       </div>
 
       <div class="user-bar">
-        <button type="button" class="btn btn-ghost btn-sm" id="openCommandPaletteBtn" title="Quick Command Palette (Ctrl+K / ⌘K)">
+        <button type="button" class="btn btn-ghost btn-sm" id="openCommandPaletteBtn" aria-label="Quick Command Palette" title="Quick Command Palette (Ctrl+K / ⌘K)">
           ⌘K
         </button>
         <button type="button" class="btn btn-outline btn-sm" id="installSpaceHubBtn">
@@ -126,28 +126,56 @@
   <main class="container" id="mainContent">
     <!-- VIEW 1: HUB EXPLORER -->
     <section id="hubView">
-      <div class="hero-banner">
-        <div class="hero-text">
-          <div class="hero-pills">
-            <span class="hero-pill">Free Private Staging</span>
-            <span class="hero-pill">Bring Your Own Coding Agent</span>
-            <span class="hero-pill">$1 / month per Space</span>
+      <div id="hubIntroduction">
+        <section class="workspace-hero" aria-labelledby="workspaceHeadline">
+          <div class="workspace-hero-copy">
+            <h1 id="workspaceHeadline">Build in private.<br />Launch with confidence.</h1>
+            <p>Stage a web app, check it on any screen, and publish when you're ready. Private staging is free.</p>
+            <div class="workspace-actions">
+              <button type="button" class="btn btn-primary" data-create-space>Create a free Space</button>
+              <button type="button" class="btn btn-outline" id="tryWorkspaceDemo">Try a demo</button>
+            </div>
           </div>
-          <h1>Stage, preview, and host modern web apps.</h1>
-          <p>
-            Build and verify your website in a private workspace with live Desktop, Tablet, and Mobile previews before going live. Host any Space on our global edge for <strong>$1/month</strong> or connect your own cloud provider.
-          </p>
-        </div>
-        <div class="hero-stats">
-          <div class="stat-card">
-            <span class="stat-val" id="statPublicCount">0</span>
-            <span class="stat-label">Published Spaces</span>
+          <div class="workspace-demo" id="workspaceDemo">
+            <div class="demo-title"><strong>Workspace preview</strong><span>Private draft</span></div>
+            <div class="demo-devices" role="group" aria-label="Preview size">
+              <button type="button" aria-pressed="true" data-demo-size="desktop">Desktop</button>
+              <button type="button" aria-pressed="false" data-demo-size="tablet">Tablet</button>
+              <button type="button" aria-pressed="false" data-demo-size="mobile">Mobile</button>
+            </div>
+            <div class="demo-workbench">
+              <div class="demo-source">
+                <strong>Files</strong>
+                <div>index.html</div><div>style.css</div><div>script.js</div>
+                <pre><code>&lt;main&gt;
+  &lt;h1&gt;Acme Studio&lt;/h1&gt;
+  &lt;p&gt;Make room for ideas.&lt;/p&gt;
+&lt;/main&gt;</code></pre>
+              </div>
+              <div class="demo-preview" data-size="desktop">
+                <div class="demo-preview-page">
+                  <strong>Acme Studio</strong>
+                  <p>Make room for ideas.</p>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="stat-card">
-            <span class="stat-val" id="statMyCount">0</span>
-            <span class="stat-label">Your Spaces</span>
+        </section>
+        <section class="workspace-starters" aria-labelledby="starterHeading">
+          <h2 id="starterHeading">Start from a template</h2>
+          <div class="starter-grid">
+            <article class="starter-card">
+              <div class="starter-thumbnail starter-landing" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div><h3>SaaS landing page</h3><p>Introduce a product and preview your launch page.</p></div>
+              <button type="button" class="btn btn-outline btn-sm" data-create-space="landing">Use landing template</button>
+            </article>
+            <article class="starter-card">
+              <div class="starter-thumbnail starter-dashboard" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+              <div><h3>Analytics dashboard</h3><p>Start with a responsive dashboard and sample metrics.</p></div>
+              <button type="button" class="btn btn-outline btn-sm" data-create-space="dashboard">Use dashboard template</button>
+            </article>
           </div>
-        </div>
+        </section>
       </div>
 
       <div class="toolbar-row">
@@ -221,7 +249,6 @@
       <div class="arch-panel">
         <div class="panel-head">
           <div>
-            <span class="eyebrow">SIMPLE PER-SPACE PRICING</span>
             <h2>$1 / month or $12 / year per Space</h2>
             <p class="arch-lead">
               Staging and testing your applications in a private workspace is always free. When a Space is ready for production, activate a dedicated hosting slot or connect an external deployment target.
@@ -232,7 +259,7 @@
         <div class="subsection">
           <div class="subsection-head">
             <h3>Managed Edge Hosting</h3>
-            <div class="domain-inline-field">
+            <div class="domain-inline-field" data-hosting-account hidden>
               <label for="purchaseCustomDomainInput" class="visually-hidden">Custom Domain</label>
               <input
                 type="text"
@@ -247,7 +274,8 @@
           <div id="hostingPlansGrid" class="pricing-grid"></div>
         </div>
 
-        <div class="agent-hub-grid" style="margin-block-start: 2.25rem;">
+        <p id="hostingGuestNote" class="arch-lead">Bring your own provider to deploy a Space from your workspace. <button type="button" class="btn-link" id="hostingSignInBtn">Sign in to manage hosting</button></p>
+        <div class="agent-hub-grid" data-hosting-account hidden style="margin-block-start: 2.25rem;">
           <div class="arch-card">
             <h3>Connect External Provider</h3>
             <p style="margin-block-end: 1.25rem;">
@@ -516,6 +544,40 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         </div>
       </div>
 
+      <details class="arch-card studio-hosting" id="launchChecklist" hidden>
+        <summary>Launch checklist</summary>
+        <ul class="launch-checklist">
+          <li><button type="button" class="btn-link" id="checklistSave">Draft saved</button><span id="checklistDraftStatus"></span></li>
+          <li><button type="button" class="btn-link" id="checklistPreflight">Preflight</button><span id="checklistPreflightStatus"></span></li>
+          <li><button type="button" class="btn-link" id="checklistFeedback">Draft feedback</button><span id="checklistFeedbackStatus"></span></li>
+          <li><button type="button" class="btn-link" id="checklistLive">Live release</button><span id="checklistLiveStatus"></span></li>
+        </ul>
+      </details>
+      <details class="arch-card studio-hosting" id="studioHostingPanel" hidden>
+        <summary>Hosting status</summary>
+        <dl class="publish-review">
+          <dt>Provider</dt><dd id="studioHostingProvider"></dd>
+          <dt>Live URL</dt><dd id="studioHostingUrl"></dd>
+          <dt>Last release</dt><dd id="studioHostingRelease"></dd>
+          <dt>Visibility</dt><dd id="studioHostingVisibility"></dd>
+        </dl>
+        <div id="domainDiagnostics" hidden>
+          <p id="domainInstructions"></p>
+          <button type="button" class="btn btn-outline btn-xs" id="checkCustomDomain">Check DNS and HTTPS</button>
+          <p id="domainCheckResult" role="status"></p>
+        </div>
+        <p id="studioHostingStatus" role="status"></p>
+        <button type="button" class="btn btn-outline btn-xs" id="studioHostingCheck" hidden>Check live release</button>
+      </details>
+
+      <details class="arch-card studio-hosting" id="draftReviewPanel" hidden>
+        <summary>Draft review links</summary>
+        <p>Share a copy of your saved draft. Anyone with the link can open it for 24 hours.</p>
+        <button type="button" class="btn btn-outline btn-xs" id="createDraftReview">Create review link</button>
+        <ul id="draftReviewLinks"></ul>
+        <p id="draftReviewStatus" role="status"></p>
+      </details>
+
       <!-- TAB PANEL 1: WORKSPACE & LIVE PREVIEW -->
       <div id="panelWorkspace" class="studio-panel">
         <div id="studioAgentBar" class="agent-studio-bar">
@@ -554,7 +616,15 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           </form>
         </div>
 
-        <div class="workspace-split">
+        <div class="phone-workspace-controls" aria-label="Workspace view">
+          <div role="group" aria-label="Workspace panes">
+            <button type="button" class="btn btn-outline btn-xs" data-phone-pane="files" aria-pressed="false">Files</button>
+            <button type="button" class="btn btn-outline btn-xs" data-phone-pane="editor" aria-pressed="true">Editor</button>
+            <button type="button" class="btn btn-outline btn-xs" data-phone-pane="preview" aria-pressed="false">Preview</button>
+          </div>
+          <button type="button" class="btn btn-primary btn-xs" id="phoneSaveDraft" hidden>Save draft</button>
+        </div>
+        <div class="workspace-split" data-phone-pane="editor">
           <!-- Left: Code Editor -->
           <div class="editor-pane" id="editorPane">
             <div class="file-tabs-bar">
@@ -624,6 +694,17 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 </button>
               </div>
             </div>
+            <aside id="draftRecovery" class="field" hidden>
+              <p id="draftRecoveryMessage"></p>
+              <div class="workspace-actions">
+                <button type="button" class="btn btn-outline btn-xs" id="restoreLocalDraft">Restore browser copy</button>
+                <button type="button" class="btn btn-ghost btn-xs" id="discardLocalDraft">Discard browser copy</button>
+              </div>
+            </aside>
+            <aside id="firstProjectGuide" class="field" hidden aria-label="First project">
+              <p id="firstProjectStep" role="status"></p>
+              <button type="button" class="btn btn-outline btn-xs" id="firstProjectAction"></button>
+            </aside>
             <label for="codeEditorTextarea" class="visually-hidden">Source Code Editor</label>
             <textarea
               id="codeEditorTextarea"
@@ -1687,6 +1768,22 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         />
       </div>
 
+      <section class="field" aria-labelledby="publishReviewHeading">
+        <h3 id="publishReviewHeading" tabindex="-1">Review before publishing</h3>
+        <p id="publishPreflightStatus" role="status"></p>
+        <ul id="publishPreflightFindings"></ul>
+        <dl id="publishReview" class="publish-review" aria-live="polite"></dl>
+        <button type="button" class="btn btn-outline btn-xs" id="publishDiffBtn">Compare files</button>
+        <button type="button" class="btn btn-outline btn-xs" id="publishVerifyBtn" hidden>Check live release again</button>
+        <p id="publishStatus" role="status"></p>
+        <div class="field" id="releaseHistoryPanel" hidden>
+          <label for="releaseHistorySelect">Previous live releases</label>
+          <select id="releaseHistorySelect" class="select-control"></select>
+          <button type="button" class="btn btn-outline btn-xs" id="compareReleaseBtn">Compare selected release</button>
+          <button type="button" class="btn btn-outline btn-xs" id="restoreReleaseBtn">Restore selected release</button>
+        </div>
+        <p id="publishError" role="alert" hidden></p>
+      </section>
       <div class="dialog-footer" style="justify-content: space-between; flex-wrap: wrap;">
         <button type="button" class="btn btn-outline btn-sm" id="goToBuyHostingFromModalBtn">
           Buy Space Slot ($1/mo · $12/yr)
@@ -1694,7 +1791,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         <div style="display: flex; gap: 0.5rem;">
           <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="deployHostingDialog">Cancel</button>
           <button type="submit" class="btn btn-primary btn-sm" id="confirmDeployHostBtn">
-            Deploy Now
+            Publish Space
           </button>
         </div>
       </div>
