@@ -233,7 +233,7 @@ function bundleClientPreview(files, includeConsoleBridge = true) {
   });
 
   if (includeConsoleBridge) {
-    const bridgeScript = `<script>(function(){function s(l,a){try{var m=Array.prototype.slice.call(a).map(function(x){return typeof x==='object'?JSON.stringify(x):String(x)}).join(' ');window.parent.postMessage({type:'sh_console',level:l,message:m},'*');}catch(_e){}}['log','warn','error'].forEach(function(k){var o=console[k];console[k]=function(){s(k,arguments);if(o)o.apply(console,arguments);};});window.addEventListener('error',function(e){s('error',[e.message||'Runtime error']);});window.addEventListener('unhandledrejection',function(e){s('error',['Unhandled Promise Rejection: '+(e.reason&&e.reason.message||e.reason)]);});})();</script>`;
+    const bridgeScript = `<script>(function(){function s(l,a){try{var m=Array.prototype.slice.call(a).map(function(x){return typeof x==='object'?JSON.stringify(x):String(x)}).join(' ');window.parent.postMessage({type:'sh_console',level:l,message:m},'*');}catch(_e){}}['log','warn','error'].forEach(function(k){var o=console[k];console[k]=function(){s(k,arguments);if(o)o.apply(console,arguments);};});window.addEventListener('error',function(e){s('error',[e.message||'Runtime error']);});window.addEventListener('unhandledrejection',function(e){s('error',['Unhandled Promise Rejection: '+(e.reason&&e.reason.message||e.reason)]);});window.addEventListener('message',function(ev){if(!ev.data||ev.data.type!=='sh_toggle_visual_edit')return;var on=Boolean(ev.data.enabled);document.querySelectorAll('h1,h2,h3,h4,p,button,a,li,span').forEach(function(el){if(el.children.length>0&&el.tagName!=='P'&&el.tagName!=='H1'&&el.tagName!=='H2')return;el.contentEditable=on?'true':'false';el.style.outline=on?'1px dashed rgba(129,140,248,0.55)':'';if(on&&!el._shBound){el._shBound=true;el.addEventListener('focus',function(){el._oldTxt=el.textContent;});el.addEventListener('blur',function(){if(el._oldTxt&&el.textContent!==el._oldTxt){window.parent.postMessage({type:'sh_visual_edit',oldText:el._oldTxt,newText:el.textContent},'*');el._oldTxt=el.textContent;}});}});});})();</script>`;
     if (html.includes('<head>')) {
       html = html.replace('<head>', `<head>\n  ${bridgeScript}`);
     } else {
@@ -494,7 +494,22 @@ function renderStudioConsole() {
 
 window.addEventListener('message', (event) => {
   const data = event.data;
-  if (!data || data.type !== 'sh_console') return;
+  if (!data) return;
+  if (data.type === 'sh_visual_edit' && state.currentSpace?.isOwner) {
+    const oldText = String(data.oldText || '');
+    const newText = String(data.newText || '');
+    if (oldText && newText && state.workingFiles['index.html']?.includes(oldText)) {
+      state.workingFiles['index.html'] = state.workingFiles['index.html'].replace(oldText, newText);
+      state.isDirty = true;
+      document.getElementById('dirtyIndicator').textContent = '● Unsaved visual text edit';
+      if (state.activeFile === 'index.html') {
+        document.getElementById('codeEditorTextarea').value = state.workingFiles['index.html'];
+      }
+      showToast('Synced inline text edit to index.html!');
+    }
+    return;
+  }
+  if (data.type !== 'sh_console') return;
   const level = ['log', 'warn', 'error'].includes(data.level) ? data.level : 'log';
   const message = String(data.message ?? '').slice(0, 500);
   studioConsoleEntries.push({ level, message });
@@ -957,6 +972,50 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'edge_fn') {
+    state.workingFiles['routes.json'] = JSON.stringify(
+      {
+        ping: { status: 'online', version: '1.0.0' },
+        pricing: { monthlyUsd: 1, yearlyUsd: 12 }
+      },
+      null,
+      2
+    );
+    const fnSdk = `\n// --- SpaceHub Serverless Edge Function SDK (/live/:slug/fn) ---\nasync function callSpaceFn(action = 'ping', payload = {}) {\n  const res = await fetch('/live/${state.currentSpace.slug}/fn?action=' + encodeURIComponent(action), {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ action, ...payload })\n  });\n  return res.json();\n}\nwindow.SpaceFn = { call: callSpaceFn };\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + fnSdk;
+    state.activeFile = 'routes.json';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['routes.json'];
+    updateLiveStagingPreview();
+    showToast('Created routes.json & added SpaceFn.call(action, payload) SDK!');
+    return;
+  }
+
+  if (stack === 'space_analytics') {
+    const analyticsSdk = `\n// --- SpaceHub Custom Event & Funnel Analytics SDK (/live/:slug/events) ---\nasync function trackSpaceEvent(event, props = {}) {\n  const res = await fetch('/live/${state.currentSpace.slug}/events', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ event, props })\n  });\n  return res.json();\n}\nasync function getSpaceAnalytics() {\n  const res = await fetch('/live/${state.currentSpace.slug}/events');\n  return res.json();\n}\nwindow.SpaceAnalytics = { track: trackSpaceEvent, getSummary: getSpaceAnalytics };\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + analyticsSdk;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    updateLiveStagingPreview();
+    showToast('Added SpaceAnalytics.track(event, props) SDK to script.js!');
+    return;
+  }
+
+  if (stack === 'space_notify') {
+    const notifySdk = `\n// --- SpaceHub Transactional Email & Notification SDK (/live/:slug/notify) ---\nasync function sendSpaceNotification(to, subject, message) {\n  const res = await fetch('/live/${state.currentSpace.slug}/notify', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ to, subject, message })\n  });\n  return res.json();\n}\nwindow.SpaceNotify = { send: sendSpaceNotification };\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + notifySdk;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    updateLiveStagingPreview();
+    showToast('Added SpaceNotify.send(to, subject, message) SDK to script.js!');
+    return;
+  }
+
   if (stack === 'creator_checkout') {
     const recipient = encodeURIComponent(state.user?.email || 'romitat924@gmail.com');
     const itemName = encodeURIComponent(`${state.currentSpace.title} — Creator Pass`);
@@ -1170,6 +1229,26 @@ function openSpaceDiffViewer() {
 }
 
 document.getElementById('diffSpaceBtn')?.addEventListener('click', openSpaceDiffViewer);
+
+let visualEditEnabled = false;
+document.getElementById('visualEditSpaceBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  visualEditEnabled = !visualEditEnabled;
+  const btn = document.getElementById('visualEditSpaceBtn');
+  if (btn) {
+    btn.textContent = visualEditEnabled ? '✓ Visual Edit On' : 'Visual Edit';
+  }
+  const iframe = document.getElementById('workspacePreviewFrame');
+  iframe?.contentWindow?.postMessage(
+    { type: 'sh_toggle_visual_edit', enabled: visualEditEnabled },
+    '*'
+  );
+  showToast(
+    visualEditEnabled
+      ? 'Visual Edit enabled — click any heading or text in the preview to edit inline!'
+      : 'Visual Edit disabled.'
+  );
+});
 
 document.getElementById('autoFixAuditBtn')?.addEventListener('click', () => {
   if (!state.currentSpace || !state.currentSpace.isOwner) return;

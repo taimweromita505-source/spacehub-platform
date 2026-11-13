@@ -921,6 +921,8 @@ function formatSpaceSummary(space, user) {
     views: space.views || 0,
     installs: space.installs || 0,
     assetCount: Object.keys(assetsObj).length,
+    eventCounts: space.eventCounts || {},
+    notificationCount: (space.notifications || []).length,
     appUserCount: (space.appUsers || []).length,
     roomEventCount: (space.roomEvents || []).length,
     submissionCount: (space.submissions || []).length,
@@ -2951,6 +2953,26 @@ self.addEventListener('fetch', (event) => {
 `;
 }
 
+function buildSpaceConfig(space, files = {}) {
+  let fileCfg = {};
+  if (files && files['config.json']) {
+    try {
+      fileCfg = JSON.parse(files['config.json']);
+    } catch (_e) {
+      fileCfg = {};
+    }
+  }
+  return {
+    slug: space?.slug || '',
+    title: space?.title || '',
+    flags: {
+      ...(fileCfg.flags && typeof fileCfg.flags === 'object' ? fileCfg.flags : {}),
+      ...(space?.featureFlags && typeof space.featureFlags === 'object' ? space.featureFlags : {})
+    },
+    ...fileCfg
+  };
+}
+
 function buildBundledHtml(files, space = null) {
   let html = files['index.html'] || '<!DOCTYPE html><html><body><h1>Empty Space</h1></body></html>';
   const css = files['style.css'] || '';
@@ -2999,9 +3021,10 @@ function buildBundledHtml(files, space = null) {
   if (space) {
     const safeTitle = String(space.title || space.slug).replace(/["<>]/g, '');
     const safeDesc = String(space.description || `${safeTitle} — Hosted on SpaceHub`).replace(/["<>]/g, '');
-    const ogMeta = !html.includes('property="og:title"')
+    const spaceConfigScript = `\n  <script>window.SPACE_CONFIG = ${JSON.stringify(buildSpaceConfig(space, files))};</script>`;
+    const ogMeta = (!html.includes('property="og:title"')
       ? `\n  <meta property="og:type" content="website" />\n  <meta property="og:title" content="${safeTitle}" />\n  <meta property="og:description" content="${safeDesc}" />\n  <meta property="og:image" content="/live/${space.slug}/icon.svg" />\n  <meta name="twitter:card" content="summary" />\n  <meta name="twitter:title" content="${safeTitle}" />\n  <meta name="twitter:description" content="${safeDesc}" />`
-      : '';
+      : '') + spaceConfigScript;
     const pwaHead =
       appPlatform !== 'web_only'
         ? `${ogMeta}
@@ -3556,6 +3579,174 @@ app.get(['/live/:slug/sitemap.xml', '/s/:slug/sitemap.xml'], (req, res) => {
     .join('\n');
   res.setHeader('Content-Type', 'application/xml; charset=utf-8');
   res.send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urlEntries}\n</urlset>`);
+});
+
+// Wave 7: Runtime Feature Flags & Public App Config (/live/:slug/config.json)
+app.get(['/live/:slug/config.json', '/s/:slug/config.json'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const files = space.publishedFiles || space.draftFiles || {};
+  res.json({ ok: true, config: buildSpaceConfig(space, files) });
+});
+
+app.post(['/live/:slug/config.json', '/s/:slug/config.json'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const payload = req.body || {};
+  space.featureFlags = {
+    ...(space.featureFlags && typeof space.featureFlags === 'object' ? space.featureFlags : {}),
+    ...(payload.flags && typeof payload.flags === 'object' ? payload.flags : payload)
+  };
+  saveDb(db);
+  const files = space.publishedFiles || space.draftFiles || {};
+  res.json({ ok: true, config: buildSpaceConfig(space, files) });
+});
+
+// Wave 7: Serverless Edge Functions (/live/:slug/fn)
+app.all(['/live/:slug/fn', '/s/:slug/fn'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const files = space.publishedFiles || space.draftFiles || {};
+  const payload = req.body || {};
+  const action = String(req.query.action || payload.action || 'ping').trim();
+  space.appStorage = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+  if (payload.setStorage && typeof payload.setStorage === 'object') {
+    space.appStorage = { ...space.appStorage, ...payload.setStorage };
+    saveDb(db);
+  }
+  let customRouteOutput = null;
+  if (files['routes.json']) {
+    try {
+      const parsedRoutes = JSON.parse(files['routes.json']);
+      if (parsedRoutes && parsedRoutes[action] !== undefined) {
+        customRouteOutput = parsedRoutes[action];
+      }
+    } catch (_e) {
+      // ignore
+    }
+  }
+  res.json({
+    ok: true,
+    space: space.slug,
+    action,
+    hasCustomApiJs: Boolean(files['api.js']),
+    result: customRouteOutput ?? {
+      message: `Edge function "${action}" executed on ${space.title}`,
+      echo: payload
+    },
+    storage: space.appStorage,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Wave 7: Custom Event & Funnel Analytics API (/live/:slug/events)
+app.get(['/live/:slug/events', '/s/:slug/events'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  res.json({
+    ok: true,
+    counts: space.eventCounts || {},
+    events: space.eventLog || []
+  });
+});
+
+app.post(['/live/:slug/events', '/s/:slug/events'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.eventCounts = space.eventCounts && typeof space.eventCounts === 'object' ? space.eventCounts : {};
+  space.eventLog = Array.isArray(space.eventLog) ? space.eventLog : [];
+  const payload = req.body || {};
+  const eventName = String(payload.event || payload.name || 'app_event')
+    .trim()
+    .slice(0, 64);
+  space.eventCounts[eventName] = (space.eventCounts[eventName] || 0) + 1;
+  const record = {
+    id: 'ev_' + crypto.randomBytes(4).toString('hex'),
+    event: eventName,
+    props: payload.props && typeof payload.props === 'object' ? payload.props : {},
+    createdAt: new Date().toISOString()
+  };
+  space.eventLog.unshift(record);
+  if (space.eventLog.length > 100) space.eventLog = space.eventLog.slice(0, 100);
+  saveDb(db);
+  res.status(201).json({
+    ok: true,
+    event: eventName,
+    count: space.eventCounts[eventName],
+    counts: space.eventCounts,
+    record
+  });
+});
+
+app.delete(['/live/:slug/events', '/s/:slug/events'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.eventCounts = {};
+  space.eventLog = [];
+  saveDb(db);
+  res.json({ ok: true, counts: {}, events: [] });
+});
+
+// Wave 7: Transactional Email & Notification Dispatch API (/live/:slug/notify)
+app.get(['/live/:slug/notify', '/s/:slug/notify'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  res.json({ ok: true, notifications: space.notifications || [] });
+});
+
+app.post(['/live/:slug/notify', '/s/:slug/notify'], async (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.notifications = Array.isArray(space.notifications) ? space.notifications : [];
+  const payload = req.body || {};
+  const to = String(payload.to || 'owner@spacehub.win').trim().slice(0, 160);
+  const subject = String(payload.subject || `Alert from ${space.title}`).trim().slice(0, 160);
+  const message = String(payload.message || payload.text || '').trim().slice(0, 1000);
+  if (!message && !payload.subject) {
+    return res.status(400).json({ error: 'Notification subject or message is required.' });
+  }
+  let status = 'queued_outbox';
+  const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+  if (secrets.RESEND_API_KEY && !secrets.RESEND_API_KEY.startsWith('mock_')) {
+    try {
+      const r = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${secrets.RESEND_API_KEY}`
+        },
+        body: JSON.stringify({
+          from: 'SpaceHub <onboarding@resend.dev>',
+          to: [to],
+          subject,
+          text: message
+        })
+      });
+      status = r.ok ? 'sent_resend' : `resend_http_${r.status}`;
+    } catch (_e) {
+      status = 'queued_outbox';
+    }
+  }
+  const notifRecord = {
+    id: 'ntf_' + crypto.randomBytes(5).toString('hex'),
+    to,
+    subject,
+    message,
+    status,
+    createdAt: new Date().toISOString()
+  };
+  space.notifications.unshift(notifRecord);
+  if (space.notifications.length > 100) space.notifications = space.notifications.slice(0, 100);
+  saveDb(db);
+  res.status(201).json({ ok: true, notification: notifRecord, count: space.notifications.length });
 });
 
 app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) => {

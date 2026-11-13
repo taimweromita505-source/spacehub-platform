@@ -535,6 +535,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                   <option value="live_room">Live Chat / Multiplayer Room SDK</option>
                   <option value="space_assets">Media &amp; File Upload SDK (/assets)</option>
                   <option value="space_search">Instant Full-Text Search SDK (/search)</option>
+                  <option value="edge_fn">Serverless Edge Function SDK (/fn)</option>
+                  <option value="space_analytics">Custom Analytics &amp; Funnel SDK (/events)</option>
+                  <option value="space_notify">Email &amp; Alert Notification SDK (/notify)</option>
                   <option value="creator_checkout">Creator Buy / Tip Button</option>
                 </select>
                 <label for="themePresetSelect" class="visually-hidden">Remix Visual Theme</label>
@@ -582,6 +585,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 staging://index.html
               </div>
               <div style="display: flex; align-items: center; gap: 0.35rem;">
+                <button type="button" class="btn btn-ghost btn-xs" id="visualEditSpaceBtn" title="Click any heading, paragraph, or button in the preview to edit text inline">
+                  Visual Edit
+                </button>
                 <button type="button" class="btn btn-ghost btn-xs" id="diffSpaceBtn" title="Compare Staging vs. Published Live Files">
                   Diff
                 </button>

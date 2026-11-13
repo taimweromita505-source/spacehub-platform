@@ -784,6 +784,8 @@ function formatSpaceSummary(space, user) {
     views: space.views || 0,
     installs: space.installs || 0,
     assetCount: Object.keys(assetsObj).length,
+    eventCounts: space.eventCounts || {},
+    notificationCount: (space.notifications || []).length,
     appUserCount: (space.appUsers || []).length,
     roomEventCount: (space.roomEvents || []).length,
     submissionCount: (space.submissions || []).length,
@@ -871,6 +873,26 @@ self.addEventListener('fetch', (event) => {
 `;
 }
 
+function buildSpaceConfig(space, files = {}) {
+  let fileCfg = {};
+  if (files && files['config.json']) {
+    try {
+      fileCfg = JSON.parse(files['config.json']);
+    } catch (_e) {
+      fileCfg = {};
+    }
+  }
+  return {
+    slug: space?.slug || '',
+    title: space?.title || '',
+    flags: {
+      ...(fileCfg.flags && typeof fileCfg.flags === 'object' ? fileCfg.flags : {}),
+      ...(space?.featureFlags && typeof space.featureFlags === 'object' ? space.featureFlags : {})
+    },
+    ...fileCfg
+  };
+}
+
 function buildBundledHtml(files, origin = '', space = null) {
   let html = files['index.html'] || '<!DOCTYPE html><html><body><h1>Empty Space</h1></body></html>';
   const css = files['style.css'] || '';
@@ -912,9 +934,10 @@ function buildBundledHtml(files, origin = '', space = null) {
   if (space) {
     const safeTitle = String(space.title || space.slug).replace(/["<>]/g, '');
     const safeDesc = String(space.description || `${safeTitle} — Hosted on SpaceHub`).replace(/["<>]/g, '');
-    const ogMeta = !html.includes('property="og:title"')
+    const spaceConfigScript = `\n  <script>window.SPACE_CONFIG = ${JSON.stringify(buildSpaceConfig(space, files))};</script>`;
+    const ogMeta = (!html.includes('property="og:title"')
       ? `\n  <meta property="og:type" content="website" />\n  <meta property="og:title" content="${safeTitle}" />\n  <meta property="og:description" content="${safeDesc}" />\n  <meta property="og:image" content="${origin}/live/${space.slug}/icon.svg" />\n  <meta name="twitter:card" content="summary" />\n  <meta name="twitter:title" content="${safeTitle}" />\n  <meta name="twitter:description" content="${safeDesc}" />`
-      : '';
+      : '') + spaceConfigScript;
     const pwaHead =
       appPlatform !== 'web_only'
         ? `${ogMeta}
@@ -1647,6 +1670,158 @@ export default {
           status: 200,
           headers: { 'Content-Type': 'application/xml; charset=utf-8' }
         });
+      }
+    }
+
+    // 1b-6. Serverless Edge Functions (/live/:slug/fn), Custom Analytics (/events), Transactional Notify (/notify) & Config (/config.json)
+    const wave7Match = pathname.match(/^\/(?:live|s)\/([^/]+)\/(fn|events|notify|config\.json)\/?$/i);
+    if (wave7Match) {
+      const slug = decodeURIComponent(wave7Match[1]).toLowerCase();
+      const routeKind = wave7Match[2].toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      const files = space.publishedFiles || space.draftFiles || {};
+
+      if (routeKind === 'config.json') {
+        if (method === 'GET') {
+          return jsonResponse({ ok: true, config: buildSpaceConfig(space, files) });
+        }
+        if (method === 'POST') {
+          const payload = await request.json().catch(() => ({}));
+          space.featureFlags = {
+            ...(space.featureFlags && typeof space.featureFlags === 'object' ? space.featureFlags : {}),
+            ...(payload.flags && typeof payload.flags === 'object' ? payload.flags : payload)
+          };
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, config: buildSpaceConfig(space, files) });
+        }
+      }
+
+      if (routeKind === 'fn') {
+        const payload = method === 'POST' ? await request.json().catch(() => ({})) : {};
+        const action = String(url.searchParams.get('action') || payload.action || 'ping').trim();
+        space.appStorage = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+        if (payload.setStorage && typeof payload.setStorage === 'object') {
+          space.appStorage = { ...space.appStorage, ...payload.setStorage };
+          await saveDb(env, db);
+        }
+        let customRouteOutput = null;
+        if (files['routes.json']) {
+          try {
+            const parsedRoutes = JSON.parse(files['routes.json']);
+            if (parsedRoutes && parsedRoutes[action] !== undefined) {
+              customRouteOutput = parsedRoutes[action];
+            }
+          } catch (_e) {
+            // ignore
+          }
+        }
+        return jsonResponse({
+          ok: true,
+          space: space.slug,
+          action,
+          hasCustomApiJs: Boolean(files['api.js']),
+          result: customRouteOutput ?? {
+            message: `Edge function "${action}" executed on ${space.title}`,
+            echo: payload
+          },
+          storage: space.appStorage,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      if (routeKind === 'events') {
+        space.eventCounts = space.eventCounts && typeof space.eventCounts === 'object' ? space.eventCounts : {};
+        space.eventLog = Array.isArray(space.eventLog) ? space.eventLog : [];
+        if (method === 'GET') {
+          return jsonResponse({
+            ok: true,
+            counts: space.eventCounts,
+            events: space.eventLog
+          });
+        }
+        if (method === 'POST') {
+          const payload = await request.json().catch(() => ({}));
+          const eventName = String(payload.event || payload.name || 'app_event')
+            .trim()
+            .slice(0, 64);
+          space.eventCounts[eventName] = (space.eventCounts[eventName] || 0) + 1;
+          const record = {
+            id: 'ev_' + randomHex(4),
+            event: eventName,
+            props: payload.props && typeof payload.props === 'object' ? payload.props : {},
+            createdAt: new Date().toISOString()
+          };
+          space.eventLog.unshift(record);
+          if (space.eventLog.length > 100) space.eventLog = space.eventLog.slice(0, 100);
+          await saveDb(env, db);
+          return jsonResponse(
+            {
+              ok: true,
+              event: eventName,
+              count: space.eventCounts[eventName],
+              counts: space.eventCounts,
+              record
+            },
+            201
+          );
+        }
+        if (method === 'DELETE') {
+          space.eventCounts = {};
+          space.eventLog = [];
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, counts: {}, events: [] });
+        }
+      }
+
+      if (routeKind === 'notify') {
+        space.notifications = Array.isArray(space.notifications) ? space.notifications : [];
+        if (method === 'GET') {
+          return jsonResponse({ ok: true, notifications: space.notifications });
+        }
+        if (method === 'POST') {
+          const payload = await request.json().catch(() => ({}));
+          const to = String(payload.to || 'owner@spacehub.win').trim().slice(0, 160);
+          const subject = String(payload.subject || `Alert from ${space.title}`).trim().slice(0, 160);
+          const message = String(payload.message || payload.text || '').trim().slice(0, 1000);
+          if (!message && !payload.subject) {
+            return jsonResponse({ error: 'Notification subject or message is required.' }, 400);
+          }
+          let status = 'queued_outbox';
+          const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+          if (secrets.RESEND_API_KEY && !secrets.RESEND_API_KEY.startsWith('mock_')) {
+            try {
+              const r = await fetch('https://api.resend.com/emails', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${secrets.RESEND_API_KEY}`
+                },
+                body: JSON.stringify({
+                  from: 'SpaceHub <onboarding@resend.dev>',
+                  to: [to],
+                  subject,
+                  text: message
+                })
+              });
+              status = r.ok ? 'sent_resend' : `resend_http_${r.status}`;
+            } catch (_e) {
+              status = 'queued_outbox';
+            }
+          }
+          const notifRecord = {
+            id: 'ntf_' + randomHex(5),
+            to,
+            subject,
+            message,
+            status,
+            createdAt: new Date().toISOString()
+          };
+          space.notifications.unshift(notifRecord);
+          if (space.notifications.length > 100) space.notifications = space.notifications.slice(0, 100);
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, notification: notifRecord, count: space.notifications.length }, 201);
+        }
       }
     }
 

@@ -478,6 +478,41 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(healthRes.body.ok, true);
     assert.strictEqual(healthRes.body.assetCount, 1);
 
+    console.log('16. Testing Wave 7: Serverless Edge Functions (/fn), Custom Analytics (/events), Transactional Notify (/notify) & Runtime Config (/config.json)...');
+    const fnCall = await request(server, 'POST', `/live/${space.slug}/fn?action=custom_ping`, {
+      action: 'custom_ping',
+      setStorage: { fn_executed: true }
+    });
+    assert.strictEqual(fnCall.status, 200);
+    assert.strictEqual(fnCall.body.ok, true);
+    assert.strictEqual(fnCall.body.action, 'custom_ping');
+    assert.strictEqual(fnCall.body.storage.fn_executed, true);
+
+    const trackEv = await request(server, 'POST', `/live/${space.slug}/events`, {
+      event: 'checkout_clicked',
+      props: { plan: 'annual' }
+    });
+    assert.strictEqual(trackEv.status, 201);
+    assert.strictEqual(trackEv.body.count, 1);
+
+    const getEv = await request(server, 'GET', `/live/${space.slug}/events`);
+    assert.strictEqual(getEv.status, 200);
+    assert.strictEqual(getEv.body.counts.checkout_clicked, 1);
+
+    const notifyCall = await request(server, 'POST', `/live/${space.slug}/notify`, {
+      to: 'founder@spacehub.win',
+      subject: 'New VIP Signup',
+      message: 'A new user upgraded on your Space!'
+    });
+    assert.strictEqual(notifyCall.status, 201);
+    assert.strictEqual(notifyCall.body.notification.status, 'queued_outbox');
+
+    const cfgUpdate = await request(server, 'POST', `/live/${space.slug}/config.json`, {
+      flags: { betaBanner: true }
+    });
+    assert.strictEqual(cfgUpdate.status, 200);
+    assert.strictEqual(cfgUpdate.body.config.flags.betaBanner, true);
+
     console.log('ALL TESTS PASSED!');
   } finally {
     server.close();
