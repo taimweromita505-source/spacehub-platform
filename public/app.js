@@ -408,15 +408,18 @@ function setStudioTab(tabName) {
   const tabs = {
     workspace: document.getElementById('studioTabWorkspace'),
     app: document.getElementById('studioTabApp'),
+    submissions: document.getElementById('studioTabSubmissions'),
     settings: document.getElementById('studioTabSettings')
   };
   const panels = {
     workspace: document.getElementById('panelWorkspace'),
     app: document.getElementById('panelApp'),
+    submissions: document.getElementById('panelSubmissions'),
     settings: document.getElementById('panelSettings')
   };
 
   Object.keys(tabs).forEach((k) => {
+    if (!tabs[k] || !panels[k]) return;
     const active = k === tabName;
     tabs[k].classList.toggle('active', active);
     tabs[k].setAttribute('aria-selected', String(active));
@@ -426,6 +429,9 @@ function setStudioTab(tabName) {
   if (tabName === 'app' && state.currentSpace) {
     const frame = document.getElementById('publishedAppFrame');
     frame.src = `${state.currentSpace.stagingPreviewUrl}?t=${Date.now()}`;
+  }
+  if (tabName === 'submissions' && state.currentSpace?.isOwner) {
+    loadSpaceSubmissions();
   }
 }
 
@@ -501,10 +507,20 @@ function updateStudioHeaderBadges(space) {
 
   const quickPrivacyBtn = document.getElementById('quickPrivacyToggleBtn');
   const launchBtn = document.getElementById('launchSpaceBtn');
+  const submissionsTab = document.getElementById('studioTabSubmissions');
+  const submissionsCountBadge = document.getElementById('submissionsCountBadge');
   const settingsTab = document.getElementById('studioTabSettings');
   const saveDraftBtn = document.getElementById('saveDraftBtn');
   const codeTextarea = document.getElementById('codeEditorTextarea');
   const studioAgentBar = document.getElementById('studioAgentBar');
+
+  if (submissionsCountBadge) {
+    submissionsCountBadge.textContent = String(space.submissionCount || 0);
+  }
+  const formEndpointSnippet = document.getElementById('formEndpointSnippet');
+  if (formEndpointSnippet) {
+    formEndpointSnippet.textContent = `<form action="/live/${space.slug}/submit" method="POST">\n  <input type="text" name="name" placeholder="Your name" required />\n  <input type="email" name="email" placeholder="you@example.com" required />\n  <textarea name="message" placeholder="Message"></textarea>\n  <button type="submit">Submit</button>\n</form>`;
+  }
 
   if (space.isOwner) {
     quickPrivacyBtn.hidden = false;
@@ -512,6 +528,7 @@ function updateStudioHeaderBadges(space) {
       space.visibility === 'private' ? 'Make Public' : 'Make Private';
     launchBtn.hidden = false;
     launchBtn.textContent = space.externalHost ? 'Update Deployment' : 'Deploy';
+    if (submissionsTab) submissionsTab.hidden = false;
     settingsTab.hidden = false;
     saveDraftBtn.hidden = false;
     codeTextarea.readOnly = false;
@@ -519,6 +536,7 @@ function updateStudioHeaderBadges(space) {
   } else {
     quickPrivacyBtn.hidden = true;
     launchBtn.hidden = true;
+    if (submissionsTab) submissionsTab.hidden = true;
     settingsTab.hidden = true;
     saveDraftBtn.hidden = true;
     codeTextarea.readOnly = true;
@@ -574,6 +592,8 @@ async function openSpaceStudio(username, slug) {
     if (iconTextInput) iconTextInput.value = space.appIconText || '';
     const themeColorSelect = document.getElementById('settingsThemeColorSelect');
     if (themeColorSelect) themeColorSelect.value = space.appThemeColor || '#09090b';
+    const passcodeInput = document.getElementById('settingsPasscodeInput');
+    if (passcodeInput) passcodeInput.value = space.previewPasscode || '';
 
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
@@ -809,8 +829,31 @@ document.getElementById('shareSpaceBtn')?.addEventListener('click', async () => 
   }
 });
 
-// Export Ready-to-Host Static Bundle
-document.getElementById('exportBundleBtn')?.addEventListener('click', async () => {
+// Open Export, Single-File HTML Download & Embed Dialog
+document.getElementById('exportBundleBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace) return;
+  const liveUrl = `${window.location.origin}/live/${state.currentSpace.slug}`;
+  const snippetEl = document.getElementById('embedIframeSnippet');
+  if (snippetEl) {
+    snippetEl.textContent = `<iframe src="${liveUrl}" width="100%" height="600" style="border:1px solid #27272a;border-radius:12px;" loading="lazy" title="${state.currentSpace.title}"></iframe>`;
+  }
+  document.getElementById('exportEmbedDialog')?.showModal();
+});
+
+document.getElementById('downloadSingleHtmlBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace) return;
+  const bundled = bundleClientPreview(state.workingFiles);
+  const blob = new Blob([bundled], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${state.currentSpace.slug}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`Downloaded standalone ${state.currentSpace.slug}.html!`);
+});
+
+document.getElementById('downloadFullBundleBtn')?.addEventListener('click', async () => {
   if (!state.currentSpace) return;
   try {
     const { ownerUsername, slug } = state.currentSpace;
@@ -822,9 +865,20 @@ document.getElementById('exportBundleBtn')?.addEventListener('click', async () =
     a.download = `${slug}-hosting-bundle.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('Exported ready-to-host bundle (with vercel.json & netlify.toml)!');
+    showToast('Exported ready-to-host PWA bundle!');
   } catch (err) {
     showToast(err.message);
+  }
+});
+
+document.getElementById('copyEmbedSnippetBtn')?.addEventListener('click', async () => {
+  const snippet = document.getElementById('embedIframeSnippet')?.textContent || '';
+  if (!snippet) return;
+  try {
+    await navigator.clipboard.writeText(snippet);
+    showToast('Copied <iframe> embed code to clipboard!');
+  } catch (_e) {
+    showToast('Copy the <iframe> snippet from the box.');
   }
 });
 
@@ -942,7 +996,134 @@ document.getElementById('likeSpaceBtn').addEventListener('click', async () => {
 // Studio mode tabs
 document.getElementById('studioTabWorkspace').addEventListener('click', () => setStudioTab('workspace'));
 document.getElementById('studioTabApp').addEventListener('click', () => setStudioTab('app'));
+document.getElementById('studioTabSubmissions')?.addEventListener('click', () => setStudioTab('submissions'));
 document.getElementById('studioTabSettings').addEventListener('click', () => setStudioTab('settings'));
+
+// Built-in Form & Waitlist Submissions Inbox
+let currentSpaceSubmissions = [];
+
+async function loadSpaceSubmissions() {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const container = document.getElementById('submissionsListContainer');
+  if (!container) return;
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/submissions`);
+    currentSpaceSubmissions = data.submissions || [];
+    state.currentSpace.submissionCount = currentSpaceSubmissions.length;
+    const badge = document.getElementById('submissionsCountBadge');
+    if (badge) badge.textContent = String(currentSpaceSubmissions.length);
+
+    if (!currentSpaceSubmissions.length) {
+      container.innerHTML = `<p class="section-sub">No submissions yet. Click "+ Send Test Lead" above or submit a form from your live Space.</p>`;
+      return;
+    }
+
+    container.innerHTML = currentSpaceSubmissions
+      .map(
+        (sub) => `
+      <div class="pat-key-item">
+        <div>
+          <strong>${escapeHtml(sub.name || 'Anonymous Visitor')}</strong>
+          ${sub.email ? `· <code>${escapeHtml(sub.email)}</code>` : ''}
+          <div class="section-sub">${escapeHtml(sub.message || JSON.stringify(sub.fields || {}))} · ${new Date(
+          sub.createdAt
+        ).toLocaleString()}</div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-xs" data-del-submission="${escapeHtml(sub.id)}">Delete</button>
+      </div>
+    `
+      )
+      .join('');
+
+    container.querySelectorAll('[data-del-submission]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-del-submission');
+        await apiFetch(
+          `/api/spaces/${state.currentSpace.ownerUsername}/${state.currentSpace.slug}/submissions?id=${encodeURIComponent(id)}`,
+          { method: 'DELETE' }
+        );
+        loadSpaceSubmissions();
+      });
+    });
+  } catch (err) {
+    container.innerHTML = `<p class="section-sub">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+document.getElementById('sendTestSubmissionBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace) return;
+  try {
+    await apiFetch(`/live/${state.currentSpace.slug}/submit`, {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Alex Rivera (Test Lead)',
+        email: 'alex@example.com',
+        message: 'Excited for early access!'
+      })
+    });
+    showToast('Test lead submitted to your Space Inbox!');
+    loadSpaceSubmissions();
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+document.getElementById('exportSubmissionsCsvBtn')?.addEventListener('click', () => {
+  if (!currentSpaceSubmissions.length) {
+    showToast('No submissions to export yet.');
+    return;
+  }
+  const rows = [
+    ['ID', 'Name', 'Email', 'Message', 'Created At'],
+    ...currentSpaceSubmissions.map((s) => [
+      s.id,
+      s.name || '',
+      s.email || '',
+      (s.message || '').replace(/\r?\n/g, ' '),
+      s.createdAt
+    ])
+  ];
+  const csv = rows
+    .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${state.currentSpace?.slug || 'space'}-submissions.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Exported submissions as CSV!');
+});
+
+document.getElementById('clearSubmissionsBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    await apiFetch(`/api/spaces/${ownerUsername}/${slug}/submissions`, { method: 'DELETE' });
+    showToast('Cleared Submissions Inbox.');
+    loadSpaceSubmissions();
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+document.getElementById('copyClientPreviewBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace) return;
+  const code = document.getElementById('settingsPasscodeInput')?.value.trim() || '';
+  if (!code) {
+    showToast('Enter a passcode first and click Save Changes to enable client preview links.');
+    return;
+  }
+  const clientUrl = `${window.location.origin}/live/${state.currentSpace.slug}?mode=draft&key=${encodeURIComponent(code)}`;
+  try {
+    await navigator.clipboard.writeText(clientUrl);
+    showToast(`Copied client preview link: ${clientUrl}`);
+  } catch (_e) {
+    showToast(clientUrl);
+  }
+});
 
 // Save Settings Form
 document.getElementById('spaceSettingsForm').addEventListener('submit', async (e) => {
@@ -956,6 +1137,7 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
   const appOrientation = document.getElementById('settingsOrientationSelect')?.value || 'any';
   const appIconText = document.getElementById('settingsIconTextInput')?.value.trim() || '';
   const appThemeColor = document.getElementById('settingsThemeColorSelect')?.value || '#09090b';
+  const previewPasscode = document.getElementById('settingsPasscodeInput')?.value.trim() || '';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
@@ -968,7 +1150,8 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
         appPlatform,
         appOrientation,
         appIconText,
-        appThemeColor
+        appThemeColor,
+        previewPasscode
       })
     });
     state.currentSpace = data.space;
@@ -1431,7 +1614,10 @@ document.getElementById('createSpaceForm').addEventListener('submit', async (e) 
   const templateMeta = {
     landing: { emoji: '✨', colorFrom: 'indigo', colorTo: 'cyan' },
     dashboard: { emoji: '📊', colorFrom: 'emerald', colorTo: 'teal' },
-    canvas: { emoji: '🎨', colorFrom: 'pink', colorTo: 'orange' }
+    canvas: { emoji: '🎨', colorFrom: 'pink', colorTo: 'orange' },
+    mobile_app: { emoji: '📱', colorFrom: 'indigo', colorTo: 'cyan' },
+    link_bio: { emoji: '🔗', colorFrom: 'pink', colorTo: 'orange' },
+    waitlist: { emoji: '📬', colorFrom: 'emerald', colorTo: 'teal' }
   }[templateId] || { emoji: '🚀', colorFrom: 'indigo', colorTo: 'purple' };
 
   try {

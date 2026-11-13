@@ -27,6 +27,7 @@ if (fs.existsSync(ENV_PATH)) {
 }
 
 app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -389,6 +390,217 @@ function animate() {
 spawn(window.innerWidth / 2, window.innerHeight / 2, 50);
 animate();`
     }
+  },
+  mobile_app: {
+    name: 'Mobile App Shell (Bottom Tab Bar)',
+    emoji: '📱',
+    colorFrom: 'indigo',
+    colorTo: 'cyan',
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>PocketOS Mobile App</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-bar">
+      <span class="pill">MOBILE PWA</span>
+      <h1>PocketOS</h1>
+    </header>
+    <main class="screen" id="screenHome">
+      <div class="card">
+        <h2>Daily Habit Streak</h2>
+        <p>Tap below to log today's check-in on Android or iPhone.</p>
+        <div class="metric" id="streakVal">7 Days</div>
+        <button id="checkInBtn" class="btn-primary">Check In (+1 Day)</button>
+      </div>
+    </main>
+    <main class="screen" id="screenActivity" hidden>
+      <div class="card">
+        <h2>Recent Activity</h2>
+        <ul id="activityList" class="list">
+          <li>Completed morning sprint</li>
+          <li>Installed app to home screen</li>
+        </ul>
+      </div>
+    </main>
+    <main class="screen" id="screenProfile" hidden>
+      <div class="card">
+        <h2>App Settings</h2>
+        <p>Running in standalone mobile app mode.</p>
+      </div>
+    </main>
+    <nav class="tab-bar">
+      <button type="button" class="tab active" data-target="screenHome">Home</button>
+      <button type="button" class="tab" data-target="screenActivity">Activity</button>
+      <button type="button" class="tab" data-target="screenProfile">Profile</button>
+    </nav>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #fafafa; min-height: 100vh; display: flex; justify-content: center; }
+.app-shell { width: 100%; max-width: 440px; min-height: 100vh; display: flex; flex-direction: column; border-inline: 1px solid #18181b; padding-bottom: 4.5rem; }
+.app-bar { padding: 1.25rem 1.25rem 1rem; border-bottom: 1px solid #27272a; display: flex; align-items: center; justify-content: space-between; }
+.app-bar h1 { font-size: 1.15rem; font-weight: 700; }
+.pill { font-size: 0.68rem; font-weight: 700; padding: 0.2rem 0.55rem; border-radius: 999px; background: #18181b; border: 1px solid #27272a; color: #818cf8; }
+.screen { padding: 1.25rem; flex: 1; }
+.card { background: #18181b; border: 1px solid #27272a; border-radius: 0.9rem; padding: 1.35rem; }
+.card h2 { font-size: 1.1rem; margin-bottom: 0.4rem; }
+.card p { color: #a1a1aa; font-size: 0.9rem; margin-bottom: 1rem; }
+.metric { font-size: 2.1rem; font-weight: 800; color: #818cf8; margin-bottom: 1rem; }
+.btn-primary { width: 100%; background: #fafafa; color: #09090b; border: none; padding: 0.75rem; border-radius: 0.6rem; font-weight: 700; cursor: pointer; }
+.list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; color: #d4d4d8; font-size: 0.9rem; }
+.list li { padding: 0.6rem 0.75rem; background: #09090b; border-radius: 0.5rem; border: 1px solid #27272a; }
+.tab-bar { position: fixed; bottom: 0; width: 100%; max-width: 440px; background: rgba(9,9,11,0.94); border-top: 1px solid #27272a; display: grid; grid-template-columns: repeat(3, 1fr); padding: 0.5rem; backdrop-filter: blur(8px); }
+.tab { background: transparent; border: none; color: #71717a; padding: 0.55rem; font-weight: 600; font-size: 0.82rem; cursor: pointer; border-radius: 0.5rem; }
+.tab.active { color: #fafafa; background: #18181b; }`,
+      'script.js': `let streak = 7;
+document.getElementById('checkInBtn')?.addEventListener('click', () => {
+  streak++;
+  document.getElementById('streakVal').textContent = streak + ' Days';
+});
+document.querySelectorAll('.tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const target = btn.getAttribute('data-target');
+    document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.screen').forEach((s) => { s.hidden = s.id !== target; });
+  });
+});`
+    }
+  },
+  link_bio: {
+    name: 'Creator Link-in-Bio & Storefront',
+    emoji: '🔗',
+    colorFrom: 'pink',
+    colorTo: 'orange',
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Creator Hub — Links &amp; Store</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="bio-wrap">
+    <div class="avatar">◆</div>
+    <h1>Studio Creator</h1>
+    <p class="tagline">Digital products, design systems &amp; weekly dispatches.</p>
+    <div class="links">
+      <a href="#newsletter" class="link-card">
+        <strong>Join 4,200+ Weekly Readers</strong>
+        <span>Architecture &amp; product engineering notes →</span>
+      </a>
+      <a href="#kit" class="link-card">
+        <strong>UI Component Kit v2</strong>
+        <span>Minimal dark-mode templates &amp; tokens →</span>
+      </a>
+      <a href="#book" class="link-card">
+        <strong>Book a 1-on-1 Strategy Session</strong>
+        <span>30-minute product &amp; code review →</span>
+      </a>
+    </div>
+  </main>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #fafafa; min-height: 100vh; display: flex; justify-content: center; padding: 3rem 1.25rem; }
+.bio-wrap { width: 100%; max-width: 420px; text-align: center; }
+.avatar { width: 64px; height: 64px; border-radius: 50%; background: #18181b; border: 1px solid #27272a; display: grid; place-items: center; margin: 0 auto 1rem; font-size: 1.5rem; color: #fafafa; }
+h1 { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.35rem; }
+.tagline { color: #a1a1aa; font-size: 0.92rem; margin-bottom: 1.75rem; }
+.links { display: flex; flex-direction: column; gap: 0.75rem; text-align: left; }
+.link-card { display: block; padding: 1rem 1.15rem; background: #18181b; border: 1px solid #27272a; border-radius: 0.75rem; color: #fafafa; text-decoration: none; transition: border-color 0.15s ease, transform 0.15s ease; }
+.link-card:hover { border-color: #52525b; transform: translateY(-1px); }
+.link-card strong { display: block; font-size: 0.95rem; margin-bottom: 0.2rem; }
+.link-card span { color: #a1a1aa; font-size: 0.82rem; }`,
+      'script.js': `console.log('Creator Link-in-Bio ready');`
+    }
+  },
+  waitlist: {
+    name: 'Waitlist & Lead Capture Form',
+    emoji: '📬',
+    colorFrom: 'emerald',
+    colorTo: 'teal',
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Early Access Waitlist</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="waitlist-card">
+    <span class="badge">PRIVATE BETA · EARLY ACCESS</span>
+    <h1>Reserve your spot in the next wave.</h1>
+    <p>Sign up below. Submissions go directly to your SpaceHub Submissions Inbox.</p>
+    <form id="waitlistForm" class="form">
+      <input type="text" name="name" id="leadName" placeholder="Your name" required />
+      <input type="email" name="email" id="leadEmail" placeholder="you@company.com" required />
+      <input type="text" name="message" id="leadNote" placeholder="What are you building? (optional)" />
+      <button type="submit" id="submitBtn">Join Waitlist</button>
+    </form>
+    <p id="formFeedback" class="feedback" hidden></p>
+  </main>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #fafafa; min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; }
+.waitlist-card { width: 100%; max-width: 460px; background: #18181b; border: 1px solid #27272a; border-radius: 0.9rem; padding: 2rem; }
+.badge { display: inline-block; font-size: 0.7rem; font-weight: 700; color: #34d399; background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.3); padding: 0.25rem 0.65rem; border-radius: 999px; margin-bottom: 1rem; }
+h1 { font-size: 1.6rem; line-height: 1.2; margin-bottom: 0.6rem; }
+p { color: #a1a1aa; font-size: 0.92rem; line-height: 1.5; margin-bottom: 1.35rem; }
+.form { display: flex; flex-direction: column; gap: 0.65rem; }
+input { padding: 0.7rem 0.85rem; border-radius: 0.5rem; border: 1px solid #27272a; background: #09090b; color: #fafafa; font-size: 0.92rem; }
+button { background: #fafafa; color: #09090b; font-weight: 700; border: none; padding: 0.75rem; border-radius: 0.5rem; cursor: pointer; margin-top: 0.25rem; }
+.feedback { margin-top: 1rem; margin-bottom: 0; color: #34d399; font-weight: 600; font-size: 0.88rem; }`,
+      'script.js': `const form = document.getElementById('waitlistForm');
+const feedback = document.getElementById('formFeedback');
+form?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+  const payload = {
+    name: document.getElementById('leadName').value.trim(),
+    email: document.getElementById('leadEmail').value.trim(),
+    message: document.getElementById('leadNote').value.trim()
+  };
+  try {
+    const cleanPath = window.location.pathname.replace(/\\/$/, '');
+    const submitUrl = cleanPath.startsWith('/live/') || cleanPath.startsWith('/s/')
+      ? cleanPath + '/submit'
+      : null;
+    if (submitUrl) {
+      await fetch(submitUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }
+    form.reset();
+    feedback.textContent = '✓ You are on the list! Saved to SpaceHub Submissions.';
+    feedback.hidden = false;
+  } catch (_err) {
+    feedback.textContent = '✓ Submitted!';
+    feedback.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Join Waitlist';
+  }
+});`
+    }
   }
 };
 
@@ -493,10 +705,13 @@ function formatSpaceSummary(space, user) {
     appOrientation: space.appOrientation || 'any',
     appIconText: space.appIconText || '',
     appThemeColor: space.appThemeColor || '#09090b',
+    previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
+    hasPreviewPasscode: Boolean(space.previewPasscode),
     status: space.status,
     likes: space.likes || 0,
     views: space.views || 0,
     installs: space.installs || 0,
+    submissionCount: (space.submissions || []).length,
     snapshotCount: (space.snapshots || []).length,
     likedByMe: Boolean(user && (space.likedBy || []).includes(user.id)),
     hasUnpublishedChanges: Boolean(space.hasUnpublishedChanges),
@@ -1747,6 +1962,7 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
     appOrientation,
     appIconText,
     appThemeColor,
+    previewPasscode,
     colorFrom,
     colorTo,
     draftFiles
@@ -1771,6 +1987,9 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
   }
   if (typeof appThemeColor === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(appThemeColor.trim())) {
     space.appThemeColor = appThemeColor.trim();
+  }
+  if (typeof previewPasscode === 'string') {
+    space.previewPasscode = previewPasscode.trim().slice(0, 32);
   }
 
   if (draftFiles && typeof draftFiles === 'object') {
@@ -2325,23 +2544,128 @@ function buildBundledHtml(files, space = null) {
   const supportsAndroid = appPlatform === 'both' || appPlatform === 'android';
   const supportsIphone = appPlatform === 'both' || appPlatform === 'iphone';
 
-  if (space && appPlatform !== 'web_only') {
+  if (space) {
     const safeTitle = String(space.title || space.slug).replace(/["<>]/g, '');
-    const pwaHead = `
+    const safeDesc = String(space.description || `${safeTitle} — Hosted on SpaceHub`).replace(/["<>]/g, '');
+    const ogMeta = !html.includes('property="og:title"')
+      ? `\n  <meta property="og:type" content="website" />\n  <meta property="og:title" content="${safeTitle}" />\n  <meta property="og:description" content="${safeDesc}" />\n  <meta property="og:image" content="/live/${space.slug}/icon.svg" />\n  <meta name="twitter:card" content="summary" />\n  <meta name="twitter:title" content="${safeTitle}" />\n  <meta name="twitter:description" content="${safeDesc}" />`
+      : '';
+    const pwaHead =
+      appPlatform !== 'web_only'
+        ? `${ogMeta}
   ${supportsAndroid ? `<link rel="manifest" href="/live/${space.slug}/manifest.webmanifest" />\n  <meta name="mobile-web-app-capable" content="yes" />` : ''}
   <link rel="icon" type="image/svg+xml" href="/live/${space.slug}/icon.svg" />
   ${supportsIphone ? `<link rel="apple-touch-icon" href="/live/${space.slug}/icon.svg" />\n  <meta name="apple-mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />\n  <meta name="apple-mobile-web-app-title" content="${safeTitle}" />` : ''}
-  <meta name="theme-color" content="#09090b" />
-  ${supportsAndroid ? `<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/live/${space.slug}/sw.js').catch(()=>{});});}</script>` : ''}`;
-    if (html.includes('</head>')) {
-      html = html.replace('</head>', `${pwaHead}\n</head>`);
-    } else {
-      html = pwaHead + '\n' + html;
+  <meta name="theme-color" content="${space.appThemeColor || '#09090b'}" />
+  ${supportsAndroid ? `<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/live/${space.slug}/sw.js').catch(()=>{});});}</script>` : ''}`
+        : ogMeta;
+    if (pwaHead) {
+      if (html.includes('</head>')) {
+        html = html.replace('</head>', `${pwaHead}\n</head>`);
+      } else {
+        html = pwaHead + '\n' + html;
+      }
     }
   }
 
   return html;
 }
+
+// Form & Waitlist Submissions API for Space Owners & Public Live Forms
+app.post(['/live/:slug/submit', '/s/:slug/submit'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+
+  const fields = req.body || {};
+  const entry = {
+    id: 'sub_' + crypto.randomBytes(4).toString('hex'),
+    name: String(fields.name || '').trim().slice(0, 120),
+    email: String(fields.email || '').trim().slice(0, 160),
+    message: String(fields.message || fields.note || '').trim().slice(0, 1000),
+    fields,
+    createdAt: new Date().toISOString()
+  };
+
+  space.submissions = Array.isArray(space.submissions) ? space.submissions : [];
+  space.submissions.unshift(entry);
+  if (space.submissions.length > 200) space.submissions = space.submissions.slice(0, 200);
+  saveDb(db);
+
+  const accept = String(req.headers.accept || '').toLowerCase();
+  const contentType = String(req.headers['content-type'] || '').toLowerCase();
+  if (accept.includes('application/json') || contentType.includes('application/json')) {
+    return res.status(201).json({
+      ok: true,
+      message: 'Submission saved to SpaceHub Inbox.',
+      submission: entry
+    });
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(
+    `<!DOCTYPE html><html><body style="background:#09090b;color:#fafafa;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;padding:2rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;max-width:420px"><h1 style="font-size:1.25rem;margin-bottom:0.5rem">✓ Submission Received</h1><p style="color:#a1a1aa;font-size:0.9rem;margin-bottom:1.25rem">Your response has been saved to ${String(space.title).replace(/[<>&]/g, '')}.</p><a href="/live/${encodeURIComponent(space.slug)}" style="color:#818cf8;text-decoration:none;font-weight:600">← Return to ${String(space.title).replace(/[<>&]/g, '')}</a></div></body></html>`
+  );
+});
+
+app.get('/api/spaces/:username/:slug/submissions', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (space.ownerId !== user.id) {
+    return res.status(403).json({ error: 'Only the Space owner can view submissions.' });
+  }
+  res.json({ submissions: space.submissions || [] });
+});
+
+app.post('/api/spaces/:username/:slug/submissions', (req, res) => {
+  const db = loadDb();
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const fields = req.body || {};
+  const entry = {
+    id: 'sub_' + crypto.randomBytes(4).toString('hex'),
+    name: String(fields.name || '').trim().slice(0, 120),
+    email: String(fields.email || '').trim().slice(0, 160),
+    message: String(fields.message || fields.note || '').trim().slice(0, 1000),
+    fields,
+    createdAt: new Date().toISOString()
+  };
+  space.submissions = Array.isArray(space.submissions) ? space.submissions : [];
+  space.submissions.unshift(entry);
+  if (space.submissions.length > 200) space.submissions = space.submissions.slice(0, 200);
+  saveDb(db);
+  res.status(201).json({ ok: true, submission: entry, submissionCount: space.submissions.length });
+});
+
+app.delete('/api/spaces/:username/:slug/submissions', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (space.ownerId !== user.id) {
+    return res.status(403).json({ error: 'Only the Space owner can clear submissions.' });
+  }
+  const subId = req.query.id;
+  if (subId) {
+    space.submissions = (space.submissions || []).filter((s) => s.id !== subId);
+  } else {
+    space.submissions = [];
+  }
+  saveDb(db);
+  res.json({ ok: true, submissions: space.submissions });
+});
 
 app.get(['/live/:slug/manifest.webmanifest', '/s/:slug/manifest.webmanifest'], (req, res) => {
   const db = loadDb();
@@ -2380,8 +2704,11 @@ app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) 
     : [...db.spaces].reverse().find((s) => s.slug === slug.toLowerCase());
 
   const isOwner = Boolean(user && space && space.ownerId === user.id);
+  const keyParam = String(req.query.key || '').trim();
+  const hasValidPasscode = Boolean(space && space.previewPasscode && keyParam === space.previewPasscode);
+  const canAccess = isOwner || hasValidPasscode;
 
-  if (!space || (space.visibility === 'private' && !isOwner) || (space.status === 'draft' && !isOwner)) {
+  if (!space || (space.visibility === 'private' && !canAccess) || (space.status === 'draft' && !canAccess)) {
     res.status(404).send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2413,7 +2740,7 @@ app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) 
     saveDb(db);
   }
 
-  const targetFiles = (mode === 'draft' && isOwner)
+  const targetFiles = (mode === 'draft' && canAccess)
     ? space.draftFiles
     : (space.publishedFiles || space.draftFiles);
 

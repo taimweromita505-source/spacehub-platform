@@ -205,6 +205,49 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(forkRes.status, 201);
     assert.ok(forkRes.body.space.slug.includes('fork'));
 
+    console.log('8d. Verifying Submissions Inbox, Client Preview Passcode & OpenGraph Tags...');
+    const submitRes = await request(
+      server,
+      'POST',
+      `/live/${space.slug}/submit`,
+      { name: 'Dana Client', email: 'dana@example.com', message: 'Ready to launch!' }
+    );
+    assert.strictEqual(submitRes.status, 201);
+    assert.strictEqual(submitRes.body.ok, true);
+
+    const listSubsRes = await request(
+      server,
+      'GET',
+      `/api/spaces/${uniqueUser}/${space.slug}/submissions`,
+      null,
+      token
+    );
+    assert.strictEqual(listSubsRes.status, 200);
+    assert.strictEqual(listSubsRes.body.submissions.length, 1);
+    assert.strictEqual(listSubsRes.body.submissions[0].email, 'dana@example.com');
+
+    // Set private + previewPasscode on the forked space and verify client passcode access
+    const forkedSlug = forkRes.body.space.slug;
+    await request(
+      server,
+      'PUT',
+      `/api/spaces/${uniqueUser}/${forkedSlug}`,
+      { visibility: 'private', previewPasscode: 'secret2026' },
+      token
+    );
+    const blockedPreview = await request(server, 'GET', `/live/${forkedSlug}?mode=draft`);
+    assert.strictEqual(blockedPreview.status, 404);
+    const allowedPreview = await request(
+      server,
+      'GET',
+      `/live/${forkedSlug}?mode=draft&key=secret2026`
+    );
+    assert.strictEqual(allowedPreview.status, 200);
+    assert.ok(
+      String(allowedPreview.raw).includes('property="og:title"'),
+      'Should inject OpenGraph social share card meta tags'
+    );
+
     console.log('9. Testing External Coding Agent REST API with sh_pat_ token...');
     const patRes = await request(
       server,

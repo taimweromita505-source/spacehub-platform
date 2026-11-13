@@ -444,6 +444,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <button type="button" class="studio-tab" id="studioTabApp" role="tab" aria-selected="false">
             Live Preview
           </button>
+          <button type="button" class="studio-tab" id="studioTabSubmissions" role="tab" aria-selected="false" hidden>
+            Submissions (<span id="submissionsCountBadge">0</span>)
+          </button>
           <button type="button" class="studio-tab" id="studioTabSettings" role="tab" aria-selected="false" hidden>
             Settings
           </button>
@@ -569,6 +572,47 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         </div>
       </div>
 
+      <!-- TAB PANEL 2B: FORM & WAITLIST SUBMISSIONS INBOX -->
+      <div id="panelSubmissions" class="studio-panel" hidden>
+        <div class="arch-panel" style="padding: 1.5rem;">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">BUILT-IN LEAD &amp; FORM BACKEND</span>
+              <h2>Submissions Inbox</h2>
+              <p class="arch-lead">
+                Collect waitlist signups, contact forms, and user feedback from your Space without setting up an external database.
+              </p>
+            </div>
+            <div style="display: flex; gap: 0.45rem; flex-wrap: wrap;">
+              <button type="button" class="btn btn-outline btn-xs" id="sendTestSubmissionBtn">
+                + Send Test Lead
+              </button>
+              <button type="button" class="btn btn-outline btn-xs" id="exportSubmissionsCsvBtn">
+                Download CSV
+              </button>
+              <button type="button" class="btn btn-danger btn-xs" id="clearSubmissionsBtn">
+                Clear Inbox
+              </button>
+            </div>
+          </div>
+
+          <div class="arch-card" style="margin-block-end: 1.25rem;">
+            <h3>Connect Any HTML Form in Your Space</h3>
+            <p style="margin-block-end: 0.5rem;">
+              Point any <code>&lt;form&gt;</code> or <code>fetch()</code> request in your Space to your built-in endpoint:
+            </p>
+            <pre class="code-snippet"><code id="formEndpointSnippet">&lt;form action="/live/my-space/submit" method="POST"&gt;
+  &lt;input type="text" name="name" placeholder="Your name" required /&gt;
+  &lt;input type="email" name="email" placeholder="you@example.com" required /&gt;
+  &lt;textarea name="message" placeholder="Message"&gt;&lt;/textarea&gt;
+  &lt;button type="submit"&gt;Submit&lt;/button&gt;
+&lt;/form&gt;</code></pre>
+          </div>
+
+          <div id="submissionsListContainer" class="pat-keys-list" aria-live="polite"></div>
+        </div>
+      </div>
+
       <!-- TAB PANEL 3: PRIVACY & SPACE SETTINGS -->
       <div id="panelSettings" class="studio-panel" hidden>
         <form id="spaceSettingsForm" class="settings-form" method="POST" action="/api/spaces">
@@ -684,6 +728,26 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             </div>
           </div>
 
+          <div class="field">
+            <div class="label-row">
+              <label for="settingsPasscodeInput">Client Preview Passcode (Optional)</label>
+              <button type="button" class="btn-link" id="copyClientPreviewBtn">
+                Copy Client Preview Link
+              </button>
+            </div>
+            <span class="hint">Share a private staging Space with clients via <code>?key=PASSCODE</code> without making it public.</span>
+            <input
+              type="text"
+              id="settingsPasscodeInput"
+              name="previewPasscode"
+              maxlength="32"
+              placeholder="e.g. client2026 (leave blank to disable)"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+            />
+          </div>
+
           <div class="settings-actions">
             <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
             <button type="button" class="btn btn-danger btn-sm" id="deleteSpaceBtn">Delete Space</button>
@@ -773,6 +837,27 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             <label for="tplCanvas">
               <strong>Minimal Starter</strong>
               <span>Clean HTML, CSS, and JS boilerplate</span>
+            </label>
+          </div>
+          <div class="radio-option">
+            <input type="radio" id="tplMobileApp" name="templateId" value="mobile_app" />
+            <label for="tplMobileApp">
+              <strong>Mobile App Shell</strong>
+              <span>Native-feel mobile tabs for Android &amp; iPhone</span>
+            </label>
+          </div>
+          <div class="radio-option">
+            <input type="radio" id="tplLinkBio" name="templateId" value="link_bio" />
+            <label for="tplLinkBio">
+              <strong>Creator Link-in-Bio</strong>
+              <span>Mobile profile, social links &amp; digital storefront</span>
+            </label>
+          </div>
+          <div class="radio-option">
+            <input type="radio" id="tplWaitlist" name="templateId" value="waitlist" />
+            <label for="tplWaitlist">
+              <strong>Waitlist &amp; Lead Capture</strong>
+              <span>Pre-wired to your Space Submissions Inbox</span>
             </label>
           </div>
         </div>
@@ -1289,6 +1374,50 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         Copy App Link
       </button>
       <button type="button" class="btn btn-primary btn-sm" data-close-dialog="installAppDialog">
+        Done
+      </button>
+    </div>
+  </dialog>
+
+  <!-- DIALOG 8: EXPORT HTML, BUNDLE & EMBED WIDGET -->
+  <dialog id="exportEmbedDialog" closedby="any" aria-labelledby="exportEmbedDialogTitle">
+    <div class="dialog-header">
+      <h2 id="exportEmbedDialogTitle">Export &amp; Embed Space</h2>
+      <button type="button" class="btn-icon" data-close-dialog="exportEmbedDialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <p class="dialog-lead">
+      Download your Space as a standalone single-file HTML app, export a full PWA hosting bundle, or embed it on any website.
+    </p>
+
+    <div class="arch-card" style="margin-block-end: 0.75rem;">
+      <h3>1. Download Code</h3>
+      <p style="margin-block-end: 0.75rem;">
+        Own 100% of your code with zero lock-in.
+      </p>
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <button type="button" class="btn btn-primary btn-sm" id="downloadSingleHtmlBtn">
+          Download Single-File .html
+        </button>
+        <button type="button" class="btn btn-outline btn-sm" id="downloadFullBundleBtn">
+          Download Full PWA Bundle (.json)
+        </button>
+      </div>
+    </div>
+
+    <div class="arch-card" style="margin-block-end: 1rem;">
+      <div class="label-row" style="margin-block-end: 0.35rem;">
+        <h3>2. Embed Widget (Notion, WordPress, Webflow, Shopify)</h3>
+        <button type="button" class="btn-link" id="copyEmbedSnippetBtn">Copy Embed Code</button>
+      </div>
+      <p style="margin-block-end: 0.5rem;">
+        Paste this responsive <code>&lt;iframe&gt;</code> snippet into any webpage or documentation site:
+      </p>
+      <pre class="code-snippet"><code id="embedIframeSnippet"></code></pre>
+    </div>
+
+    <div class="dialog-footer">
+      <button type="button" class="btn btn-primary btn-sm" data-close-dialog="exportEmbedDialog">
         Done
       </button>
     </div>
