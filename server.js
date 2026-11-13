@@ -784,28 +784,24 @@ async function deployToExternalHost({
     }
 
     const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    try {
-      execFileSync(
-        npxBin,
-        ['wrangler', 'pages', 'project', 'create', cleanProject, '--production-branch', 'main'],
-        { cwd: __dirname, stdio: 'pipe', shell: true }
-      );
-    } catch (_e) {
-      // Project may already exist on the Cloudflare account
-    }
-
     const deployOut = execFileSync(
       npxBin,
-      ['wrangler', 'pages', 'deploy', cfDeployDir, '--project-name', cleanProject, '--branch', 'main'],
+      [
+        'wrangler',
+        'deploy',
+        `--assets=${cfDeployDir}`,
+        `--name=${cleanProject}`,
+        '--compatibility-date=2026-11-10'
+      ],
       { cwd: __dirname, encoding: 'utf8', shell: true }
     );
 
-    const urlMatch = String(deployOut).match(/https:\/\/[a-z0-9.-]+\.pages\.dev/i);
-    const liveUrl = urlMatch ? urlMatch[0] : `https://${cleanProject}.pages.dev`;
+    const urlMatch = String(deployOut).match(/https:\/\/[a-z0-9.-]+\.(?:workers\.dev|pages\.dev)/i);
+    const liveUrl = urlMatch ? urlMatch[0] : `https://${cleanProject}.taimweromita505.workers.dev`;
 
     return {
       provider: 'cloudflare_pages',
-      providerLabel: 'Cloudflare Pages (Live)',
+      providerLabel: 'Cloudflare Pages / Workers (Live)',
       projectName: cleanProject,
       liveUrl,
       lastDeployedAt: now,
