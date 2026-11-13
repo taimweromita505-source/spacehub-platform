@@ -500,6 +500,18 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         </div>
       </div>
 
+      <details class="arch-card studio-hosting" id="studioHostingPanel" hidden>
+        <summary>Hosting status</summary>
+        <dl class="publish-review">
+          <dt>Provider</dt><dd id="studioHostingProvider"></dd>
+          <dt>Live URL</dt><dd id="studioHostingUrl"></dd>
+          <dt>Last release</dt><dd id="studioHostingRelease"></dd>
+          <dt>Visibility</dt><dd id="studioHostingVisibility"></dd>
+        </dl>
+        <p id="studioHostingStatus" role="status"></p>
+        <button type="button" class="btn btn-outline btn-xs" id="studioHostingCheck" hidden>Check live release</button>
+      </details>
+
       <!-- TAB PANEL 1: WORKSPACE & LIVE PREVIEW -->
       <div id="panelWorkspace" class="studio-panel">
         <div id="studioAgentBar" class="agent-studio-bar">

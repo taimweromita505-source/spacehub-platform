@@ -1174,6 +1174,7 @@ function formatSpaceSummary(space, user) {
     createdAt: space.createdAt,
     updatedAt: space.updatedAt,
     publishedAt: space.publishedAt,
+    releaseId: isPrimaryOwner ? space.releaseId : undefined,
     isOwner,
     isPrimaryOwner,
     stagingPreviewUrl,
