@@ -5,10 +5,15 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test.js"
+    "test": "node test.js",
+    "deploy": "wrangler deploy",
+    "preview": "wrangler dev"
   },
   "dependencies": {
     "@google/genai": "^3.3.0",
     "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "wrangler": "^4.161.0"
   }
 }
