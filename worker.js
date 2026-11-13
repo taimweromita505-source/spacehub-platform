@@ -453,7 +453,7 @@ const PROVIDER_LABELS = {
 };
 
 // Fallback in-memory store if KV is unavailable in local dev
-let memoryDb = {
+const emptyDb = {
   users: [],
   sessions: {},
   agentKeys: [],
@@ -713,37 +713,34 @@ function applyPaypalReinstatement(db, rec) {
   return { conn, action: 'reinstated' };
 }
 
-const KV_KEY = 'spacehub_prod_state_v2';
+export const LEGACY_STATE_KEY = 'spacehub_prod_state_v2';
+let memoryDb = structuredClone(emptyDb);
 
 async function loadDb(env) {
-  if (env && env.SPACEHUB_KV) {
-    try {
-      const raw = await env.SPACEHUB_KV.get(KV_KEY, 'json');
-      if (raw && typeof raw === 'object') {
-        return {
-          users: Array.isArray(raw.users) ? raw.users : [],
-          sessions: raw.sessions || {},
-          agentKeys: Array.isArray(raw.agentKeys) ? raw.agentKeys : [],
-          hostingConnections: Array.isArray(raw.hostingConnections) ? raw.hostingConnections : [],
-          paypalOrders: Array.isArray(raw.paypalOrders) ? raw.paypalOrders : [],
-          paypalEvents: Array.isArray(raw.paypalEvents) ? raw.paypalEvents : [],
-          passwordResets: Array.isArray(raw.passwordResets) ? raw.passwordResets : [],
-          loginFailures: raw.loginFailures && typeof raw.loginFailures === 'object' ? raw.loginFailures : {},
-          spaces: Array.isArray(raw.spaces) ? raw.spaces : []
-        };
-      }
-    } catch (_e) {
-      // fallback
-    }
+  if (env?.spaceHubStorage || env?.SPACEHUB_KV) {
+    const raw = env.spaceHubStorage
+      ? await env.spaceHubStorage.load()
+      : await env.SPACEHUB_KV.get(LEGACY_STATE_KEY, 'json');
+    if (!raw) return structuredClone(emptyDb);
+    return {
+      users: Array.isArray(raw.users) ? raw.users : [],
+      sessions: raw.sessions || {},
+      agentKeys: Array.isArray(raw.agentKeys) ? raw.agentKeys : [],
+      hostingConnections: Array.isArray(raw.hostingConnections) ? raw.hostingConnections : [],
+      paypalOrders: Array.isArray(raw.paypalOrders) ? raw.paypalOrders : [],
+      paypalEvents: Array.isArray(raw.paypalEvents) ? raw.paypalEvents : [],
+      passwordResets: Array.isArray(raw.passwordResets) ? raw.passwordResets : [],
+      loginFailures: raw.loginFailures && typeof raw.loginFailures === 'object' ? raw.loginFailures : {},
+      spaces: Array.isArray(raw.spaces) ? raw.spaces : []
+    };
   }
   return memoryDb;
 }
 
 async function saveDb(env, db) {
-  memoryDb = db;
-  if (env && env.SPACEHUB_KV) {
-    await env.SPACEHUB_KV.put(KV_KEY, JSON.stringify(db));
-  }
+  if (env?.spaceHubStorage) await env.spaceHubStorage.save(db);
+  else if (env?.SPACEHUB_KV) await env.SPACEHUB_KV.put(LEGACY_STATE_KEY, JSON.stringify(db));
+  else memoryDb = db;
 }
 
 function randomHex(bytes = 16) {
@@ -1538,9 +1535,17 @@ const spaceHubWorker = {
     if (changed) await saveDb(env, db);
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, dispatch) {
     const wUrl = new URL(request.url);
     const wMethod = request.method.toUpperCase();
+    const pathname = wUrl.pathname;
+    const host = normalizeCustomDomain(request.headers.get('x-custom-host') || wUrl.hostname);
+    const customRoot = pathname === '/' && wMethod === 'GET' && host &&
+      !['spacehub.win', 'www.spacehub.win', 'localhost', '127.0.0.1'].includes(host) &&
+      !host.endsWith('.workers.dev');
+    const usesState = customRoot || pathname === '/sitemap.xml' ||
+      ['/api/', '/spaces/', '/live/', '/s/'].some((prefix) => pathname.startsWith(prefix));
+    const handle = dispatch && usesState ? dispatch : (r) => spaceHubWorker.handle(r, env);
     if (
       wMethod === 'POST' &&
       /^\/api\/auth\/(login|register|social|forgot|reset|change-password)$/.test(wUrl.pathname)
@@ -1571,12 +1576,12 @@ const spaceHubWorker = {
           'Access-Control-Allow-Origin': '*'
         });
       }
-      const res = await spaceHubWorker.handle(request, env);
+      const res = await handle(request);
       const out = new Response(res.body, res);
       Object.entries(rlHeaders).forEach(([k, v]) => out.headers.set(k, v));
       return out;
     }
-    return spaceHubWorker.handle(request, env);
+    return handle(request);
   },
 
   async handle(request, env) {
