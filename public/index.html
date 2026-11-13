@@ -512,6 +512,14 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         <button type="button" class="btn btn-outline btn-xs" id="studioHostingCheck" hidden>Check live release</button>
       </details>
 
+      <details class="arch-card studio-hosting" id="draftReviewPanel" hidden>
+        <summary>Draft review links</summary>
+        <p>Share a copy of your saved draft. Anyone with the link can open it for 24 hours.</p>
+        <button type="button" class="btn btn-outline btn-xs" id="createDraftReview">Create review link</button>
+        <ul id="draftReviewLinks"></ul>
+        <p id="draftReviewStatus" role="status"></p>
+      </details>
+
       <!-- TAB PANEL 1: WORKSPACE & LIVE PREVIEW -->
       <div id="panelWorkspace" class="studio-panel">
         <div id="studioAgentBar" class="agent-studio-bar">
