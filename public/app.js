@@ -262,6 +262,9 @@ function updateAuthUI() {
   const tabMySpaces = document.getElementById('tabMySpaces');
   const tabPrivateSpaces = document.getElementById('tabPrivateSpaces');
 
+  document.querySelectorAll('[data-hosting-account]').forEach((panel) => { panel.hidden = !state.user; });
+  document.getElementById('hostingGuestNote').hidden = Boolean(state.user);
+
   if (state.user) {
     guestActions.hidden = true;
     userProfileBar.hidden = false;
@@ -285,26 +288,12 @@ function updateAuthUI() {
   refreshAccountExtras();
 }
 
-async function refreshStats() {
-  try {
-    const pubData = await apiFetch('/api/spaces?filter=public');
-    document.getElementById('statPublicCount').textContent = pubData.spaces.length;
-    if (state.user) {
-      const myData = await apiFetch('/api/spaces?filter=mine');
-      document.getElementById('statMyCount').textContent = myData.spaces.length;
-    } else {
-      document.getElementById('statMyCount').textContent = '0';
-    }
-  } catch (_err) {
-    // Ignore stat errors
-  }
-}
-
 async function loadSpacesList() {
   const grid = document.getElementById('spacesGrid');
   const heading = document.getElementById('gridHeading');
   const sub = document.getElementById('gridSubtext');
 
+  document.getElementById('hubIntroduction').hidden = state.filter !== 'public';
   if (state.filter === 'mine') {
     heading.textContent = 'My Spaces';
     sub.textContent = 'Your staging drafts, private projects, and deployed applications';
@@ -321,7 +310,6 @@ async function loadSpacesList() {
     const data = await apiFetch(`/api/spaces?filter=${state.filter}&search=${q}`);
     state.spaces = data.spaces || [];
     renderSpacesGrid();
-    refreshStats();
   } catch (err) {
     grid.innerHTML = `<p>${escapeHtml(err.message)}</p>`;
   }
@@ -330,24 +318,21 @@ async function loadSpacesList() {
 function renderSpacesGrid() {
   const grid = document.getElementById('spacesGrid');
   if (!state.spaces.length) {
-    const actionLabel = state.user ? '+ Create Space' : 'Create Account to Get Started';
+    const actionLabel = state.user ? 'Create a Space' : 'Try the workspace demo';
     grid.innerHTML = `
       <div class="empty-state">
-        <h3>No Spaces yet</h3>
+        <h3>${state.searchQuery ? 'No matching Spaces' : 'No Spaces yet'}</h3>
         <p>${
           state.user
             ? 'Create a Space to start building in your private staging workspace.'
-            : 'Create an account or sign in to stage your web applications and connect your hosting provider.'
+            : 'Published community projects will appear here. You can explore a sample workspace now.'
         }</p>
         <button type="button" class="btn btn-primary btn-sm" id="emptyStateCtaBtn">${actionLabel}</button>
       </div>
     `;
-    document.getElementById('emptyStateCtaBtn')?.addEventListener('click', () => {
-      if (state.user) {
-        document.getElementById('createSpaceDialog').showModal();
-      } else {
-        document.getElementById('signUpDialog').showModal();
-      }
+    document.getElementById('emptyStateCtaBtn').addEventListener('click', () => {
+      if (state.user) startSpaceCreation();
+      else showWorkspaceDemo();
     });
     return;
   }
@@ -1708,7 +1693,6 @@ document.getElementById('deployHostingForm').addEventListener('submit', async (e
     document.getElementById('dirtyIndicator').textContent = `✓ Deployed to ${data.externalHost.providerLabel}`;
     document.getElementById('deployHostingDialog').close();
     updateStudioHeaderBadges(data.space);
-    refreshStats();
     showToast(`🚀 ${data.message}`);
   } catch (err) {
     showToast(err.message);
@@ -1729,7 +1713,6 @@ document.getElementById('quickPrivacyToggleBtn').addEventListener('click', async
     document.getElementById('visPublic').checked = nextVis === 'public';
     document.getElementById('visPrivate').checked = nextVis === 'private';
     updateStudioHeaderBadges(data.space);
-    refreshStats();
     showToast(
       nextVis === 'private'
         ? '🔒 Space is now Private and hidden from everyone else.'
@@ -2659,14 +2642,50 @@ document.getElementById('searchInput').addEventListener('input', (e) => {
 });
 
 // Open Dialogs
-document.getElementById('newSpaceBtn').addEventListener('click', () => {
-  if (!state.user) {
-    showToast('Sign in or create an account to create your own Space.');
-    document.getElementById('signInDialog').showModal();
-    return;
-  }
-  document.getElementById('createSpaceDialog').showModal();
+let pendingSpaceTemplate = null;
+
+function resumeSpaceCreation() {
+  if (pendingSpaceTemplate === null || !state.user) return;
+  const dialog = document.getElementById('createSpaceDialog');
+  const template = document.getElementById('createSpaceForm').elements.namedItem('templateId');
+  if (pendingSpaceTemplate) template.value = pendingSpaceTemplate;
+  pendingSpaceTemplate = null;
+  dialog.showModal();
+}
+
+function startSpaceCreation(template = '', register = true) {
+  pendingSpaceTemplate = template;
+  if (state.user) resumeSpaceCreation();
+  else document.getElementById(register ? 'openSignUpBtn' : 'openSignInBtn').click();
+}
+
+function showWorkspaceDemo() {
+  const demo = document.getElementById('workspaceDemo');
+  demo.scrollIntoView({ block: 'nearest' });
+  demo.querySelector('[aria-pressed="true"]').focus({ preventScroll: true });
+}
+
+document.getElementById('newSpaceBtn').addEventListener('click', () => startSpaceCreation('', false));
+document.querySelectorAll('[data-create-space]').forEach((button) => {
+  button.addEventListener('click', () => startSpaceCreation(button.dataset.createSpace));
 });
+document.getElementById('tryWorkspaceDemo').addEventListener('click', showWorkspaceDemo);
+document.querySelectorAll('[data-demo-size]').forEach((button, _, buttons) => {
+  button.addEventListener('click', () => {
+    document.querySelector('.demo-preview').dataset.size = button.dataset.demoSize;
+    buttons.forEach((control) => control.setAttribute('aria-pressed', String(control === button)));
+  });
+});
+document.getElementById('hostingSignInBtn').addEventListener('click', () => {
+  document.getElementById('openSignInBtn').click();
+});
+for (const id of ['signInDialog', 'signUpDialog', 'socialAuthDialog']) {
+  document.getElementById(id).addEventListener('close', () => {
+    if (!document.querySelector('#signInDialog[open], #signUpDialog[open], #socialAuthDialog[open]')) {
+      pendingSpaceTemplate = null;
+    }
+  });
+}
 
 document.getElementById('openSignInBtn').addEventListener('click', () => {
   document.getElementById('signInServerError').hidden = true;
@@ -2786,6 +2805,7 @@ async function handleGoogleCredentialResponse(response) {
     loadSpacesList();
     loadAgentKeys();
     loadHostingConnections();
+    resumeSpaceCreation();
     showToast(`Signed in with verified Google account @${data.user.username}!`);
   } catch (err) {
     showToast(err.message || 'Google sign-in failed');
@@ -2896,6 +2916,7 @@ document.getElementById('socialAuthForm')?.addEventListener('submit', async (e) 
     loadSpacesList();
     loadAgentKeys();
     loadHostingConnections();
+    resumeSpaceCreation();
     const provLabels = { google: 'Google (Gmail)', github: 'GitHub', apple: 'Apple' };
     showToast(`Signed in with ${provLabels[provider] || provider} as @${data.user.username}!`);
   } catch (err) {
@@ -2934,6 +2955,7 @@ document.getElementById('signInForm').addEventListener('submit', async (e) => {
     loadSpacesList();
     loadAgentKeys();
     loadHostingConnections();
+    resumeSpaceCreation();
     showToast(`Welcome back, @${data.user.username}!`);
   } catch (err) {
     errBox.textContent = err.message;
@@ -2970,6 +2992,7 @@ document.getElementById('signUpForm').addEventListener('submit', async (e) => {
     loadSpacesList();
     loadAgentKeys();
     loadHostingConnections();
+    resumeSpaceCreation();
     showToast(`Account created! Welcome, @${data.user.username}.`);
   } catch (err) {
     errBox.textContent = err.message;
