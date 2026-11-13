@@ -4,18 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
-  <title>SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo per Space)</title>
-  <meta name="description" content="Stage and test your website or web app in a private workspace with your own AI coding agents. Launch to global edge hosting for $1/month or $12/year per Space, or connect your own host." />
-  <meta name="keywords" content="web app staging, website preview platform, AI coding agent workspace, $1 web hosting, Cloudflare edge hosting, Hugging Face Spaces alternative" />
+  <title>SpaceHub — Stage, Preview &amp; Host Web Apps ($1/mo per Space)</title>
+  <meta name="description" content="Stage and test your website or web app in a private workspace with your own AI coding agents. Launch to global edge hosting for $1/month or $12/year per Space." />
+  <meta name="keywords" content="web app staging, website preview platform, AI coding agent workspace, $1 web hosting, Cloudflare edge hosting, SpaceHub" />
   <link rel="canonical" href="https://spacehub.win/" />
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo per Space)" />
-  <meta property="og:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year per Space." />
+  <meta property="og:title" content="SpaceHub — Stage, Preview &amp; Host Web Apps ($1/mo per Space)" />
+  <meta property="og:description" content="Build and verify your web app in a private staging workspace. Host live for $1/month or $12/year per Space." />
   <meta property="og:url" content="https://spacehub.win/" />
   <meta property="og:site_name" content="SpaceHub" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo per Space)" />
-  <meta name="twitter:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year per Space." />
+  <meta name="twitter:title" content="SpaceHub — Stage, Preview &amp; Host Web Apps ($1/mo per Space)" />
+  <meta name="twitter:description" content="Build and verify your web app in a private staging workspace. Host live for $1/month or $12/year per Space." />
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -24,11 +24,11 @@
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Web",
     "url": "https://spacehub.win/",
-    "description": "Web application staging workspace, BYO coding agent builder, and $1/month per Space cloud hosting platform.",
+    "description": "Private web staging workspace, BYO coding agent builder, and $1/month per Space cloud hosting platform.",
     "offers": [
       {
         "@type": "Offer",
-        "name": "Free Staging Workspace",
+        "name": "Free Private Staging Workspace",
         "price": "0",
         "priceCurrency": "USD"
       },
@@ -60,7 +60,7 @@
 
         <nav class="main-nav" aria-label="Primary Navigation">
           <button type="button" class="nav-tab active" data-filter="public" id="tabExplore">
-            Explore
+            Spaces
           </button>
           <button type="button" class="nav-tab" data-filter="mine" id="tabMySpaces" hidden>
             My Spaces
@@ -69,7 +69,7 @@
             Private
           </button>
           <button type="button" class="nav-tab" id="tabHosting">
-            Hosting
+            Pricing &amp; Hosting
           </button>
           <button type="button" class="nav-tab" id="tabAgents">
             Agent API
@@ -81,9 +81,6 @@
       </div>
 
       <div class="user-bar">
-        <button type="button" class="btn btn-primary btn-sm" id="newSpaceBtn">
-          + New Space
-        </button>
         <div id="guestActions" class="auth-buttons">
           <button type="button" class="btn btn-ghost btn-sm" id="openSignInBtn">Sign In</button>
           <button type="button" class="btn btn-outline btn-sm" id="openSignUpBtn">Create Account</button>
@@ -92,6 +89,9 @@
           <span class="user-pill" id="currentUserBadge"></span>
           <button type="button" class="btn btn-ghost btn-sm" id="logoutBtn">Sign Out</button>
         </div>
+        <button type="button" class="btn btn-primary btn-sm" id="newSpaceBtn">
+          New Space
+        </button>
       </div>
     </div>
   </header>
@@ -103,16 +103,20 @@
     <section id="hubView">
       <div class="hero-banner">
         <div class="hero-text">
-          <span class="eyebrow">STAGING WORKSPACE &amp; CLOUD DEPLOYMENT</span>
-          <h1>Stage, preview, and launch web applications.</h1>
+          <div class="hero-pills">
+            <span class="hero-pill">Free Private Staging</span>
+            <span class="hero-pill">Bring Your Own Coding Agent</span>
+            <span class="hero-pill">$1 / month per Space</span>
+          </div>
+          <h1>Stage, preview, and host modern web apps.</h1>
           <p>
-            Build and test your website in a private staging workspace with live responsive previews and your own coding agents. Connect your hosting provider or purchase a plan when you are ready to launch.
+            Build and verify your website in a private workspace with live Desktop, Tablet, and Mobile previews before going live. Host any Space on our global edge for <strong>$1/month</strong> or connect your own cloud provider.
           </p>
         </div>
         <div class="hero-stats">
           <div class="stat-card">
             <span class="stat-val" id="statPublicCount">0</span>
-            <span class="stat-label">Public Spaces</span>
+            <span class="stat-label">Published Spaces</span>
           </div>
           <div class="stat-card">
             <span class="stat-val" id="statMyCount">0</span>
@@ -124,7 +128,7 @@
       <div class="toolbar-row">
         <div class="section-title-wrap">
           <h2 id="gridHeading">Published Spaces</h2>
-          <span class="section-sub" id="gridSubtext">Public applications deployed by the community</span>
+          <span class="section-sub" id="gridSubtext">Public web applications deployed on SpaceHub</span>
         </div>
 
         <search class="hub-search-bar" aria-label="Filter Spaces">
@@ -157,17 +161,17 @@
       <div class="arch-panel">
         <div class="panel-head">
           <div>
-            <span class="eyebrow">PER-SPACE HOSTING &amp; CLOUD DEPLOYMENT</span>
-            <h2>Host Each Space — $1 / month or $12 / year per Space</h2>
+            <span class="eyebrow">SIMPLE PER-SPACE PRICING</span>
+            <h2>$1 / month or $12 / year per Space</h2>
             <p class="arch-lead">
-              Testing your websites and apps in the staging workspace is free. When you are ready to launch live, activate hosting for <strong>$1 / month per Space</strong> or <strong>$12 / year per Space</strong> (each plan hosts 1 Space with a clean <code>/live/your-app</code> URL on global edge), or connect an external provider.
+              Staging and testing your applications in a private workspace is always free. When a Space is ready for production, activate a dedicated hosting slot or connect an external deployment target.
             </p>
           </div>
         </div>
 
         <div class="subsection">
           <div class="subsection-head">
-            <h3>Per-Space Hosting Plans</h3>
+            <h3>Managed Edge Hosting</h3>
             <div class="domain-inline-field">
               <label for="purchaseCustomDomainInput" class="visually-hidden">Custom Domain</label>
               <input
@@ -180,14 +184,14 @@
               />
             </div>
           </div>
-          <div id="hostingPlansGrid" class="spaces-grid"></div>
+          <div id="hostingPlansGrid" class="pricing-grid"></div>
         </div>
 
-        <div class="agent-hub-grid" style="margin-block-start: 2rem;">
+        <div class="agent-hub-grid" style="margin-block-start: 2.25rem;">
           <div class="arch-card">
             <h3>Connect External Provider</h3>
             <p style="margin-block-end: 1.25rem;">
-              Connect Cloudflare Pages, GitHub Pages, Vercel, Netlify, or a custom deployment webhook.
+              Deploy staged builds directly to Cloudflare Pages, GitHub Pages, Vercel, Netlify, or a custom webhook.
             </p>
             <form id="connectHostingForm" method="POST" action="/api/hosting-connections">
               <div class="field">
@@ -252,14 +256,14 @@
                   spellcheck="false"
                 />
               </div>
-              <button type="submit" class="btn btn-primary btn-sm">Connect Provider</button>
+              <button type="submit" class="btn btn-outline btn-sm">Save Connection</button>
             </form>
           </div>
 
           <div class="arch-card">
-            <h3>Active Connections</h3>
+            <h3>Active Hosting Slots &amp; Connections</h3>
             <p style="margin-block-end: 1.25rem;">
-              Available deployment targets when launching a Space from the workspace.
+              Purchased per-Space hosting slots and external providers available when deploying from the workspace.
             </p>
             <div id="hostingConnectionsList" class="pat-keys-list" aria-live="polite"></div>
           </div>
@@ -275,7 +279,7 @@
             <span class="eyebrow">DEVELOPER &amp; AGENT API</span>
             <h2>Bring Your Own Coding Agents</h2>
             <p class="arch-lead">
-              Configure an AI model for the in-studio builder or generate Personal Access Tokens (<code>sh_pat_...</code>) for external CLI agents and automation pipelines.
+              Configure an AI provider for the in-studio code generator or create Personal Access Tokens (<code>sh_pat_...</code>) for external CLI agents.
             </p>
           </div>
           <button type="button" class="btn btn-outline btn-sm" id="openAgentConfigDialogBtn">
@@ -342,22 +346,22 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
     <!-- VIEW 4: DOCUMENTATION -->
     <section id="archView" hidden>
       <div class="arch-panel">
-        <span class="eyebrow">PLATFORM OVERVIEW</span>
+        <span class="eyebrow">DOCUMENTATION</span>
         <h2>How SpaceHub Works</h2>
         <p class="arch-lead">
-          A streamlined workflow for staging, testing, and launching modern web applications.
+          A clean workflow for staging, verifying, and hosting web applications.
         </p>
         <div class="arch-grid">
           <article class="arch-card">
             <h3>1. Private Staging Workspace</h3>
             <p>
-              Every Space begins in staging mode with multi-file editing (<code>index.html</code>, <code>style.css</code>, <code>script.js</code>, and <code>README.md</code>) and live Desktop, Tablet, and Mobile viewport previews.
+              Every Space starts in private staging mode with multi-file editing (<code>index.html</code>, <code>style.css</code>, <code>script.js</code>, and <code>README.md</code>) and live Desktop, Tablet, and Mobile previews.
             </p>
           </article>
           <article class="arch-card">
-            <h3>2. Granular Privacy Controls</h3>
+            <h3>2. Privacy Controls</h3>
             <p>
-              Keep work-in-progress projects set to <strong>Private</strong> so only your account can access the source files or preview URL. Switch to <strong>Public</strong> when ready to share.
+              Keep work-in-progress projects set to <strong>Private</strong> so only your account can view the code or preview URL. Switch to <strong>Public</strong> when ready to share.
             </p>
           </article>
           <article class="arch-card">
@@ -367,9 +371,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             </p>
           </article>
           <article class="arch-card">
-            <h3>4. Flexible Cloud Deployment</h3>
+            <h3>4. $1 / Month Per-Space Hosting</h3>
             <p>
-              Deploy verified staging builds directly to Cloudflare Pages, GitHub Pages, Vercel, Netlify, or export a portable static bundle.
+              Host any Space live on our global Cloudflare Edge for $1/month or $12/year per Space, or deploy to your own external cloud account.
             </p>
           </article>
         </div>
@@ -380,9 +384,9 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
     <section id="spaceStudioView" hidden>
       <div class="studio-header">
         <div class="studio-breadcrumb">
-          <button type="button" class="btn btn-ghost btn-sm" id="backToHubBtn">← Back</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="backToHubBtn">← Spaces</button>
           <span class="crumb-sep">/</span>
-          <span class="space-emoji-badge" id="studioEmoji">🚀</span>
+          <span class="space-emoji-badge" id="studioEmoji" hidden></span>
           <span class="studio-owner" id="studioOwner"></span>
           <span class="crumb-sep">/</span>
           <h1 class="studio-title" id="studioTitle"></h1>
@@ -393,7 +397,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
         <div class="studio-actions">
           <button type="button" class="btn btn-outline btn-sm" id="likeSpaceBtn">
-            ♥ <span id="likeCountText">0</span>
+            Like · <span id="likeCountText">0</span>
           </button>
           <button type="button" class="btn btn-outline btn-sm" id="quickPrivacyToggleBtn" hidden>
             Make Public
@@ -451,7 +455,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                   Analytics Dashboard
                 </button>
                 <button type="button" class="btn btn-ghost btn-xs" id="configureStudioAgentBtn">
-                  Configure Agent
+                  Agent Settings
                 </button>
               </div>
             </div>
@@ -577,7 +581,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 <input type="radio" id="visPublic" name="visibility" value="public" />
                 <label for="visPublic">
                   <strong>Public</strong>
-                  <span>Visible in Explore once deployed.</span>
+                  <span>Visible in Spaces once deployed.</span>
                 </label>
               </div>
               <div class="radio-option">
@@ -599,6 +603,21 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
     </section>
   </main>
 
+  <footer class="site-footer">
+    <div class="site-footer-inner">
+      <div class="footer-brand">
+        <span class="brand-mark" aria-hidden="true">◆</span>
+        <span>SpaceHub</span>
+        <span class="footer-sep">·</span>
+        <span>Private Web Staging &amp; $1/mo Per-Space Edge Hosting</span>
+      </div>
+      <div class="footer-links">
+        <a href="/sitemap.xml" target="_blank" rel="noopener">Sitemap</a>
+        <a href="https://github.com/taimweromita505-source/spacehub-platform" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </div>
+  </footer>
+
   <!-- DIALOG 1: CREATE NEW SPACE -->
   <dialog id="createSpaceDialog" closedby="any" aria-labelledby="createSpaceDialogTitle">
     <form id="createSpaceForm" method="POST" action="/api/spaces" novalidate>
@@ -608,7 +627,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
       </div>
 
       <p class="dialog-lead">
-        Start building in your private staging workspace. You can connect hosting whenever you are ready to launch.
+        Start building in your private staging workspace. You can activate $1/mo hosting whenever you are ready to launch.
       </p>
 
       <div class="field">
@@ -627,7 +646,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           autofocus
         />
         <div id="spaceTitleError" class="error-msg">
-          <span role="img" aria-label="Error">❌</span> Please enter a Space name (at least 2 characters).
+          <span role="img" aria-label="Error">!</span> Please enter a Space name (at least 2 characters).
         </div>
       </div>
 
@@ -683,7 +702,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             <input type="radio" id="createVisPublic" name="visibility" value="public" />
             <label for="createVisPublic">
               <strong>Public</strong>
-              <span>Listed in Explore once deployed.</span>
+              <span>Listed publicly once deployed.</span>
             </label>
           </div>
         </div>
@@ -705,7 +724,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
       </div>
 
       <p class="dialog-lead">
-        Sign in to access your Spaces, coding agents, and connected hosts.
+        Sign in to access your Spaces, coding agents, and hosting slots.
       </p>
 
       <div class="field">
@@ -725,7 +744,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           autofocus
         />
         <div id="signInUserError" class="error-msg">
-          <span role="img" aria-label="Error">❌</span> Please enter your username (at least 3 characters).
+          <span role="img" aria-label="Error">!</span> Please enter your username (at least 3 characters).
         </div>
       </div>
 
@@ -750,7 +769,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           data-error="signInPwError"
         />
         <div id="signInPwError" class="error-msg">
-          <span role="img" aria-label="Error">❌</span> Please enter your password (6+ characters).
+          <span role="img" aria-label="Error">!</span> Please enter your password (6+ characters).
         </div>
       </div>
 
@@ -772,7 +791,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
       </div>
 
       <p class="dialog-lead">
-        Create your account to stage projects and connect your cloud hosting providers.
+        Create your account to stage projects for free and deploy when ready.
       </p>
 
       <div class="field">
@@ -789,7 +808,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           autofocus
         />
         <div id="signUpNameError" class="error-msg">
-          <span role="img" aria-label="Error">❌</span> Please enter your display name.
+          <span role="img" aria-label="Error">!</span> Please enter your display name.
         </div>
       </div>
 
@@ -811,7 +830,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           data-error="signUpUserError"
         />
         <div id="signUpUserError" class="error-msg">
-          <span role="img" aria-label="Error">❌</span> Enter 3–24 lowercase letters, numbers, - or _.
+          <span role="img" aria-label="Error">!</span> Enter 3–24 lowercase letters, numbers, - or _.
         </div>
       </div>
 
@@ -838,7 +857,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           data-error="signUpPwError"
         />
         <div id="signUpPwError" class="error-msg">
-          <span role="img" aria-label="Error">❌</span> Password must be at least 6 characters.
+          <span role="img" aria-label="Error">!</span> Password must be at least 6 characters.
         </div>
       </div>
 
@@ -961,11 +980,11 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
       </div>
 
       <p class="dialog-lead">
-        Publish your staged files to a connected hosting provider or purchase a managed plan.
+        Publish your staged files using a purchased Space hosting slot ($1/mo) or a connected external provider.
       </p>
 
       <div class="field">
-        <label for="deployConnectionSelect">Connected Hosting Target</label>
+        <label for="deployConnectionSelect">Hosting Slot or Connected Target</label>
         <select id="deployConnectionSelect" name="connectionId" class="select-control">
           <option value="">-- Or select a provider below --</option>
         </select>
@@ -1033,7 +1052,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
       <div class="dialog-footer" style="justify-content: space-between; flex-wrap: wrap;">
         <button type="button" class="btn btn-outline btn-sm" id="goToBuyHostingFromModalBtn">
-          Buy Space Hosting ($1/mo · $12/yr per Space)
+          Buy Space Slot ($1/mo · $12/yr)
         </button>
         <div style="display: flex; gap: 0.5rem;">
           <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="deployHostingDialog">Cancel</button>
@@ -1045,11 +1064,11 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
     </form>
   </dialog>
 
-  <!-- DIALOG 6: UNIVERSAL PAYMENT CHECKOUT (CARDS, APPLE/GOOGLE PAY, VENMO & PAYPAL -> PAYPAL PAYOUT) -->
+  <!-- DIALOG 6: UNIVERSAL PAYMENT CHECKOUT -->
   <dialog id="paypalCheckoutDialog" closedby="any" aria-labelledby="paypalCheckoutTitle">
     <form id="paypalCheckoutForm" method="POST" action="/api/hosting-plans/purchase">
       <div class="dialog-header">
-        <h2 id="paypalCheckoutTitle">Activate Per-Space Hosting</h2>
+        <h2 id="paypalCheckoutTitle">Activate Space Hosting</h2>
         <button type="button" class="btn-icon" data-close-dialog="paypalCheckoutDialog" aria-label="Close dialog">✕</button>
       </div>
 
@@ -1060,11 +1079,11 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
       <input type="hidden" id="checkoutPlanIdInput" name="planId" value="plan_monthly_1" />
 
       <div class="arch-card" style="margin-block-end: 1rem;">
-        <h3 style="margin-block-end: 0.5rem;">1. Choose Your Payment Method</h3>
+        <h3 style="margin-block-end: 0.4rem;">1. Complete Payment</h3>
         <p style="margin-block-end: 0.85rem;">
-          Pay with any Debit/Credit Card, Apple Pay, Google Pay, Venmo, or PayPal balance. All payments are securely processed by PayPal.
+          Pay with Debit/Credit Card, Apple Pay, Google Pay, Venmo, or PayPal.
         </p>
-        <div style="display: flex; flex-direction: column; gap: 0.55rem;">
+        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
           <a
             href="#"
             target="_blank"
@@ -1073,7 +1092,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             class="btn btn-primary btn-sm"
             style="width: 100%;"
           >
-            Pay with Debit / Credit Card, Apple Pay or Google Pay ↗
+            Pay with Card, Apple Pay or Google Pay ↗
           </a>
           <a
             href="#"
@@ -1083,18 +1102,18 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             class="btn btn-outline btn-sm"
             style="width: 100%;"
           >
-            Pay with PayPal / Venmo / Pay Later ↗
+            Pay with PayPal or Venmo ↗
           </a>
         </div>
       </div>
 
       <div class="field">
-        <label for="checkoutRefInput">2. Receipt or Transaction Reference (Optional if redirected)</label>
+        <label for="checkoutRefInput">2. Transaction Reference (Optional)</label>
         <input
           type="text"
           id="checkoutRefInput"
           name="paymentRef"
-          placeholder="PayPal Receipt ID or Card last 4 digits"
+          placeholder="Receipt ID or last 4 digits"
           autocorrect="off"
           autocapitalize="none"
           spellcheck="false"
@@ -1103,7 +1122,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
       <div class="dialog-footer">
         <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="paypalCheckoutDialog">Cancel</button>
-        <button type="submit" class="btn btn-primary btn-sm">Confirm Payment &amp; Activate Hosting</button>
+        <button type="submit" class="btn btn-primary btn-sm">Activate Hosting Slot</button>
       </div>
     </form>
   </dialog>

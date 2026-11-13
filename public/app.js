@@ -324,7 +324,6 @@ function renderSpacesGrid() {
 
   grid.innerHTML = state.spaces
     .map((s) => {
-      const gradClass = getBannerGradientClass(s.colorFrom, s.colorTo);
       const visBadge = s.visibility === 'private' ? 'Private' : 'Public';
       const hostLabel = s.externalHost
         ? escapeHtml(s.externalHost.providerLabel)
@@ -332,25 +331,24 @@ function renderSpacesGrid() {
 
       return `
         <article class="space-card">
-          <div class="space-card-banner ${gradClass}">
-            <div class="space-card-emoji" aria-hidden="true">${escapeHtml(s.emoji)}</div>
-            <div class="space-card-badges">
-              <span class="badge-pill">${visBadge}</span>
-              <span class="badge-pill">${hostLabel}</span>
-            </div>
-          </div>
-          <div class="space-card-body">
-            <h3 class="space-card-title">${escapeHtml(s.title)}</h3>
-            <div class="space-card-path">@${escapeHtml(s.ownerUsername)} / ${escapeHtml(s.slug)}</div>
-            <p class="space-card-desc">${escapeHtml(s.description || 'Staged on SpaceHub')}</p>
-            <div class="space-card-footer">
-              <span class="section-sub">♥ ${s.likes}</span>
-              <div style="display: flex; gap: 0.4rem;">
-                <button type="button" class="btn btn-primary btn-xs" data-open-space="${escapeHtml(s.ownerUsername)}/${escapeHtml(s.slug)}">
-                  ${s.isOwner ? 'Open Workspace' : 'Open Space'}
-                </button>
+          <div>
+            <div class="space-card-top">
+              <div>
+                <h3 class="space-card-title">${escapeHtml(s.title)}</h3>
+                <div class="space-card-path">@${escapeHtml(s.ownerUsername)}/${escapeHtml(s.slug)}</div>
+              </div>
+              <div class="space-card-badges">
+                <span class="badge-pill">${visBadge}</span>
+                <span class="badge-pill">${hostLabel}</span>
               </div>
             </div>
+            <p class="space-card-desc" style="margin-block-start: 0.75rem;">${escapeHtml(s.description || 'Staged web application')}</p>
+          </div>
+          <div class="space-card-footer">
+            <span class="section-sub">${s.likes} ${s.likes === 1 ? 'like' : 'likes'}</span>
+            <button type="button" class="btn btn-outline btn-xs" data-open-space="${escapeHtml(s.ownerUsername)}/${escapeHtml(s.slug)}">
+              ${s.isOwner ? 'Open Workspace' : 'Open Space'}
+            </button>
           </div>
         </article>
       `;
@@ -903,14 +901,14 @@ async function loadHostingConnections() {
         (c) => `
       <div class="pat-key-item">
         <div>
-          <strong>☁️ ${escapeHtml(c.name)}</strong>
+          <strong>${escapeHtml(c.name)}</strong>
           <div class="section-sub">${escapeHtml(c.providerLabel)} · Target: <code>${escapeHtml(
           c.targetUrlOrProject || 'auto'
         )}</code></div>
         </div>
         <button type="button" class="btn btn-danger btn-xs" data-remove-host="${escapeHtml(
           c.id
-        )}">Disconnect</button>
+        )}">Remove</button>
       </div>
     `
       )
