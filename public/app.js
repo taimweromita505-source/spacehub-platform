@@ -1672,6 +1672,83 @@ document.getElementById('copyEmbedSnippetBtn')?.addEventListener('click', async 
 // Open "Ready to Launch: Connect or Buy Hosting" Dialog
 const deployForm = document.getElementById('deployHostingForm');
 const deployDialog = document.getElementById('deployHostingDialog');
+const publishStatus = document.getElementById('publishStatus');
+const verifyButton = document.getElementById('publishVerifyBtn');
+const restoreButton = document.getElementById('restoreReleaseBtn');
+const historySelect = document.getElementById('releaseHistorySelect');
+const historyPanel = document.getElementById('releaseHistoryPanel');
+let pendingVerification;
+
+function releaseEndpoint(space) {
+  return '/api/spaces/' + encodeURIComponent(space.ownerUsername) + '/' +
+    encodeURIComponent(space.slug) + '/releases';
+}
+
+async function loadReleaseHistory(space) {
+  historyPanel.hidden = true;
+  if (!space.isPrimaryOwner) return;
+  try {
+    const { releases } = await apiFetch(releaseEndpoint(space));
+    if (state.currentSpace !== space || !deployDialog.open) return;
+    historySelect.replaceChildren(...releases.map(({ id, publishedAt }) =>
+      new Option(new Date(publishedAt).toLocaleString(), id)
+    ));
+    historyPanel.hidden = !releases.length;
+    restoreButton.disabled = space.externalHost?.liveUrl !==
+      new URL('/live/' + space.slug, location.origin).href;
+  } catch (error) {
+    publishStatus.textContent = error.message;
+  }
+}
+
+async function verifyRelease() {
+  if (!pendingVerification) return;
+  const { liveUrl, releaseId } = pendingVerification;
+  const destination = new URL(liveUrl, location.origin);
+  verifyButton.hidden = true;
+  if (destination.origin !== location.origin || !destination.pathname.startsWith('/live/') || !releaseId) {
+    publishStatus.textContent = 'Release saved. Open the destination to check the external site.';
+    return;
+  }
+  publishStatus.textContent = 'Checking the live release…';
+  try {
+    const response = await fetch(destination, {
+      cache: 'no-store',
+      redirect: 'error',
+      headers: state.token ? { Authorization: 'Bearer ' + state.token } : {}
+    });
+    if (!response.ok || response.headers.get('X-SpaceHub-Release') !== releaseId) {
+      throw Error('Live release differs');
+    }
+    publishStatus.textContent = 'Verified that SpaceHub serves this release.';
+  } catch {
+    publishStatus.textContent = 'Release saved. The live check could not confirm it yet.';
+    verifyButton.hidden = false;
+  }
+}
+
+verifyButton.addEventListener('click', verifyRelease);
+restoreButton.addEventListener('click', async () => {
+  const space = state.currentSpace;
+  if (!historySelect.value || !window.confirm('Restore these files to the live Space? Your draft will stay as it is.')) return;
+  restoreButton.disabled = true;
+  try {
+    pendingVerification = await apiFetch(releaseEndpoint(space), {
+      method: 'POST',
+      body: JSON.stringify({ releaseId: historySelect.value })
+    });
+    const { space: latest } = await apiFetch(releaseEndpoint(space).replace(/\/releases$/, ''));
+    state.currentSpace = latest;
+    updateStudioHeaderBadges(latest);
+    renderPublishReview();
+    await loadReleaseHistory(latest);
+    await verifyRelease();
+  } catch (error) {
+    publishStatus.textContent = error.message;
+  } finally {
+    restoreButton.disabled = false;
+  }
+});
 
 function getPublishOptions() {
   return {
@@ -1742,7 +1819,11 @@ document.getElementById('launchSpaceBtn').addEventListener('click', async () => 
     state.currentSpace.externalHost?.liveUrl || '';
   document.getElementById('publishError').hidden = true;
   renderPublishReview();
+  publishStatus.textContent = '';
+  verifyButton.hidden = true;
+  pendingVerification = null;
   deployDialog.showModal();
+  loadReleaseHistory(space);
 });
 
 document.getElementById('goToBuyHostingFromModalBtn')?.addEventListener('click', () => {
@@ -1763,6 +1844,7 @@ document.getElementById('deployHostingForm').addEventListener('submit', async (e
   const error = document.getElementById('publishError');
   error.hidden = true;
   confirmButton.disabled = true;
+  publishStatus.textContent = 'Publishing…';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
@@ -1776,9 +1858,11 @@ document.getElementById('deployHostingForm').addEventListener('submit', async (e
     state.currentSpace = data.space;
     state.isDirty = false;
     document.getElementById('dirtyIndicator').textContent = `✓ Deployed to ${data.externalHost.providerLabel}`;
-    document.getElementById('deployHostingDialog').close();
     updateStudioHeaderBadges(data.space);
-    showToast(data.message);
+    renderPublishReview();
+    pendingVerification = { liveUrl: data.externalHost.liveUrl, releaseId: data.releaseId };
+    await loadReleaseHistory(data.space);
+    await verifyRelease();
   } catch (err) {
     error.textContent = err.message;
     error.hidden = false;
