@@ -766,6 +766,8 @@ async function openSpaceStudio(username, slug) {
         ? `Last cron run: ${new Date(space.cronLastRunAt).toLocaleString()} (${space.cronLastStatus || 'ok'})`
         : 'No cron execution recorded yet.';
     }
+    const maintChk = document.getElementById('settingsMaintenanceCheckbox');
+    if (maintChk) maintChk.checked = Boolean(space.maintenanceMode);
 
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
@@ -969,6 +971,18 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
     showToast('Added SpaceSearch.query(q) SDK to script.js!');
+    return;
+  }
+
+  if (stack === 'space_table_db') {
+    const tableSdk = `\n// --- SpaceHub Structured Table DB SDK (/live/:slug/db/:table) ---\nfunction getSpaceTable(tableName = 'items') {\n  const base = '/live/${state.currentSpace.slug}/db/' + encodeURIComponent(tableName);\n  return {\n    async list(where = '', sort = '') {\n      const q = new URLSearchParams();\n      if (where) q.set('where', where);\n      if (sort) q.set('sort', sort);\n      const res = await fetch(base + (q.toString() ? '?' + q.toString() : ''));\n      const json = await res.json();\n      return json.rows || [];\n    },\n    async insert(row) {\n      const res = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row) });\n      return res.json();\n    },\n    async update(id, patch) {\n      const res = await fetch(base + '?id=' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });\n      return res.json();\n    },\n    async remove(id) {\n      const res = await fetch(base + '?id=' + encodeURIComponent(id), { method: 'DELETE' });\n      return res.json();\n    }\n  };\n}\nwindow.SpaceDB = { table: getSpaceTable };\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + tableSdk;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    updateLiveStagingPreview();
+    showToast('Added SpaceDB.table(name) SDK to script.js!');
     return;
   }
 
@@ -1901,6 +1915,7 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
   const collaborators = document.getElementById('settingsCollaboratorsInput')?.value.trim() || '';
   const cronSchedule = document.getElementById('settingsCronScheduleSelect')?.value || '';
   const cronWebhookUrl = document.getElementById('settingsCronUrlInput')?.value.trim() || '';
+  const maintenanceMode = Boolean(document.getElementById('settingsMaintenanceCheckbox')?.checked);
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
@@ -1920,6 +1935,7 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
         collaborators,
         cronSchedule,
         cronWebhookUrl,
+        maintenanceMode,
         secrets
       })
     });
@@ -1952,6 +1968,176 @@ document.getElementById('runCronNowBtn')?.addEventListener('click', async () => 
     showToast(`Cron task executed (${data.cronLastStatus})!`);
   } catch (err) {
     showToast(err.message);
+  }
+});
+
+// Full Space State Backup & Restore
+document.getElementById('downloadSpaceBackupBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/backup`);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${slug}.spacehub.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast(`Downloaded ${slug}.spacehub.json backup!`);
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+document.getElementById('restoreSpaceBackupBtn')?.addEventListener('click', () => {
+  document.getElementById('restoreBackupFileInput')?.click();
+});
+
+document.getElementById('restoreBackupFileInput')?.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file || !state.currentSpace || !state.currentSpace.isOwner) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const { ownerUsername, slug } = state.currentSpace;
+    const res = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ backup: parsed })
+    });
+    showToast(res.message || 'Backup restored!');
+    await openSpaceStudio(ownerUsername, slug);
+  } catch (err) {
+    showToast(`Restore failed: ${err.message}`);
+  }
+});
+
+// In-Studio Command Palette (Ctrl+K / ⌘K)
+function getAvailablePaletteCommands() {
+  const cmds = [
+    {
+      label: 'Explore Public Spaces',
+      category: 'Navigation',
+      run: () => document.getElementById('tabExplore')?.click()
+    },
+    {
+      label: 'Create a New Space',
+      category: 'Action',
+      run: () => document.getElementById('newSpaceBtn')?.click()
+    },
+    {
+      label: 'Pricing & $1/mo Hosting Slots',
+      category: 'Navigation',
+      run: () => document.getElementById('tabHosting')?.click()
+    },
+    {
+      label: 'Coding Agent API & Personal Access Tokens',
+      category: 'Navigation',
+      run: () => document.getElementById('tabAgents')?.click()
+    }
+  ];
+
+  if (state.currentSpace) {
+    Object.keys(state.workingFiles || {}).forEach((fname) => {
+      cmds.push({
+        label: `Open File: ${fname}`,
+        category: `Workspace (${state.currentSpace.slug})`,
+        run: () => {
+          setStudioTab('workspace');
+          state.activeFile = fname;
+          renderFileTabs();
+          document.getElementById('codeEditorTextarea').value = state.workingFiles[fname] || '';
+        }
+      });
+    });
+    cmds.push(
+      {
+        label: 'Run SEO, Mobile & Accessibility Audit',
+        category: `Studio (${state.currentSpace.slug})`,
+        run: () => document.getElementById('auditSpaceBtn')?.click()
+      },
+      {
+        label: 'Inspect Staging vs. Live Code Diff',
+        category: `Studio (${state.currentSpace.slug})`,
+        run: () => document.getElementById('diffSpaceBtn')?.click()
+      },
+      {
+        label: 'Toggle Visual Inline Text Editor',
+        category: `Studio (${state.currentSpace.slug})`,
+        run: () => document.getElementById('visualEditSpaceBtn')?.click()
+      },
+      {
+        label: 'Open Space Settings',
+        category: `Studio (${state.currentSpace.slug})`,
+        run: () => setStudioTab('settings')
+      }
+    );
+  }
+
+  (state.spaces || []).slice(0, 12).forEach((s) => {
+    cmds.push({
+      label: `Jump to Space: ${s.title} (@${s.ownerUsername}/${s.slug})`,
+      category: 'Spaces',
+      run: () => openSpaceStudio(s.ownerUsername, s.slug)
+    });
+  });
+
+  return cmds;
+}
+
+function renderCommandPalette(filterText = '') {
+  const listEl = document.getElementById('commandPaletteList');
+  if (!listEl) return;
+  const q = String(filterText || '').trim().toLowerCase();
+  const commands = getAvailablePaletteCommands().filter(
+    (c) => !q || c.label.toLowerCase().includes(q) || c.category.toLowerCase().includes(q)
+  );
+  if (!commands.length) {
+    listEl.innerHTML = `<div class="section-sub" style="padding:0.5rem;">No matching commands found.</div>`;
+    return;
+  }
+  listEl.innerHTML = commands
+    .map(
+      (c, idx) => `
+    <div class="pat-key-item" style="cursor:pointer;" data-cmd-idx="${idx}">
+      <div>
+        <strong>${escapeHtml(c.label)}</strong>
+        <div class="section-sub">${escapeHtml(c.category)}</div>
+      </div>
+      <span class="badge-pill">Run ↵</span>
+    </div>
+  `
+    )
+    .join('');
+
+  listEl.querySelectorAll('[data-cmd-idx]').forEach((item) => {
+    item.addEventListener('click', () => {
+      const idx = Number(item.getAttribute('data-cmd-idx'));
+      const chosen = commands[idx];
+      document.getElementById('commandPaletteDialog')?.close();
+      if (chosen) chosen.run();
+    });
+  });
+}
+
+function openCommandPalette() {
+  const dlg = document.getElementById('commandPaletteDialog');
+  const input = document.getElementById('commandPaletteInput');
+  if (!dlg) return;
+  if (input) input.value = '';
+  renderCommandPalette('');
+  dlg.showModal();
+  input?.focus();
+}
+
+document.getElementById('openCommandPaletteBtn')?.addEventListener('click', openCommandPalette);
+document.getElementById('commandPaletteInput')?.addEventListener('input', (e) => {
+  renderCommandPalette(e.target.value);
+});
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    openCommandPalette();
   }
 });
 

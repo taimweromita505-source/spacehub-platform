@@ -742,6 +742,31 @@ function searchSpaceContent(space, rawQuery) {
   return results.slice(0, 25);
 }
 
+function generateSpaceFeedItems(space, origin = '') {
+  const rawPosts =
+    (space.dbTables && Array.isArray(space.dbTables.posts) ? space.dbTables.posts : null) ||
+    (space.appStorage && Array.isArray(space.appStorage.posts) ? space.appStorage.posts : null) ||
+    [];
+  if (rawPosts.length) {
+    return rawPosts.slice(0, 25).map((p, idx) => ({
+      id: String(p.id || `post_${idx + 1}`),
+      title: String(p.title || `Update #${idx + 1}`),
+      summary: String(p.summary || p.content || p.text || ''),
+      url: String(p.url || `${origin}/live/${space.slug}`),
+      date_published: p.createdAt || space.updatedAt || new Date().toISOString()
+    }));
+  }
+  return [
+    {
+      id: `${space.slug}_launch`,
+      title: `${space.title} — Live on SpaceHub`,
+      summary: space.description || `Launched ${space.title} on SpaceHub.`,
+      url: `${origin}/live/${space.slug}`,
+      date_published: space.publishedAt || space.updatedAt || new Date().toISOString()
+    }
+  ];
+}
+
 function formatSpaceSummary(space, user) {
   const isOwner = canEditSpace(space, user);
   const isPrimaryOwner = Boolean(user && space.ownerId === user.id);
@@ -751,6 +776,7 @@ function formatSpaceSummary(space, user) {
   const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
   const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
   const assetsObj = space.assets && typeof space.assets === 'object' ? space.assets : {};
+  const dbTablesObj = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
   return {
     id: space.id,
     ownerId: space.ownerId,
@@ -763,12 +789,14 @@ function formatSpaceSummary(space, user) {
     colorTo: space.colorTo,
     sdk: space.sdk,
     visibility: space.visibility,
+    maintenanceMode: Boolean(space.maintenanceMode),
     appPlatform: space.appPlatform || 'both',
     appOrientation: space.appOrientation || 'any',
     appIconText: space.appIconText || '',
     appThemeColor: space.appThemeColor || '#09090b',
     customDomain: space.customDomain || '',
     collaborators: collabs,
+    dbTableNames: Object.keys(dbTablesObj),
     cronSchedule: isOwner ? (space.cronSchedule || '') : undefined,
     cronWebhookUrl: isOwner ? (space.cronWebhookUrl || '') : undefined,
     cronLastRunAt: isOwner ? (space.cronLastRunAt || null) : undefined,
@@ -1825,6 +1853,138 @@ export default {
       }
     }
 
+    if (method === 'OPTIONS' && (pathname.startsWith('/live/') || pathname.startsWith('/s/'))) {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+        }
+      });
+    }
+
+    // 1b-7. Wave 8: Structured Table DB API (/live/:slug/db/:table) & RSS/JSON Feeds (/rss.xml, /feed.json)
+    const tableDbMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/db\/([a-zA-Z0-9_-]+)\/?$/i);
+    if (tableDbMatch) {
+      const slug = decodeURIComponent(tableDbMatch[1]).toLowerCase();
+      const tableName = decodeURIComponent(tableDbMatch[2]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.dbTables = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
+      space.dbTables[tableName] = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+      let rows = space.dbTables[tableName];
+
+      if (method === 'GET') {
+        const rowId = url.searchParams.get('id');
+        if (rowId) {
+          const found = rows.find((r) => String(r.id) === String(rowId)) || null;
+          return jsonResponse({ ok: true, table: tableName, row: found }, 200, { 'Access-Control-Allow-Origin': '*' });
+        }
+        let filtered = [...rows];
+        const where = url.searchParams.get('where') || '';
+        if (where.includes(':')) {
+          const [fk, fv] = where.split(':');
+          filtered = filtered.filter((r) => String(r[fk] ?? '').toLowerCase() === String(fv).toLowerCase());
+        }
+        const sort = url.searchParams.get('sort') || '';
+        if (sort) {
+          const [sk, sdir] = sort.split(':');
+          const mult = String(sdir).toLowerCase() === 'desc' ? -1 : 1;
+          filtered.sort((a, b) => (a[sk] > b[sk] ? mult : a[sk] < b[sk] ? -mult : 0));
+        }
+        return jsonResponse(
+          { ok: true, table: tableName, count: filtered.length, rows: filtered },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const now = new Date().toISOString();
+        const newRow = {
+          ...payload,
+          id: String(payload.id || `row_${randomHex(4)}`),
+          createdAt: payload.createdAt || now,
+          updatedAt: now
+        };
+        rows.push(newRow);
+        if (rows.length > 500) space.dbTables[tableName] = rows.slice(-500);
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, table: tableName, row: newRow, count: space.dbTables[tableName].length },
+          201,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'PATCH' || method === 'PUT') {
+        const payload = await request.json().catch(() => ({}));
+        const targetId = String(url.searchParams.get('id') || payload.id || '');
+        const idx = rows.findIndex((r) => String(r.id) === targetId);
+        if (idx === -1) return jsonResponse({ error: 'Row not found.' }, 404);
+        rows[idx] = { ...rows[idx], ...payload, id: rows[idx].id, updatedAt: new Date().toISOString() };
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, table: tableName, row: rows[idx] },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'DELETE') {
+        const targetId = url.searchParams.get('id');
+        if (targetId) {
+          space.dbTables[tableName] = rows.filter((r) => String(r.id) !== String(targetId));
+        } else {
+          space.dbTables[tableName] = [];
+        }
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, table: tableName, count: space.dbTables[tableName].length },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+    }
+
+    const feedMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(rss\.xml|feed\.json)\/?$/i);
+    if (feedMatch && method === 'GET') {
+      const slug = decodeURIComponent(feedMatch[1]).toLowerCase();
+      const feedKind = feedMatch[2].toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return new Response('Not found', { status: 404 });
+      const items = generateSpaceFeedItems(space, url.origin);
+      if (feedKind === 'feed.json') {
+        return jsonResponse({
+          version: 'https://jsonfeed.org/version/1.1',
+          title: space.title,
+          home_page_url: `${url.origin}/live/${space.slug}`,
+          feed_url: `${url.origin}/live/${space.slug}/feed.json`,
+          description: space.description,
+          items: items.map((it) => ({
+            id: it.id,
+            title: it.title,
+            content_text: it.summary,
+            url: it.url,
+            date_published: it.date_published
+          }))
+        });
+      }
+      const rssItems = items
+        .map(
+          (it) =>
+            `    <item>\n      <guid isPermaLink="false">${it.id.replace(/[<>&]/g, '')}</guid>\n      <title>${it.title.replace(/[<>&]/g, '')}</title>\n      <link>${it.url}</link>\n      <description>${it.summary.replace(/[<>&]/g, '')}</description>\n      <pubDate>${new Date(it.date_published).toUTCString()}</pubDate>\n    </item>`
+        )
+        .join('\n');
+      const rssXml = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n  <channel>\n    <title>${String(space.title).replace(/[<>&]/g, '')}</title>\n    <link>${url.origin}/live/${space.slug}</link>\n    <description>${String(space.description || space.title).replace(/[<>&]/g, '')}</description>\n${rssItems}\n  </channel>\n</rss>`;
+      return new Response(rssXml, {
+        status: 200,
+        headers: { 'Content-Type': 'application/rss+xml; charset=utf-8' }
+      });
+    }
+
     // 1c. Short Clean Live URL Route (/live/:slug or /s/:slug) & Full Route (/spaces/:username/:slug/live)
     const shortLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/?$/i);
     const liveMatch = pathname.match(/^\/spaces\/([^/]+)\/([^/]+)\/live$/i);
@@ -1848,6 +2008,12 @@ export default {
         return new Response(
           `<!DOCTYPE html><html><body style="background:#09090b;color:#fafafa;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;padding:2rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;max-width:420px"><h1 style="font-size:1.25rem;margin-bottom:0.5rem">404 — Private or Unlaunched Space</h1><p style="color:#a1a1aa;font-size:0.9rem;margin-bottom:1.25rem">This Space is set to private or is currently in staging.</p><a href="/" style="color:#818cf8;text-decoration:none;font-weight:600">← Return to SpaceHub</a></div></body></html>`,
           { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+        );
+      }
+      if (space.maintenanceMode && !canAccess && mode !== 'draft') {
+        return new Response(
+          `<!DOCTYPE html><html><body style="background:#09090b;color:#fafafa;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;padding:2rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;max-width:420px"><h1 style="font-size:1.25rem;margin-bottom:0.5rem">503 — Under Scheduled Maintenance</h1><p style="color:#a1a1aa;font-size:0.9rem;margin-bottom:1.25rem">${String(space.title).replace(/[<>&]/g, '')} is currently undergoing scheduled maintenance. Please check back shortly.</p></div></body></html>`,
+          { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
         );
       }
       if (mode !== 'draft') {
@@ -2368,6 +2534,9 @@ export default {
           if (body.cronWebhookUrl !== undefined) {
             space.cronWebhookUrl = String(body.cronWebhookUrl || '').trim().slice(0, 300);
           }
+          if (body.maintenanceMode !== undefined) {
+            space.maintenanceMode = Boolean(body.maintenanceMode);
+          }
           if (body.secrets !== undefined) {
             space.secrets = normalizeSpaceSecrets(body.secrets);
           }
@@ -2426,6 +2595,75 @@ export default {
             await saveDb(env, db);
             return jsonResponse({ ok: true, submissions: space.submissions });
           }
+        }
+
+        if (action === 'backup' && method === 'GET') {
+          if (!user || !space || !canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          return jsonResponse({
+            ok: true,
+            backupVersion: '1.0',
+            exportedAt: new Date().toISOString(),
+            space: {
+              slug: space.slug,
+              title: space.title,
+              description: space.description,
+              visibility: space.visibility,
+              appPlatform: space.appPlatform || 'both',
+              appOrientation: space.appOrientation || 'any',
+              appIconText: space.appIconText || '',
+              appThemeColor: space.appThemeColor || '#09090b',
+              draftFiles: space.draftFiles || {},
+              publishedFiles: space.publishedFiles || null,
+              appStorage: space.appStorage || {},
+              dbTables: space.dbTables || {},
+              assets: space.assets || {},
+              submissions: space.submissions || [],
+              featureFlags: space.featureFlags || {}
+            }
+          });
+        }
+
+        if (action === 'restore' && method === 'POST') {
+          if (!user || !space || !canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          const src = body.backup?.space || body.space || body;
+          pushSpaceSnapshot(space, 'Before backup restore');
+          if (src.title) space.title = String(src.title).trim();
+          if (src.description !== undefined) space.description = String(src.description).trim();
+          if (src.draftFiles && typeof src.draftFiles === 'object') {
+            space.draftFiles = { ...src.draftFiles };
+          }
+          if (src.appStorage && typeof src.appStorage === 'object') {
+            space.appStorage = { ...src.appStorage };
+          }
+          if (src.dbTables && typeof src.dbTables === 'object') {
+            space.dbTables = { ...src.dbTables };
+          }
+          if (src.assets && typeof src.assets === 'object') {
+            space.assets = { ...src.assets };
+          }
+          if (Array.isArray(src.submissions)) {
+            space.submissions = src.submissions.slice(0, 200);
+          }
+          if (src.featureFlags && typeof src.featureFlags === 'object') {
+            space.featureFlags = { ...src.featureFlags };
+          }
+          space.hasUnpublishedChanges = true;
+          space.updatedAt = new Date().toISOString();
+          await saveDb(env, db);
+          return jsonResponse({
+            ok: true,
+            message: 'Restored Space state from backup!',
+            space: {
+              ...formatSpaceSummary(space, user),
+              draftFiles: space.draftFiles,
+              publishedFiles: space.publishedFiles,
+              agentHistory: space.agentHistory || []
+            }
+          });
         }
 
         if (action === 'cron' && method === 'POST') {

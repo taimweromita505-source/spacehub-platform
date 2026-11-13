@@ -878,6 +878,31 @@ function searchSpaceContent(space, rawQuery) {
   return results.slice(0, 25);
 }
 
+function generateSpaceFeedItems(space, origin = '') {
+  const rawPosts =
+    (space.dbTables && Array.isArray(space.dbTables.posts) ? space.dbTables.posts : null) ||
+    (space.appStorage && Array.isArray(space.appStorage.posts) ? space.appStorage.posts : null) ||
+    [];
+  if (rawPosts.length) {
+    return rawPosts.slice(0, 25).map((p, idx) => ({
+      id: String(p.id || `post_${idx + 1}`),
+      title: String(p.title || `Update #${idx + 1}`),
+      summary: String(p.summary || p.content || p.text || ''),
+      url: String(p.url || `${origin}/live/${space.slug}`),
+      date_published: p.createdAt || space.updatedAt || new Date().toISOString()
+    }));
+  }
+  return [
+    {
+      id: `${space.slug}_launch`,
+      title: `${space.title} — Live on SpaceHub`,
+      summary: space.description || `Launched ${space.title} on SpaceHub.`,
+      url: `${origin}/live/${space.slug}`,
+      date_published: space.publishedAt || space.updatedAt || new Date().toISOString()
+    }
+  ];
+}
+
 function formatSpaceSummary(space, user) {
   const isOwner = canEditSpace(space, user);
   const isPrimaryOwner = Boolean(user && space.ownerId === user.id);
@@ -887,6 +912,7 @@ function formatSpaceSummary(space, user) {
   const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
   const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
   const assetsObj = space.assets && typeof space.assets === 'object' ? space.assets : {};
+  const dbTablesObj = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
 
   return {
     id: space.id,
@@ -900,12 +926,14 @@ function formatSpaceSummary(space, user) {
     colorTo: space.colorTo,
     sdk: space.sdk,
     visibility: space.visibility,
+    maintenanceMode: Boolean(space.maintenanceMode),
     appPlatform: space.appPlatform || 'both',
     appOrientation: space.appOrientation || 'any',
     appIconText: space.appIconText || '',
     appThemeColor: space.appThemeColor || '#09090b',
     customDomain: space.customDomain || '',
     collaborators: collabs,
+    dbTableNames: Object.keys(dbTablesObj),
     cronSchedule: isOwner ? (space.cronSchedule || '') : undefined,
     cronWebhookUrl: isOwner ? (space.cronWebhookUrl || '') : undefined,
     cronLastRunAt: isOwner ? (space.cronLastRunAt || null) : undefined,
@@ -2319,6 +2347,7 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
     collaborators,
     cronSchedule,
     cronWebhookUrl,
+    maintenanceMode,
     secrets,
     appStorage,
     colorFrom,
@@ -2363,6 +2392,9 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
   }
   if (cronWebhookUrl !== undefined) {
     space.cronWebhookUrl = String(cronWebhookUrl || '').trim().slice(0, 300);
+  }
+  if (maintenanceMode !== undefined) {
+    space.maintenanceMode = Boolean(maintenanceMode);
   }
   if (secrets !== undefined) {
     space.secrets = normalizeSpaceSecrets(secrets);
@@ -2711,6 +2743,93 @@ app.post('/api/spaces/:username/:slug/like', (req, res) => {
   saveDb(db);
 
   res.json({ likes: space.likes, likedByMe: space.likedBy.includes(user.id) });
+});
+
+// Full Space State Backup & 1-Click Restore
+app.get('/api/spaces/:username/:slug/backup', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the owner or collaborators can export a full backup.' });
+  }
+  res.json({
+    ok: true,
+    backupVersion: '1.0',
+    exportedAt: new Date().toISOString(),
+    space: {
+      slug: space.slug,
+      title: space.title,
+      description: space.description,
+      visibility: space.visibility,
+      appPlatform: space.appPlatform || 'both',
+      appOrientation: space.appOrientation || 'any',
+      appIconText: space.appIconText || '',
+      appThemeColor: space.appThemeColor || '#09090b',
+      draftFiles: space.draftFiles || {},
+      publishedFiles: space.publishedFiles || null,
+      appStorage: space.appStorage || {},
+      dbTables: space.dbTables || {},
+      assets: space.assets || {},
+      submissions: space.submissions || [],
+      featureFlags: space.featureFlags || {}
+    }
+  });
+});
+
+app.post('/api/spaces/:username/:slug/restore', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the owner or collaborators can restore a backup.' });
+  }
+  const body = req.body || {};
+  const src = body.backup?.space || body.space || body;
+  pushSpaceSnapshot(space, 'Before backup restore');
+  if (src.title) space.title = String(src.title).trim();
+  if (src.description !== undefined) space.description = String(src.description).trim();
+  if (src.draftFiles && typeof src.draftFiles === 'object') {
+    space.draftFiles = { ...src.draftFiles };
+  }
+  if (src.appStorage && typeof src.appStorage === 'object') {
+    space.appStorage = { ...src.appStorage };
+  }
+  if (src.dbTables && typeof src.dbTables === 'object') {
+    space.dbTables = { ...src.dbTables };
+  }
+  if (src.assets && typeof src.assets === 'object') {
+    space.assets = { ...src.assets };
+  }
+  if (Array.isArray(src.submissions)) {
+    space.submissions = src.submissions.slice(0, 200);
+  }
+  if (src.featureFlags && typeof src.featureFlags === 'object') {
+    space.featureFlags = { ...src.featureFlags };
+  }
+  space.hasUnpublishedChanges = true;
+  space.updatedAt = new Date().toISOString();
+  saveDb(db);
+  res.json({
+    ok: true,
+    message: 'Restored Space state from backup!',
+    space: {
+      ...formatSpaceSummary(space, user),
+      draftFiles: space.draftFiles,
+      publishedFiles: space.publishedFiles,
+      agentHistory: space.agentHistory || []
+    }
+  });
 });
 
 // Run Scheduled Cron / Automation Task
@@ -3749,6 +3868,137 @@ app.post(['/live/:slug/notify', '/s/:slug/notify'], async (req, res) => {
   res.status(201).json({ ok: true, notification: notifRecord, count: space.notifications.length });
 });
 
+// Wave 8: Structured Table DB API (/live/:slug/db/:table) & RSS/JSON Feeds (/rss.xml, /feed.json)
+app.get(['/live/:slug/db/:table', '/s/:slug/db/:table'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const tableName = req.params.table.toLowerCase();
+  const rows = (space.dbTables && Array.isArray(space.dbTables[tableName])) ? space.dbTables[tableName] : [];
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  const rowId = req.query.id;
+  if (rowId) {
+    const found = rows.find((r) => String(r.id) === String(rowId)) || null;
+    return res.json({ ok: true, table: tableName, row: found });
+  }
+  let filtered = [...rows];
+  const where = String(req.query.where || '');
+  if (where.includes(':')) {
+    const [fk, fv] = where.split(':');
+    filtered = filtered.filter((r) => String(r[fk] ?? '').toLowerCase() === String(fv).toLowerCase());
+  }
+  const sort = String(req.query.sort || '');
+  if (sort) {
+    const [sk, sdir] = sort.split(':');
+    const mult = String(sdir).toLowerCase() === 'desc' ? -1 : 1;
+    filtered.sort((a, b) => (a[sk] > b[sk] ? mult : a[sk] < b[sk] ? -mult : 0));
+  }
+  res.json({ ok: true, table: tableName, count: filtered.length, rows: filtered });
+});
+
+app.post(['/live/:slug/db/:table', '/s/:slug/db/:table'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const tableName = req.params.table.toLowerCase();
+  space.dbTables = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
+  space.dbTables[tableName] = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+
+  const payload = req.body || {};
+  const now = new Date().toISOString();
+  const newRow = {
+    ...payload,
+    id: String(payload.id || `row_${crypto.randomBytes(4).toString('hex')}`),
+    createdAt: payload.createdAt || now,
+    updatedAt: now
+  };
+  space.dbTables[tableName].push(newRow);
+  if (space.dbTables[tableName].length > 500) {
+    space.dbTables[tableName] = space.dbTables[tableName].slice(-500);
+  }
+  saveDb(db);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.status(201).json({
+    ok: true,
+    table: tableName,
+    row: newRow,
+    count: space.dbTables[tableName].length
+  });
+});
+
+app.patch(['/live/:slug/db/:table', '/s/:slug/db/:table'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const tableName = req.params.table.toLowerCase();
+  const rows = (space.dbTables && Array.isArray(space.dbTables[tableName])) ? space.dbTables[tableName] : [];
+  const payload = req.body || {};
+  const targetId = String(req.query.id || payload.id || '');
+  const idx = rows.findIndex((r) => String(r.id) === targetId);
+  if (idx === -1) return res.status(404).json({ error: 'Row not found.' });
+  rows[idx] = { ...rows[idx], ...payload, id: rows[idx].id, updatedAt: new Date().toISOString() };
+  saveDb(db);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json({ ok: true, table: tableName, row: rows[idx] });
+});
+
+app.delete(['/live/:slug/db/:table', '/s/:slug/db/:table'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const tableName = req.params.table.toLowerCase();
+  space.dbTables = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
+  const rows = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+  const targetId = req.query.id;
+  if (targetId) {
+    space.dbTables[tableName] = rows.filter((r) => String(r.id) !== String(targetId));
+  } else {
+    space.dbTables[tableName] = [];
+  }
+  saveDb(db);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json({ ok: true, table: tableName, count: space.dbTables[tableName].length });
+});
+
+app.get(['/live/:slug/feed.json', '/s/:slug/feed.json'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const items = generateSpaceFeedItems(space, origin);
+  res.json({
+    version: 'https://jsonfeed.org/version/1.1',
+    title: space.title,
+    home_page_url: `${origin}/live/${space.slug}`,
+    feed_url: `${origin}/live/${space.slug}/feed.json`,
+    description: space.description,
+    items: items.map((it) => ({
+      id: it.id,
+      title: it.title,
+      content_text: it.summary,
+      url: it.url,
+      date_published: it.date_published
+    }))
+  });
+});
+
+app.get(['/live/:slug/rss.xml', '/s/:slug/rss.xml'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).send('Not found');
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const items = generateSpaceFeedItems(space, origin);
+  const rssItems = items
+    .map(
+      (it) =>
+        `    <item>\n      <guid isPermaLink="false">${it.id.replace(/[<>&]/g, '')}</guid>\n      <title>${it.title.replace(/[<>&]/g, '')}</title>\n      <link>${it.url}</link>\n      <description>${it.summary.replace(/[<>&]/g, '')}</description>\n      <pubDate>${new Date(it.date_published).toUTCString()}</pubDate>\n    </item>`
+    )
+    .join('\n');
+  res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n  <channel>\n    <title>${String(space.title).replace(/[<>&]/g, '')}</title>\n    <link>${origin}/live/${space.slug}</link>\n    <description>${String(space.description || space.title).replace(/[<>&]/g, '')}</description>\n${rssItems}\n  </channel>\n</rss>`);
+});
+
 app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) => {
   const db = loadDb();
   const user = getCurrentUser(req, db);
@@ -3790,6 +4040,11 @@ app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) 
   </div>
 </body>
 </html>`);
+    return;
+  }
+
+  if (space.maintenanceMode && !canAccess && mode !== 'draft') {
+    res.status(503).send(`<!DOCTYPE html><html><body style="background:#09090b;color:#fafafa;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;padding:2rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;max-width:420px"><h1 style="font-size:1.25rem;margin-bottom:0.5rem">503 — Under Scheduled Maintenance</h1><p style="color:#a1a1aa;font-size:0.9rem;margin-bottom:1.25rem">${String(space.title).replace(/[<>&]/g, '')} is currently undergoing scheduled maintenance. Please check back shortly.</p></div></body></html>`);
     return;
   }
 

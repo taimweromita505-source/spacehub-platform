@@ -89,6 +89,9 @@
       </div>
 
       <div class="user-bar">
+        <button type="button" class="btn btn-ghost btn-sm" id="openCommandPaletteBtn" title="Quick Command Palette (Ctrl+K / ⌘K)">
+          ⌘K
+        </button>
         <button type="button" class="btn btn-outline btn-sm" id="installSpaceHubBtn">
           Install App
         </button>
@@ -535,6 +538,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                   <option value="live_room">Live Chat / Multiplayer Room SDK</option>
                   <option value="space_assets">Media &amp; File Upload SDK (/assets)</option>
                   <option value="space_search">Instant Full-Text Search SDK (/search)</option>
+                  <option value="space_table_db">Structured Table DB SDK (/db/:table)</option>
                   <option value="edge_fn">Serverless Edge Function SDK (/fn)</option>
                   <option value="space_analytics">Custom Analytics &amp; Funnel SDK (/events)</option>
                   <option value="space_notify">Email &amp; Alert Notification SDK (/notify)</option>
@@ -934,6 +938,22 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             </div>
           </div>
           <div id="cronLastRunStatus" class="section-sub" style="margin-block-start: -0.35rem; margin-block-end: 0.75rem;"></div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.85rem 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-elevated); margin-block-end: 1rem; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.86rem; cursor: pointer;">
+              <input type="checkbox" id="settingsMaintenanceCheckbox" name="maintenanceMode" />
+              <span><strong>Maintenance Mode</strong> (show 503 Maintenance screen to public visitors while you test live)</span>
+            </label>
+            <div style="display: flex; gap: 0.45rem; align-items: center;">
+              <button type="button" class="btn btn-outline btn-xs" id="downloadSpaceBackupBtn">
+                Export Full Backup (.json)
+              </button>
+              <button type="button" class="btn btn-outline btn-xs" id="restoreSpaceBackupBtn">
+                Restore Backup
+              </button>
+              <input type="file" id="restoreBackupFileInput" accept=".json" hidden />
+            </div>
+          </div>
 
           <div class="settings-actions">
             <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
@@ -1753,6 +1773,29 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
       <div class="dialog-footer" style="padding: 0;">
         <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="spaceDiffDialog">Close</button>
       </div>
+    </div>
+  </dialog>
+
+  <!-- DIALOG 11: COMMAND PALETTE (CTRL+K / ⌘K) -->
+  <dialog id="commandPaletteDialog" closedby="any" aria-labelledby="commandPaletteDialogTitle">
+    <div style="padding: 1.25rem;">
+      <div class="dialog-header" style="padding: 0 0 0.75rem 0;">
+        <h2 id="commandPaletteDialogTitle" style="font-size: 0.95rem;">Quick Command Palette (⌘K)</h2>
+        <button type="button" class="btn-icon" data-close-dialog="commandPaletteDialog" aria-label="Close dialog">✕</button>
+      </div>
+      <div class="field" style="margin-block-end: 0.75rem;">
+        <label for="commandPaletteInput" class="visually-hidden">Search commands or Spaces</label>
+        <input
+          type="search"
+          id="commandPaletteInput"
+          placeholder="Type a command, file name, or Space title..."
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+        />
+      </div>
+      <div id="commandPaletteList" class="pat-keys-list" style="max-height: 320px; overflow-y: auto;"></div>
     </div>
   </dialog>
 

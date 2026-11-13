@@ -513,6 +513,66 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(cfgUpdate.status, 200);
     assert.strictEqual(cfgUpdate.body.config.flags.betaBanner, true);
 
+    console.log('17. Testing Wave 8: Structured Table DB (/db/:table), Full Space Backup/Restore, Maintenance Mode & RSS/JSON Feeds...');
+    const rowInsert = await request(server, 'POST', `/live/${space.slug}/db/posts`, {
+      title: 'SpaceHub Wave 8 Launch',
+      summary: 'Structured tables and feeds are live!',
+      status: 'active'
+    });
+    assert.strictEqual(rowInsert.status, 201);
+    const insertedId = rowInsert.body.row.id;
+
+    const rowQuery = await request(server, 'GET', `/live/${space.slug}/db/posts?where=status:active`);
+    assert.strictEqual(rowQuery.status, 200);
+    assert.strictEqual(rowQuery.body.count, 1);
+
+    const rowPatch = await request(server, 'PATCH', `/live/${space.slug}/db/posts?id=${insertedId}`, {
+      title: 'SpaceHub Wave 8 Updated'
+    });
+    assert.strictEqual(rowPatch.status, 200);
+    assert.strictEqual(rowPatch.body.row.title, 'SpaceHub Wave 8 Updated');
+
+    const jsonFeed = await request(server, 'GET', `/live/${space.slug}/feed.json`);
+    assert.strictEqual(jsonFeed.status, 200);
+    assert.strictEqual(jsonFeed.body.items[0].title, 'SpaceHub Wave 8 Updated');
+
+    const rssFeed = await request(server, 'GET', `/live/${space.slug}/rss.xml`);
+    assert.strictEqual(rssFeed.status, 200);
+    assert.ok(String(rssFeed.raw).includes('<rss version="2.0">'));
+
+    const backupRes = await request(
+      server,
+      'GET',
+      `/api/spaces/${uniqueUser}/${space.slug}/backup`,
+      null,
+      token
+    );
+    assert.strictEqual(backupRes.status, 200);
+    assert.strictEqual(backupRes.body.ok, true);
+    assert.strictEqual(backupRes.body.space.dbTables.posts.length, 1);
+
+    const restoreRes = await request(
+      server,
+      'POST',
+      `/api/spaces/${uniqueUser}/${space.slug}/restore`,
+      { backup: backupRes.body },
+      token
+    );
+    assert.strictEqual(restoreRes.status, 200);
+    assert.strictEqual(restoreRes.body.ok, true);
+
+    await request(
+      server,
+      'PUT',
+      `/api/spaces/${uniqueUser}/${space.slug}`,
+      { maintenanceMode: true },
+      token
+    );
+    const maintAnon = await request(server, 'GET', `/live/${space.slug}`);
+    assert.strictEqual(maintAnon.status, 503);
+    const maintOwner = await request(server, 'GET', `/live/${space.slug}`, null, token);
+    assert.strictEqual(maintOwner.status, 200);
+
     console.log('ALL TESTS PASSED!');
   } finally {
     server.close();
