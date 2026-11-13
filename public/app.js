@@ -741,6 +741,16 @@ async function openSpaceStudio(username, slug) {
         ? space.collaborators.join(', ')
         : '';
     }
+    const cronSchedSelect = document.getElementById('settingsCronScheduleSelect');
+    if (cronSchedSelect) cronSchedSelect.value = space.cronSchedule || '';
+    const cronUrlInput = document.getElementById('settingsCronUrlInput');
+    if (cronUrlInput) cronUrlInput.value = space.cronWebhookUrl || '';
+    const cronStatusEl = document.getElementById('cronLastRunStatus');
+    if (cronStatusEl) {
+      cronStatusEl.textContent = space.cronLastRunAt
+        ? `Last cron run: ${new Date(space.cronLastRunAt).toLocaleString()} (${space.cronLastStatus || 'ok'})`
+        : 'No cron execution recorded yet.';
+    }
 
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
@@ -921,6 +931,32 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'space_assets') {
+    const assetsSdk = `\n// --- SpaceHub Built-in Media & Asset Hosting SDK (/live/:slug/assets) ---\nasync function uploadSpaceAsset(name, dataUrlOrText, mimeType = '') {\n  const res = await fetch('/live/${state.currentSpace.slug}/assets', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify(dataUrlOrText.startsWith('data:') ? { name, dataUrl: dataUrlOrText, mimeType } : { name, content: dataUrlOrText, mimeType })\n  });\n  return res.json();\n}\nasync function listSpaceAssets() {\n  const res = await fetch('/live/${state.currentSpace.slug}/assets');\n  const json = await res.json();\n  return json.assets || [];\n}\nwindow.SpaceAssets = { upload: uploadSpaceAsset, list: listSpaceAssets };\n`;
+    const currentJs = state.workingFiles['script.js'] || '';
+    state.workingFiles['script.js'] = currentJs + assetsSdk;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    updateLiveStagingPreview();
+    showToast('Added SpaceAssets.upload() & SpaceAssets.list() SDK to script.js!');
+    return;
+  }
+
+  if (stack === 'space_search') {
+    const searchSdk = `\n// --- SpaceHub Instant Full-Text Search SDK (/live/:slug/search) ---\nasync function searchSpace(query) {\n  const res = await fetch('/live/${state.currentSpace.slug}/search?q=' + encodeURIComponent(query));\n  const json = await res.json();\n  return json.results || [];\n}\nwindow.SpaceSearch = { query: searchSpace };\n`;
+    const currentJs = state.workingFiles['script.js'] || '';
+    state.workingFiles['script.js'] = currentJs + searchSdk;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    updateLiveStagingPreview();
+    showToast('Added SpaceSearch.query(q) SDK to script.js!');
+    return;
+  }
+
   if (stack === 'creator_checkout') {
     const recipient = encodeURIComponent(state.user?.email || 'romitat924@gmail.com');
     const itemName = encodeURIComponent(`${state.currentSpace.title} — Creator Pass`);
@@ -1076,6 +1112,64 @@ document.getElementById('auditSpaceBtn')?.addEventListener('click', () => {
   runSpaceQualityAudit();
   document.getElementById('spaceAuditDialog')?.showModal();
 });
+
+// Staging vs. Published Live Code Diff Viewer
+function openSpaceDiffViewer() {
+  if (!state.currentSpace) return;
+  const draft = state.workingFiles || state.currentSpace.draftFiles || {};
+  const live = state.currentSpace.publishedFiles || {};
+  const allFileNames = Array.from(new Set([...Object.keys(draft), ...Object.keys(live)]));
+  const summaryEl = document.getElementById('spaceDiffSummaryText');
+  const container = document.getElementById('spaceDiffContainer');
+  if (!container) return;
+
+  let changedCount = 0;
+  const cardsHtml = allFileNames
+    .map((fname) => {
+      const dContent = draft[fname];
+      const lContent = live[fname];
+      if (dContent === lContent) {
+        return `<div class="pat-key-item"><div><strong>${escapeHtml(fname)}</strong><div class="section-sub">Identical in Staging and Live</div></div><span class="badge-pill">Unchanged</span></div>`;
+      }
+      changedCount++;
+      const statusLabel = lContent === undefined ? 'New in Staging' : dContent === undefined ? 'Deleted in Staging' : 'Modified';
+      const dLines = String(dContent || '').split('\n');
+      const lLines = String(lContent || '').split('\n');
+      const maxLines = Math.min(40, Math.max(dLines.length, lLines.length));
+      const diffRows = [];
+      for (let i = 0; i < maxLines; i++) {
+        if (dLines[i] !== lLines[i]) {
+          if (lLines[i] !== undefined) {
+            diffRows.push(`<div style="color:#f87171;background:rgba(248,113,113,0.08);padding:0.1rem 0.4rem;">- ${escapeHtml(lLines[i])}</div>`);
+          }
+          if (dLines[i] !== undefined) {
+            diffRows.push(`<div style="color:#34d399;background:rgba(52,211,153,0.08);padding:0.1rem 0.4rem;">+ ${escapeHtml(dLines[i])}</div>`);
+          }
+        }
+      }
+      return `<div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:0.75rem;background:var(--bg-elevated);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.45rem;">
+          <strong>${escapeHtml(fname)}</strong>
+          <span class="badge-pill">${statusLabel}</span>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:0.74rem;max-height:140px;overflow-y:auto;border-radius:0.35rem;background:#09090b;padding:0.4rem;">
+          ${diffRows.join('') || '<div style="color:#a1a1aa;">Whitespace or trailing changes</div>'}
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  if (summaryEl) {
+    summaryEl.textContent =
+      changedCount === 0
+        ? 'Your staging workspace is 100% in sync with your published live Space.'
+        : `${changedCount} file(s) have unpublished changes in staging compared to live.`;
+  }
+  container.innerHTML = cardsHtml;
+  document.getElementById('spaceDiffDialog')?.showModal();
+}
+
+document.getElementById('diffSpaceBtn')?.addEventListener('click', openSpaceDiffViewer);
 
 document.getElementById('autoFixAuditBtn')?.addEventListener('click', () => {
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
@@ -1726,6 +1820,8 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
   const customDomain = document.getElementById('settingsCustomDomainInput')?.value.trim() || '';
   const submissionWebhookUrl = document.getElementById('settingsWebhookUrlInput')?.value.trim() || '';
   const collaborators = document.getElementById('settingsCollaboratorsInput')?.value.trim() || '';
+  const cronSchedule = document.getElementById('settingsCronScheduleSelect')?.value || '';
+  const cronWebhookUrl = document.getElementById('settingsCronUrlInput')?.value.trim() || '';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
@@ -1743,6 +1839,8 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
         customDomain,
         submissionWebhookUrl,
         collaborators,
+        cronSchedule,
+        cronWebhookUrl,
         secrets
       })
     });
@@ -1753,6 +1851,26 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
     }
     updateStudioHeaderBadges(data.space);
     showToast('Space settings, platform target & orientation updated.');
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+document.getElementById('runCronNowBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    const webhookUrl = document.getElementById('settingsCronUrlInput')?.value.trim() || '';
+    const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/cron`, {
+      method: 'POST',
+      body: JSON.stringify({ webhookUrl })
+    });
+    state.currentSpace = data.space;
+    const cronStatusEl = document.getElementById('cronLastRunStatus');
+    if (cronStatusEl && data.cronLastRunAt) {
+      cronStatusEl.textContent = `Last cron run: ${new Date(data.cronLastRunAt).toLocaleString()} (${data.cronLastStatus || 'ok'})`;
+    }
+    showToast(`Cron task executed (${data.cronLastStatus})!`);
   } catch (err) {
     showToast(err.message);
   }

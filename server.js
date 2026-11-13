@@ -795,6 +795,89 @@ async function notifySubmissionWebhook(space, entry) {
   }
 }
 
+async function executeSpaceCron(space, overrideUrl = '') {
+  const now = new Date().toISOString();
+  space.cronLastRunAt = now;
+  if (Array.isArray(space.roomEvents) && space.roomEvents.length > 50) {
+    space.roomEvents = space.roomEvents.slice(-50);
+  }
+  const hookUrl = String(overrideUrl || space.cronWebhookUrl || '').trim();
+  if (!hookUrl) {
+    space.cronLastStatus = 'ok_internal_maintenance';
+    return space.cronLastStatus;
+  }
+  if (hookUrl.startsWith('mock://')) {
+    space.cronLastStatus = `ok_mock:${hookUrl}`;
+    return space.cronLastStatus;
+  }
+  if (!/^https?:\/\//i.test(hookUrl)) {
+    space.cronLastStatus = 'ok_internal_maintenance';
+    return space.cronLastStatus;
+  }
+  try {
+    const r = await fetch(hookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'space.cron',
+        space: space.slug,
+        title: space.title,
+        schedule: space.cronSchedule || 'manual',
+        timestamp: now
+      })
+    });
+    space.cronLastStatus = `http_${r.status}`;
+  } catch (err) {
+    space.cronLastStatus = `error:${err.message || 'failed'}`;
+  }
+  return space.cronLastStatus;
+}
+
+function searchSpaceContent(space, rawQuery) {
+  const q = String(rawQuery || '').trim().toLowerCase();
+  if (!q) return [];
+  const results = [];
+  const store = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+  Object.entries(store).forEach(([k, v]) => {
+    const serialized = typeof v === 'string' ? v : JSON.stringify(v);
+    if (k.toLowerCase().includes(q) || serialized.toLowerCase().includes(q)) {
+      results.push({
+        type: 'storage',
+        key: k,
+        snippet: serialized.slice(0, 160),
+        value: v
+      });
+    }
+  });
+  const files = space.publishedFiles || space.draftFiles || {};
+  Object.entries(files).forEach(([fname, content]) => {
+    if (!fname.endsWith('.html') && !fname.endsWith('.md')) return;
+    const plain = String(content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (fname.toLowerCase().includes(q) || plain.toLowerCase().includes(q)) {
+      const idx = plain.toLowerCase().indexOf(q);
+      const start = Math.max(0, idx - 40);
+      results.push({
+        type: 'page',
+        file: fname,
+        url: fname === 'index.html' ? `/live/${space.slug}` : `/live/${space.slug}/${fname}`,
+        snippet: plain.slice(start, start + 160)
+      });
+    }
+  });
+  const assets = space.assets && typeof space.assets === 'object' ? space.assets : {};
+  Object.values(assets).forEach((a) => {
+    if (a && a.name && a.name.toLowerCase().includes(q)) {
+      results.push({
+        type: 'asset',
+        name: a.name,
+        mimeType: a.mimeType,
+        url: `/live/${space.slug}/assets/${encodeURIComponent(a.name)}`
+      });
+    }
+  });
+  return results.slice(0, 25);
+}
+
 function formatSpaceSummary(space, user) {
   const isOwner = canEditSpace(space, user);
   const isPrimaryOwner = Boolean(user && space.ownerId === user.id);
@@ -803,6 +886,7 @@ function formatSpaceSummary(space, user) {
   const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
   const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
+  const assetsObj = space.assets && typeof space.assets === 'object' ? space.assets : {};
 
   return {
     id: space.id,
@@ -822,6 +906,10 @@ function formatSpaceSummary(space, user) {
     appThemeColor: space.appThemeColor || '#09090b',
     customDomain: space.customDomain || '',
     collaborators: collabs,
+    cronSchedule: isOwner ? (space.cronSchedule || '') : undefined,
+    cronWebhookUrl: isOwner ? (space.cronWebhookUrl || '') : undefined,
+    cronLastRunAt: isOwner ? (space.cronLastRunAt || null) : undefined,
+    cronLastStatus: isOwner ? (space.cronLastStatus || null) : undefined,
     submissionWebhookUrl: isOwner ? (space.submissionWebhookUrl || '') : undefined,
     lastWebhookStatus: isOwner ? (space.lastWebhookStatus || null) : undefined,
     previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
@@ -832,6 +920,7 @@ function formatSpaceSummary(space, user) {
     likes: space.likes || 0,
     views: space.views || 0,
     installs: space.installs || 0,
+    assetCount: Object.keys(assetsObj).length,
     appUserCount: (space.appUsers || []).length,
     roomEventCount: (space.roomEvents || []).length,
     submissionCount: (space.submissions || []).length,
@@ -2226,6 +2315,8 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
     customDomain,
     submissionWebhookUrl,
     collaborators,
+    cronSchedule,
+    cronWebhookUrl,
     secrets,
     appStorage,
     colorFrom,
@@ -2264,6 +2355,12 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
   }
   if (collaborators !== undefined && space.ownerId === user.id) {
     space.collaborators = normalizeCollaborators(collaborators);
+  }
+  if (cronSchedule !== undefined) {
+    space.cronSchedule = ['hourly', 'daily', 'weekly', ''].includes(cronSchedule) ? cronSchedule : '';
+  }
+  if (cronWebhookUrl !== undefined) {
+    space.cronWebhookUrl = String(cronWebhookUrl || '').trim().slice(0, 300);
   }
   if (secrets !== undefined) {
     space.secrets = normalizeSpaceSecrets(secrets);
@@ -2612,6 +2709,31 @@ app.post('/api/spaces/:username/:slug/like', (req, res) => {
   saveDb(db);
 
   res.json({ likes: space.likes, likedByMe: space.likedBy.includes(user.id) });
+});
+
+// Run Scheduled Cron / Automation Task
+app.post('/api/spaces/:username/:slug/cron', async (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the owner or collaborators can trigger cron tasks.' });
+  }
+
+  const status = await executeSpaceCron(space, req.body?.webhookUrl || '');
+  saveDb(db);
+  res.json({
+    ok: true,
+    cronLastRunAt: space.cronLastRunAt,
+    cronLastStatus: status,
+    space: formatSpaceSummary(space, user)
+  });
 });
 
 // Save Named Checkpoint Snapshot
@@ -3271,6 +3393,169 @@ app.get(['/live/:slug/icon.svg', '/s/:slug/icon.svg'], (req, res) => {
 app.get(['/live/:slug/sw.js', '/s/:slug/sw.js'], (req, res) => {
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
   res.send(generateSpaceServiceWorker(req.params.slug.toLowerCase()));
+});
+
+// Built-in Media & Asset Hosting API (/live/:slug/assets and /live/:slug/assets/:name)
+app.get(['/live/:slug/assets/:name', '/s/:slug/assets/:name'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const assets = space.assets && typeof space.assets === 'object' ? space.assets : {};
+  const asset = assets[req.params.name];
+  if (!asset) return res.status(404).json({ error: 'Asset not found.' });
+
+  const dataUrl = String(asset.dataUrl || '');
+  const b64Match = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
+  if (b64Match) {
+    const mime = asset.mimeType || b64Match[1] || 'application/octet-stream';
+    const buf = Buffer.from(b64Match[2], 'base64');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(buf);
+  }
+  res.setHeader('Content-Type', asset.mimeType || 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.send(String(asset.content ?? asset.dataUrl ?? ''));
+});
+
+app.get(['/live/:slug/assets', '/s/:slug/assets'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const assets = space.assets && typeof space.assets === 'object' ? space.assets : {};
+  const list = Object.values(assets).map((a) => ({
+    name: a.name,
+    mimeType: a.mimeType,
+    size: a.size || 0,
+    url: `/live/${space.slug}/assets/${encodeURIComponent(a.name)}`,
+    createdAt: a.createdAt
+  }));
+  res.json({ ok: true, assets: list });
+});
+
+app.post(['/live/:slug/assets', '/s/:slug/assets'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.assets = space.assets && typeof space.assets === 'object' ? space.assets : {};
+
+  const payload = req.body || {};
+  const cleanName = String(payload.name || `asset_${crypto.randomBytes(3).toString('hex')}.txt`)
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .slice(0, 64);
+  const dataUrl = String(payload.dataUrl || '');
+  const content = payload.content !== undefined ? String(payload.content) : '';
+  const rawLen = (dataUrl || content).length;
+  if (rawLen > 204800) {
+    return res.status(413).json({ error: 'Single asset size limit (200 KB) exceeded.' });
+  }
+  const ext = cleanName.split('.').pop().toLowerCase();
+  const extMime = {
+    svg: 'image/svg+xml; charset=utf-8',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    json: 'application/json; charset=utf-8',
+    txt: 'text/plain; charset=utf-8'
+  }[ext];
+  const mimeType = String(payload.mimeType || extMime || 'application/octet-stream');
+  const assetRecord = {
+    name: cleanName,
+    mimeType,
+    dataUrl: dataUrl || undefined,
+    content: !dataUrl ? content : undefined,
+    size: rawLen,
+    createdAt: new Date().toISOString()
+  };
+  space.assets[cleanName] = assetRecord;
+  saveDb(db);
+  res.status(201).json({
+    ok: true,
+    asset: {
+      name: cleanName,
+      mimeType,
+      size: rawLen,
+      url: `/live/${space.slug}/assets/${encodeURIComponent(cleanName)}`,
+      createdAt: assetRecord.createdAt
+    }
+  });
+});
+
+app.delete(['/live/:slug/assets', '/s/:slug/assets', '/live/:slug/assets/:name', '/s/:slug/assets/:name'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.assets = space.assets && typeof space.assets === 'object' ? space.assets : {};
+  const target = req.params.name || req.query.name;
+  if (target) delete space.assets[target];
+  else space.assets = {};
+  saveDb(db);
+  res.json({ ok: true, assetCount: Object.keys(space.assets).length });
+});
+
+// Built-in Full-Text Search API (GET /live/:slug/search?q=...)
+app.get(['/live/:slug/search', '/s/:slug/search'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const q = String(req.query.q || '');
+  const results = searchSpaceContent(space, q);
+  res.json({ ok: true, query: q, count: results.length, results });
+});
+
+// Automatic SEO sitemap.xml, robots.txt & /live/:slug/health
+app.get(['/live/:slug/health', '/s/:slug/health'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  res.json({
+    ok: true,
+    slug: space.slug,
+    title: space.title,
+    status: space.status,
+    visibility: space.visibility,
+    updatedAt: space.updatedAt,
+    publishedAt: space.publishedAt,
+    views: space.views || 0,
+    assetCount: Object.keys(space.assets || {}).length
+  });
+});
+
+app.get(['/live/:slug/robots.txt', '/s/:slug/robots.txt'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).send('Not found');
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const disallow = space.visibility === 'private' || Boolean(space.previewPasscode);
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send(`User-agent: *\n${disallow ? 'Disallow: /' : 'Allow: /'}\nSitemap: ${origin}/live/${space.slug}/sitemap.xml\n`);
+});
+
+app.get(['/live/:slug/sitemap.xml', '/s/:slug/sitemap.xml'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).send('Not found');
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const files = space.publishedFiles || space.draftFiles || {};
+  const htmlPages = Object.keys(files).filter(
+    (f) => f.endsWith('.html') && f.toLowerCase() !== '404.html'
+  );
+  if (!htmlPages.includes('index.html')) htmlPages.unshift('index.html');
+  const lastMod = (space.publishedAt || space.updatedAt || new Date().toISOString()).split('T')[0];
+  const urlEntries = htmlPages
+    .map((page) => {
+      const loc =
+        page === 'index.html'
+          ? `${origin}/live/${space.slug}`
+          : `${origin}/live/${space.slug}/${encodeURIComponent(page)}`;
+      return `  <url>\n    <loc>${loc}</loc>\n    <lastmod>${lastMod}</lastmod>\n  </url>`;
+    })
+    .join('\n');
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urlEntries}\n</urlset>`);
 });
 
 app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) => {

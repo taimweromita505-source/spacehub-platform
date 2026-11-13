@@ -430,6 +430,54 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(spaFallback.status, 200);
     assert.ok(String(spaFallback.raw).includes('<!DOCTYPE html>'));
 
+    console.log('15. Testing Wave 6: Media Assets (/assets), Full-Text Search (/search), Cron Tasks (/cron) & SEO Sitemap/Health...');
+    const uploadAsset = await request(server, 'POST', `/live/${space.slug}/assets`, {
+      name: 'badge.svg',
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><text>SpaceAsset</text></svg>',
+      mimeType: 'image/svg+xml; charset=utf-8'
+    });
+    assert.strictEqual(uploadAsset.status, 201);
+    assert.strictEqual(uploadAsset.body.asset.name, 'badge.svg');
+
+    const getAsset = await request(server, 'GET', `/live/${space.slug}/assets/badge.svg`);
+    assert.strictEqual(getAsset.status, 200);
+    assert.ok(String(getAsset.raw).includes('SpaceAsset'));
+
+    const listAssets = await request(server, 'GET', `/live/${space.slug}/assets`);
+    assert.strictEqual(listAssets.status, 200);
+    assert.strictEqual(listAssets.body.assets.length, 1);
+
+    await request(server, 'POST', `/live/${space.slug}/storage`, {
+      searchable_note: 'Quantum Launch Checklist 2026'
+    });
+    const searchRes = await request(server, 'GET', `/live/${space.slug}/search?q=Quantum`);
+    assert.strictEqual(searchRes.status, 200);
+    assert.ok(searchRes.body.count >= 1);
+    assert.strictEqual(searchRes.body.results[0].type, 'storage');
+
+    const cronRun = await request(
+      server,
+      'POST',
+      `/api/spaces/${uniqueUser}/${space.slug}/cron`,
+      { webhookUrl: 'mock://daily-sync' },
+      token
+    );
+    assert.strictEqual(cronRun.status, 200);
+    assert.strictEqual(cronRun.body.cronLastStatus, 'ok_mock:mock://daily-sync');
+
+    const sitemapRes = await request(server, 'GET', `/live/${space.slug}/sitemap.xml`);
+    assert.strictEqual(sitemapRes.status, 200);
+    assert.ok(String(sitemapRes.raw).includes('<urlset'));
+
+    const robotsRes = await request(server, 'GET', `/live/${space.slug}/robots.txt`);
+    assert.strictEqual(robotsRes.status, 200);
+    assert.ok(String(robotsRes.raw).includes('Sitemap:'));
+
+    const healthRes = await request(server, 'GET', `/live/${space.slug}/health`);
+    assert.strictEqual(healthRes.status, 200);
+    assert.strictEqual(healthRes.body.ok, true);
+    assert.strictEqual(healthRes.body.assetCount, 1);
+
     console.log('ALL TESTS PASSED!');
   } finally {
     server.close();

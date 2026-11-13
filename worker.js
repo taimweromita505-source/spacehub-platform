@@ -659,6 +659,89 @@ async function notifySubmissionWebhook(space, entry) {
   }
 }
 
+async function executeSpaceCron(space, overrideUrl = '') {
+  const now = new Date().toISOString();
+  space.cronLastRunAt = now;
+  if (Array.isArray(space.roomEvents) && space.roomEvents.length > 50) {
+    space.roomEvents = space.roomEvents.slice(-50);
+  }
+  const hookUrl = String(overrideUrl || space.cronWebhookUrl || '').trim();
+  if (!hookUrl) {
+    space.cronLastStatus = 'ok_internal_maintenance';
+    return space.cronLastStatus;
+  }
+  if (hookUrl.startsWith('mock://')) {
+    space.cronLastStatus = `ok_mock:${hookUrl}`;
+    return space.cronLastStatus;
+  }
+  if (!/^https?:\/\//i.test(hookUrl)) {
+    space.cronLastStatus = 'ok_internal_maintenance';
+    return space.cronLastStatus;
+  }
+  try {
+    const r = await fetch(hookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'space.cron',
+        space: space.slug,
+        title: space.title,
+        schedule: space.cronSchedule || 'manual',
+        timestamp: now
+      })
+    });
+    space.cronLastStatus = `http_${r.status}`;
+  } catch (err) {
+    space.cronLastStatus = `error:${err.message || 'failed'}`;
+  }
+  return space.cronLastStatus;
+}
+
+function searchSpaceContent(space, rawQuery) {
+  const q = String(rawQuery || '').trim().toLowerCase();
+  if (!q) return [];
+  const results = [];
+  const store = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+  Object.entries(store).forEach(([k, v]) => {
+    const serialized = typeof v === 'string' ? v : JSON.stringify(v);
+    if (k.toLowerCase().includes(q) || serialized.toLowerCase().includes(q)) {
+      results.push({
+        type: 'storage',
+        key: k,
+        snippet: serialized.slice(0, 160),
+        value: v
+      });
+    }
+  });
+  const files = space.publishedFiles || space.draftFiles || {};
+  Object.entries(files).forEach(([fname, content]) => {
+    if (!fname.endsWith('.html') && !fname.endsWith('.md')) return;
+    const plain = String(content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (fname.toLowerCase().includes(q) || plain.toLowerCase().includes(q)) {
+      const idx = plain.toLowerCase().indexOf(q);
+      const start = Math.max(0, idx - 40);
+      results.push({
+        type: 'page',
+        file: fname,
+        url: fname === 'index.html' ? `/live/${space.slug}` : `/live/${space.slug}/${fname}`,
+        snippet: plain.slice(start, start + 160)
+      });
+    }
+  });
+  const assets = space.assets && typeof space.assets === 'object' ? space.assets : {};
+  Object.values(assets).forEach((a) => {
+    if (a && a.name && a.name.toLowerCase().includes(q)) {
+      results.push({
+        type: 'asset',
+        name: a.name,
+        mimeType: a.mimeType,
+        url: `/live/${space.slug}/assets/${encodeURIComponent(a.name)}`
+      });
+    }
+  });
+  return results.slice(0, 25);
+}
+
 function formatSpaceSummary(space, user) {
   const isOwner = canEditSpace(space, user);
   const isPrimaryOwner = Boolean(user && space.ownerId === user.id);
@@ -667,6 +750,7 @@ function formatSpaceSummary(space, user) {
   const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
   const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
+  const assetsObj = space.assets && typeof space.assets === 'object' ? space.assets : {};
   return {
     id: space.id,
     ownerId: space.ownerId,
@@ -685,6 +769,10 @@ function formatSpaceSummary(space, user) {
     appThemeColor: space.appThemeColor || '#09090b',
     customDomain: space.customDomain || '',
     collaborators: collabs,
+    cronSchedule: isOwner ? (space.cronSchedule || '') : undefined,
+    cronWebhookUrl: isOwner ? (space.cronWebhookUrl || '') : undefined,
+    cronLastRunAt: isOwner ? (space.cronLastRunAt || null) : undefined,
+    cronLastStatus: isOwner ? (space.cronLastStatus || null) : undefined,
     submissionWebhookUrl: isOwner ? (space.submissionWebhookUrl || '') : undefined,
     lastWebhookStatus: isOwner ? (space.lastWebhookStatus || null) : undefined,
     previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
@@ -695,6 +783,7 @@ function formatSpaceSummary(space, user) {
     likes: space.likes || 0,
     views: space.views || 0,
     installs: space.installs || 0,
+    assetCount: Object.keys(assetsObj).length,
     appUserCount: (space.appUsers || []).length,
     roomEventCount: (space.roomEvents || []).length,
     submissionCount: (space.submissions || []).length,
@@ -1390,6 +1479,177 @@ export default {
       );
     }
 
+    // 1b-3. Built-in Media & Asset Hosting API (/live/:slug/assets and /live/:slug/assets/:name)
+    const assetsLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/assets(?:\/([^/]+))?\/?$/i);
+    if (assetsLiveMatch) {
+      const slug = decodeURIComponent(assetsLiveMatch[1]).toLowerCase();
+      const assetParamName = assetsLiveMatch[2] ? decodeURIComponent(assetsLiveMatch[2]) : '';
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.assets = space.assets && typeof space.assets === 'object' ? space.assets : {};
+
+      if (method === 'GET' && assetParamName) {
+        const asset = space.assets[assetParamName];
+        if (!asset) return jsonResponse({ error: 'Asset not found.' }, 404);
+        const dataUrl = String(asset.dataUrl || '');
+        const b64Match = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
+        if (b64Match) {
+          const mime = asset.mimeType || b64Match[1] || 'application/octet-stream';
+          const binStr = atob(b64Match[2]);
+          const bytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+          return new Response(bytes, {
+            status: 200,
+            headers: {
+              'Content-Type': mime,
+              'Cache-Control': 'public, max-age=86400'
+            }
+          });
+        }
+        return new Response(String(asset.content ?? asset.dataUrl ?? ''), {
+          status: 200,
+          headers: {
+            'Content-Type': asset.mimeType || 'text/plain; charset=utf-8',
+            'Cache-Control': 'public, max-age=86400'
+          }
+        });
+      }
+
+      if (method === 'GET') {
+        const list = Object.values(space.assets).map((a) => ({
+          name: a.name,
+          mimeType: a.mimeType,
+          size: a.size || 0,
+          url: `/live/${space.slug}/assets/${encodeURIComponent(a.name)}`,
+          createdAt: a.createdAt
+        }));
+        return jsonResponse({ ok: true, assets: list });
+      }
+
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const cleanName = String(payload.name || `asset_${randomHex(3)}.txt`)
+          .trim()
+          .replace(/[^a-zA-Z0-9._-]/g, '_')
+          .slice(0, 64);
+        const dataUrl = String(payload.dataUrl || '');
+        const content = payload.content !== undefined ? String(payload.content) : '';
+        const rawLen = (dataUrl || content).length;
+        if (rawLen > 204800) {
+          return jsonResponse({ error: 'Single asset size limit (200 KB) exceeded.' }, 413);
+        }
+        const ext = cleanName.split('.').pop().toLowerCase();
+        const extMime = {
+          svg: 'image/svg+xml; charset=utf-8',
+          png: 'image/png',
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          webp: 'image/webp',
+          gif: 'image/gif',
+          json: 'application/json; charset=utf-8',
+          txt: 'text/plain; charset=utf-8'
+        }[ext];
+        const mimeType = String(payload.mimeType || extMime || 'application/octet-stream');
+        const assetRecord = {
+          name: cleanName,
+          mimeType,
+          dataUrl: dataUrl || undefined,
+          content: !dataUrl ? content : undefined,
+          size: rawLen,
+          createdAt: new Date().toISOString()
+        };
+        space.assets[cleanName] = assetRecord;
+        await saveDb(env, db);
+        return jsonResponse(
+          {
+            ok: true,
+            asset: {
+              name: cleanName,
+              mimeType,
+              size: rawLen,
+              url: `/live/${space.slug}/assets/${encodeURIComponent(cleanName)}`,
+              createdAt: assetRecord.createdAt
+            }
+          },
+          201
+        );
+      }
+
+      if (method === 'DELETE') {
+        const target = assetParamName || url.searchParams.get('name');
+        if (target) delete space.assets[target];
+        else space.assets = {};
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, assetCount: Object.keys(space.assets).length });
+      }
+    }
+
+    // 1b-4. Built-in Full-Text Search API (GET /live/:slug/search?q=...)
+    const searchLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/search\/?$/i);
+    if (searchLiveMatch && method === 'GET') {
+      const slug = decodeURIComponent(searchLiveMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      const q = url.searchParams.get('q') || '';
+      const results = searchSpaceContent(space, q);
+      return jsonResponse({ ok: true, query: q, count: results.length, results });
+    }
+
+    // 1b-5. Automatic SEO sitemap.xml, robots.txt & /live/:slug/health
+    const seoHealthMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(sitemap\.xml|robots\.txt|health)\/?$/i);
+    if (seoHealthMatch && method === 'GET') {
+      const slug = decodeURIComponent(seoHealthMatch[1]).toLowerCase();
+      const kind = seoHealthMatch[2].toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return new Response('Not found', { status: 404 });
+
+      if (kind === 'health') {
+        return jsonResponse({
+          ok: true,
+          slug: space.slug,
+          title: space.title,
+          status: space.status,
+          visibility: space.visibility,
+          updatedAt: space.updatedAt,
+          publishedAt: space.publishedAt,
+          views: space.views || 0,
+          assetCount: Object.keys(space.assets || {}).length
+        });
+      }
+
+      if (kind === 'robots.txt') {
+        const disallow = space.visibility === 'private' || Boolean(space.previewPasscode);
+        const txt = `User-agent: *\n${disallow ? 'Disallow: /' : 'Allow: /'}\nSitemap: ${url.origin}/live/${space.slug}/sitemap.xml\n`;
+        return new Response(txt, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+        });
+      }
+
+      if (kind === 'sitemap.xml') {
+        const files = space.publishedFiles || space.draftFiles || {};
+        const htmlPages = Object.keys(files).filter(
+          (f) => f.endsWith('.html') && f.toLowerCase() !== '404.html'
+        );
+        if (!htmlPages.includes('index.html')) htmlPages.unshift('index.html');
+        const lastMod = (space.publishedAt || space.updatedAt || new Date().toISOString()).split('T')[0];
+        const urlEntries = htmlPages
+          .map((page) => {
+            const loc =
+              page === 'index.html'
+                ? `${url.origin}/live/${space.slug}`
+                : `${url.origin}/live/${space.slug}/${encodeURIComponent(page)}`;
+            return `  <url>\n    <loc>${loc}</loc>\n    <lastmod>${lastMod}</lastmod>\n  </url>`;
+          })
+          .join('\n');
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urlEntries}\n</urlset>`;
+        return new Response(xml, {
+          status: 200,
+          headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+        });
+      }
+    }
+
     // 1c. Short Clean Live URL Route (/live/:slug or /s/:slug) & Full Route (/spaces/:username/:slug/live)
     const shortLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/?$/i);
     const liveMatch = pathname.match(/^\/spaces\/([^/]+)\/([^/]+)\/live$/i);
@@ -1925,6 +2185,14 @@ export default {
           if (body.collaborators !== undefined && space.ownerId === user.id) {
             space.collaborators = normalizeCollaborators(body.collaborators);
           }
+          if (body.cronSchedule !== undefined) {
+            space.cronSchedule = ['hourly', 'daily', 'weekly', ''].includes(body.cronSchedule)
+              ? body.cronSchedule
+              : '';
+          }
+          if (body.cronWebhookUrl !== undefined) {
+            space.cronWebhookUrl = String(body.cronWebhookUrl || '').trim().slice(0, 300);
+          }
           if (body.secrets !== undefined) {
             space.secrets = normalizeSpaceSecrets(body.secrets);
           }
@@ -1983,6 +2251,20 @@ export default {
             await saveDb(env, db);
             return jsonResponse({ ok: true, submissions: space.submissions });
           }
+        }
+
+        if (action === 'cron' && method === 'POST') {
+          if (!user || !space || !canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          const status = await executeSpaceCron(space, body.webhookUrl || '');
+          await saveDb(env, db);
+          return jsonResponse({
+            ok: true,
+            cronLastRunAt: space.cronLastRunAt,
+            cronLastStatus: status,
+            space: formatSpaceSummary(space, user)
+          });
         }
 
         if (action === 'snapshot' && method === 'POST') {
