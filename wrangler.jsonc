@@ -6,6 +6,9 @@
   "observability": {
     "enabled": true
   },
+  "vars": {
+    "PAYPAL_BUSINESS_EMAIL": "taimweromita505@gmail.com"
+  },
   "assets": {
     "directory": "public",
     "binding": "ASSETS"

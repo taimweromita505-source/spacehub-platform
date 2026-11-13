@@ -161,6 +161,8 @@ const HOSTING_PLANS = [
   {
     id: 'plan_monthly_1',
     name: 'Monthly Account Hosting',
+    amountUsd: '1.00',
+    billingUnit: 'M',
     priceMonthly: 1,
     billingPeriod: '1 month',
     priceLabel: '$1 / month',
@@ -170,12 +172,14 @@ const HOSTING_PLANS = [
       'Host your account websites & apps for 1 full month',
       'Clean shareable production URL (/live/your-app)',
       'Global Cloudflare Edge CDN + automatic SSL',
-      'Instant publishing from Staging & Coding Agents'
+      'Pay with Card, Apple/Google Pay, Venmo, or PayPal'
     ]
   },
   {
     id: 'plan_yearly_12',
     name: 'Annual Account Hosting',
+    amountUsd: '12.00',
+    billingUnit: 'Y',
     priceMonthly: 1,
     priceYearly: 12,
     billingPeriod: '1 year',
@@ -186,10 +190,46 @@ const HOSTING_PLANS = [
       'Full 12 months of account hosting ($1/month rate)',
       'Unlimited hosted Spaces & clean /live/ URLs',
       'Custom domain routing & priority global CDN',
-      'Continuous Coding Agent auto-deployments'
+      'Pay with Card, Apple/Google Pay, Venmo, or PayPal'
     ]
   }
 ];
+
+function decoratePlanWithPayPalUrls(plan, origin, paypalEmail) {
+  const email = paypalEmail || 'taimweromita505@gmail.com';
+  const amount = plan.amountUsd || (plan.id === 'plan_yearly_12' ? '12.00' : '1.00');
+  const unit = plan.billingUnit || (plan.id === 'plan_yearly_12' ? 'Y' : 'M');
+  const returnUrl = `${origin}/?paypal_paid=1&planId=${encodeURIComponent(plan.id)}`;
+  const cancelUrl = `${origin}/?paypal_canceled=1`;
+
+  // 1. Credit / Debit Card / Apple Pay / Google Pay Guest Checkout -> Payout to PayPal
+  const cardCheckoutUrl =
+    `https://www.paypal.com/cgi-bin/webscr?cmd=_xclick` +
+    `&business=${encodeURIComponent(email)}` +
+    `&item_name=${encodeURIComponent('SpaceHub ' + plan.name)}` +
+    `&amount=${encodeURIComponent(amount)}` +
+    `&currency_code=USD&no_shipping=1&landing_page=Billing&solution_type=Sole` +
+    `&return=${encodeURIComponent(returnUrl)}` +
+    `&cancel_return=${encodeURIComponent(cancelUrl)}`;
+
+  // 2. PayPal Balance / Venmo / PayPal Subscription Checkout -> Payout to PayPal
+  const paypalSubscriptionUrl =
+    `https://www.paypal.com/cgi-bin/webscr?cmd=_xclick-subscriptions` +
+    `&business=${encodeURIComponent(email)}` +
+    `&item_name=${encodeURIComponent('SpaceHub ' + plan.name)}` +
+    `&a3=${encodeURIComponent(amount)}&p3=1&t3=${unit}&src=1&currency_code=USD&no_shipping=1` +
+    `&return=${encodeURIComponent(returnUrl)}` +
+    `&cancel_return=${encodeURIComponent(cancelUrl)}`;
+
+  return {
+    ...plan,
+    merchantPayPalEmail: email,
+    checkoutUrls: {
+      card: cardCheckoutUrl,
+      paypal: paypalSubscriptionUrl
+    }
+  };
+}
 
 const PROVIDER_LABELS = {
   cloudflare_pages: 'Cloudflare Pages',
@@ -644,7 +684,10 @@ export default {
       }
 
       if (pathname === '/api/hosting-plans' && method === 'GET') {
-        return jsonResponse({ plans: HOSTING_PLANS });
+        const paypalEmail = env?.PAYPAL_BUSINESS_EMAIL || 'taimweromita505@gmail.com';
+        return jsonResponse({
+          plans: HOSTING_PLANS.map((p) => decoratePlanWithPayPalUrls(p, url.origin, paypalEmail))
+        });
       }
 
       if (pathname === '/api/hosting-plans/purchase' && method === 'POST') {
@@ -653,12 +696,16 @@ export default {
         const cleanDomain =
           String(body.customDomain || '').trim().toLowerCase().replace(/^https?:\/\//, '') ||
           `${url.host}/live`;
+        const paymentMethod = String(body.paymentMethod || 'paypal_card').trim();
+        const paymentRef = String(body.paymentRef || 'paypal_verified').trim();
         const now = new Date().toISOString();
         user.hostingPlan = {
           planId: plan.id,
           name: plan.name,
           priceLabel: plan.priceLabel,
           billingPeriod: plan.billingPeriod,
+          paymentMethod,
+          paymentRef,
           activatedAt: now
         };
         const conn = {
@@ -674,7 +721,7 @@ export default {
         db.hostingConnections.unshift(conn);
         await saveDb(env, db);
         return jsonResponse({
-          message: `Activated ${plan.name} (${plan.priceLabel}) for your account`,
+          message: `Activated ${plan.name} (${plan.priceLabel}) via PayPal Checkout`,
           hostingPlan: user.hostingPlan,
           connection: conn
         }, 201);

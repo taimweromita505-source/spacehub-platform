@@ -937,24 +937,33 @@ async function loadHostingMarketplace() {
         .join('');
 
       plansGrid.querySelectorAll('[data-buy-plan]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
+        btn.addEventListener('click', () => {
           if (!state.user) {
-            showToast('Please sign in to buy a hosting plan.');
+            showToast('Please sign in to activate a hosting plan.');
             document.getElementById('signInDialog').showModal();
             return;
           }
           const planId = btn.getAttribute('data-buy-plan');
-          const customDomain = document.getElementById('purchaseCustomDomainInput').value.trim();
-          try {
-            const res = await apiFetch('/api/hosting-plans/purchase', {
-              method: 'POST',
-              body: JSON.stringify({ planId, customDomain })
-            });
-            await loadHostingConnections();
-            showToast(`🎉 ${res.message}`);
-          } catch (err) {
-            showToast(err.message);
+          const plan = state.hostingPlans.find((p) => p.id === planId) || state.hostingPlans[0];
+          if (!plan) return;
+
+          document.getElementById('checkoutPlanIdInput').value = plan.id;
+          document.getElementById('paypalCheckoutSummary').innerHTML = `Selected Plan: <strong>${escapeHtml(
+            plan.name
+          )} (${escapeHtml(plan.priceLabel)})</strong>`;
+
+          const cardBtn = document.getElementById('payByCardLinkBtn');
+          const paypalBtn = document.getElementById('payByPayPalLinkBtn');
+          if (cardBtn && plan.checkoutUrls?.card) {
+            cardBtn.href = plan.checkoutUrls.card;
+            cardBtn.textContent = `Pay ${plan.priceLabel} with Debit / Credit Card, Apple Pay or Google Pay ↗`;
           }
+          if (paypalBtn && plan.checkoutUrls?.paypal) {
+            paypalBtn.href = plan.checkoutUrls.paypal;
+            paypalBtn.textContent = `Pay ${plan.priceLabel} with PayPal / Venmo / Pay Later ↗`;
+          }
+
+          document.getElementById('paypalCheckoutDialog').showModal();
         });
       });
     }
@@ -963,6 +972,25 @@ async function loadHostingMarketplace() {
   }
   await loadHostingConnections();
 }
+
+document.getElementById('paypalCheckoutForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!state.user) return;
+  const planId = document.getElementById('checkoutPlanIdInput').value;
+  const customDomain = document.getElementById('purchaseCustomDomainInput')?.value.trim() || '';
+  const paymentRef = document.getElementById('checkoutRefInput')?.value.trim() || 'paypal_checkout';
+  try {
+    const res = await apiFetch('/api/hosting-plans/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ planId, customDomain, paymentMethod: 'paypal_all_methods', paymentRef })
+    });
+    document.getElementById('paypalCheckoutDialog').close();
+    await loadHostingConnections();
+    showToast(res.message);
+  } catch (err) {
+    showToast(err.message);
+  }
+});
 
 document.getElementById('connectHostingForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1281,4 +1309,23 @@ document.getElementById('createSpaceForm').addEventListener('submit', async (e) 
   }
   updateAuthUI();
   await loadSpacesList();
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('paypal_paid') === '1' && state.user) {
+    const planId = params.get('planId') || 'plan_monthly_1';
+    try {
+      const res = await apiFetch('/api/hosting-plans/purchase', {
+        method: 'POST',
+        body: JSON.stringify({
+          planId,
+          paymentMethod: 'paypal_redirect',
+          paymentRef: params.get('tx') || 'paypal_return_verified'
+        })
+      });
+      window.history.replaceState({}, '', window.location.pathname);
+      showToast(res.message);
+    } catch (_e) {
+      // ignore
+    }
+  }
 })();

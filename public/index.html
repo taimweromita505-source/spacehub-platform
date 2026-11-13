@@ -1000,6 +1000,69 @@ curl -X POST https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/
     </form>
   </dialog>
 
+  <!-- DIALOG 6: UNIVERSAL PAYMENT CHECKOUT (CARDS, APPLE/GOOGLE PAY, VENMO & PAYPAL -> PAYPAL PAYOUT) -->
+  <dialog id="paypalCheckoutDialog" closedby="any" aria-labelledby="paypalCheckoutTitle">
+    <form id="paypalCheckoutForm" method="POST" action="/api/hosting-plans/purchase">
+      <div class="dialog-header">
+        <h2 id="paypalCheckoutTitle">Activate Account Hosting</h2>
+        <button type="button" class="btn-icon" data-close-dialog="paypalCheckoutDialog" aria-label="Close dialog">✕</button>
+      </div>
+
+      <p class="dialog-lead" id="paypalCheckoutSummary">
+        Selected Plan: <strong>Monthly Account Hosting ($1 / month)</strong>
+      </p>
+
+      <input type="hidden" id="checkoutPlanIdInput" name="planId" value="plan_monthly_1" />
+
+      <div class="arch-card" style="margin-block-end: 1rem;">
+        <h3 style="margin-block-end: 0.5rem;">1. Choose Your Payment Method</h3>
+        <p style="margin-block-end: 0.85rem;">
+          Pay with any Debit/Credit Card, Apple Pay, Google Pay, Venmo, or PayPal balance. All payments are securely processed by PayPal.
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 0.55rem;">
+          <a
+            href="#"
+            target="_blank"
+            rel="noopener"
+            id="payByCardLinkBtn"
+            class="btn btn-primary btn-sm"
+            style="width: 100%;"
+          >
+            Pay with Debit / Credit Card, Apple Pay or Google Pay ↗
+          </a>
+          <a
+            href="#"
+            target="_blank"
+            rel="noopener"
+            id="payByPayPalLinkBtn"
+            class="btn btn-outline btn-sm"
+            style="width: 100%;"
+          >
+            Pay with PayPal / Venmo / Pay Later ↗
+          </a>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="checkoutRefInput">2. Receipt or Transaction Reference (Optional if redirected)</label>
+        <input
+          type="text"
+          id="checkoutRefInput"
+          name="paymentRef"
+          placeholder="PayPal Receipt ID or Card last 4 digits"
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+        />
+      </div>
+
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="paypalCheckoutDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Confirm Payment &amp; Activate Hosting</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="/app.js"></script>
 </body>
 </html>
