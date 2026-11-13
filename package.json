@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test.js && node test-paypal.mjs && node test-wave10.mjs",
+    "test": "node test.js && node test-paypal.mjs && node test-wave10.mjs && node test-wave11.mjs",
     "deploy": "wrangler deploy",
     "preview": "wrangler dev"
   },

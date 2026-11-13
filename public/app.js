@@ -428,6 +428,8 @@ function renderSpacesGrid() {
 
 function switchMainSection(sectionId) {
   document.getElementById('hubView').hidden = sectionId !== 'hubView';
+  const tplView = document.getElementById('templatesView');
+  if (tplView) tplView.hidden = sectionId !== 'templatesView';
   document.getElementById('hostingHubView').hidden = sectionId !== 'hostingHubView';
   document.getElementById('agentApiView').hidden = sectionId !== 'agentApiView';
   document.getElementById('archView').hidden = sectionId !== 'archView';
@@ -771,6 +773,16 @@ async function openSpaceStudio(username, slug) {
     }
     const maintChk = document.getElementById('settingsMaintenanceCheckbox');
     if (maintChk) maintChk.checked = Boolean(space.maintenanceMode);
+
+    const aiBtn = document.getElementById('studioAiGenBtn');
+    if (aiBtn) aiBtn.hidden = !space.isOwner;
+    const pubTplBtn = document.getElementById('publishTemplateBtn');
+    if (pubTplBtn) {
+      pubTplBtn.hidden = !space.isOwner;
+      pubTplBtn.textContent = space.isTemplate ? 'Unpublish Template' : 'Publish Template';
+    }
+    const diagBox = document.getElementById('domainDiagBox');
+    if (diagBox) diagBox.hidden = true;
 
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
@@ -2604,15 +2616,285 @@ function setTopNavFilter(filterName) {
   document.getElementById('tabHosting').classList.remove('active');
   document.getElementById('tabArchitecture').classList.remove('active');
   document.getElementById('tabAgents').classList.remove('active');
+  document.getElementById('tabTemplates')?.classList.remove('active');
   document.getElementById('tabAdmin')?.classList.remove('active');
   switchMainSection('hubView');
   loadSpacesList();
+}
+
+let currentTemplateCategory = 'all';
+let currentTemplateSearch = '';
+
+async function loadTemplatesList() {
+  const grid = document.getElementById('templatesGrid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="spaces-empty">Loading template marketplace...</div>';
+
+  try {
+    const params = new URLSearchParams();
+    if (currentTemplateCategory && currentTemplateCategory !== 'all') {
+      params.append('category', currentTemplateCategory);
+    }
+    if (currentTemplateSearch) {
+      params.append('search', currentTemplateSearch);
+    }
+    const data = await apiFetch(`/api/templates?${params.toString()}`);
+    const templates = data.templates || [];
+
+    if (!templates.length) {
+      grid.innerHTML = '<div class="spaces-empty">No templates found in this category.</div>';
+      return;
+    }
+
+    grid.innerHTML = templates
+      .map(
+        (t) => `
+        <article class="space-card" data-slug="${escapeHtml(t.slug)}">
+          <div class="card-hero" style="background: linear-gradient(135deg, #18181b 0%, #27272a 100%);">
+            <span class="card-emoji">${escapeHtml(t.emoji || '⚡')}</span>
+          </div>
+          <div class="card-body">
+            <div class="card-header">
+              <h3 class="card-title">${escapeHtml(t.name)}</h3>
+              <span class="status-pill">${escapeHtml(t.category || 'template')}</span>
+            </div>
+            <p class="card-desc">${escapeHtml(t.description || '')}</p>
+            <div class="card-meta">
+              <span class="card-owner">By @${escapeHtml(t.authorUsername || 'spacehub')}</span>
+              <span>${t.cloneCount || 0} clones</span>
+            </div>
+            <div class="card-actions" style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+              <button type="button" class="btn btn-primary btn-sm btn-clone-tpl" data-tpl-slug="${escapeHtml(t.slug)}" style="width: 100%;">
+                Use Template (1-Click)
+              </button>
+            </div>
+          </div>
+        </article>
+      `
+      )
+      .join('');
+
+    grid.querySelectorAll('.btn-clone-tpl').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!state.user) {
+          document.getElementById('signInDialog')?.showModal();
+          showToast('Please sign in to clone this template.');
+          return;
+        }
+        const tplSlug = btn.getAttribute('data-tpl-slug');
+        btn.disabled = true;
+        btn.textContent = 'Cloning...';
+        try {
+          const res = await apiFetch(`/api/templates/${encodeURIComponent(tplSlug)}/clone`, {
+            method: 'POST'
+          });
+          showToast(res.message);
+          await openSpaceStudio(res.space.ownerUsername, res.space.slug);
+        } catch (err) {
+          showToast(err.message || 'Clone failed.');
+          btn.disabled = false;
+          btn.textContent = 'Use Template (1-Click)';
+        }
+      });
+    });
+  } catch (err) {
+    grid.innerHTML = `<div class="spaces-empty">Error loading templates: ${escapeHtml(err.message)}</div>`;
+  }
 }
 
 document.querySelectorAll('.nav-tab[data-filter]').forEach((btn) => {
   btn.addEventListener('click', () => {
     setTopNavFilter(btn.getAttribute('data-filter'));
   });
+});
+
+document.getElementById('tabTemplates')?.addEventListener('click', () => {
+  document.querySelectorAll('.nav-tab').forEach((b) => b.classList.remove('active'));
+  document.getElementById('tabTemplates')?.classList.add('active');
+  switchMainSection('templatesView');
+  loadTemplatesList();
+});
+
+document.querySelectorAll('#templateCategoryTabs .filter-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('#templateCategoryTabs .filter-tab').forEach((b) => b.classList.remove('active'));
+    tab.classList.add('active');
+    currentTemplateCategory = tab.getAttribute('data-tpl-cat') || 'all';
+    loadTemplatesList();
+  });
+});
+
+document.getElementById('templateSearchInput')?.addEventListener('input', (e) => {
+  currentTemplateSearch = e.target.value.trim();
+  loadTemplatesList();
+});
+
+// AI App Generator Dialog trigger
+document.getElementById('studioAiGenBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const statusBox = document.getElementById('aiGenStatusBox');
+  if (statusBox) statusBox.hidden = true;
+  document.getElementById('aiGenerateDialog')?.showModal();
+});
+
+// AI Idea Presets
+document.querySelectorAll('.ai-preset-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const preset = btn.getAttribute('data-preset');
+    const input = document.getElementById('aiGenPromptInput');
+    if (input && preset) {
+      input.value = preset;
+      input.focus();
+    }
+  });
+});
+
+// AI Generator Form Submit
+document.getElementById('aiGenerateForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+
+  const promptInput = document.getElementById('aiGenPromptInput');
+  const styleSelect = document.getElementById('aiGenStyleSelect');
+  const statusBox = document.getElementById('aiGenStatusBox');
+  const submitBtn = document.getElementById('confirmAiGenBtn');
+
+  const prompt = promptInput?.value.trim();
+  if (!prompt) return;
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = '✨ Generating App Code...';
+  if (statusBox) statusBox.hidden = true;
+
+  try {
+    const res = await apiFetch(
+      `/api/spaces/${encodeURIComponent(state.currentSpace.ownerUsername)}/${encodeURIComponent(state.currentSpace.slug)}/ai-generate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt,
+          style: styleSelect?.value || 'modern'
+        })
+      }
+    );
+
+    document.getElementById('aiGenerateDialog')?.close();
+    showToast(res.message);
+    if (res.summary) {
+      showToast(`AI: ${res.summary}`);
+    }
+    await openSpaceStudio(state.currentSpace.ownerUsername, state.currentSpace.slug);
+  } catch (err) {
+    if (statusBox) {
+      statusBox.textContent = err.message || 'Generation failed.';
+      statusBox.hidden = false;
+    }
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = '✨ Generate & Apply Code';
+  }
+});
+
+// Publish to Template Marketplace
+document.getElementById('publishTemplateBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+
+  if (state.currentSpace.isTemplate) {
+    if (confirm(`Remove "${state.currentSpace.title}" from the Template Marketplace?`)) {
+      try {
+        const res = await apiFetch(
+          `/api/spaces/${encodeURIComponent(state.currentSpace.ownerUsername)}/${encodeURIComponent(state.currentSpace.slug)}/unpublish-template`,
+          { method: 'POST' }
+        );
+        showToast(res.message);
+        state.currentSpace.isTemplate = false;
+        document.getElementById('publishTemplateBtn').textContent = 'Publish Template';
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+    return;
+  }
+
+  const errBox = document.getElementById('publishTemplateError');
+  if (errBox) errBox.hidden = true;
+  const descInput = document.getElementById('templateDescInput');
+  if (descInput) descInput.value = state.currentSpace.description || '';
+  document.getElementById('publishTemplateDialog')?.showModal();
+});
+
+document.getElementById('publishTemplateForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+
+  const category = document.getElementById('templateCategorySelect')?.value || 'community';
+  const description = document.getElementById('templateDescInput')?.value.trim() || state.currentSpace.description;
+  const btn = document.getElementById('confirmPublishTemplateBtn');
+  btn.disabled = true;
+
+  try {
+    const res = await apiFetch(
+      `/api/spaces/${encodeURIComponent(state.currentSpace.ownerUsername)}/${encodeURIComponent(state.currentSpace.slug)}/publish-template`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ category, description })
+      }
+    );
+    showToast(res.message);
+    state.currentSpace.isTemplate = true;
+    document.getElementById('publishTemplateBtn').textContent = 'Unpublish Template';
+    document.getElementById('publishTemplateDialog')?.close();
+  } catch (err) {
+    const errBox = document.getElementById('publishTemplateError');
+    if (errBox) {
+      errBox.textContent = err.message;
+      errBox.hidden = false;
+    }
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Custom Domain DNS & SSL Diagnostics
+document.getElementById('runDomainDiagBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const box = document.getElementById('domainDiagBox');
+  if (!box) return;
+
+  box.hidden = false;
+  box.innerHTML = '<em>Checking DNS records and SSL certificate with Cloudflare edge...</em>';
+
+  try {
+    const res = await apiFetch(
+      `/api/spaces/${encodeURIComponent(state.currentSpace.ownerUsername)}/${encodeURIComponent(state.currentSpace.slug)}/domain-diagnostics`
+    );
+
+    const statusBadge =
+      res.status === 'ready'
+        ? '<span style="color:#34d399; font-weight:700;">✓ READY &amp; SECURE (SSL Active)</span>'
+        : res.status === 'ssl_pending'
+        ? '<span style="color:#fbbf24; font-weight:700;">⏳ SSL PROVISIONING IN PROGRESS</span>'
+        : '<span style="color:#f87171; font-weight:700;">⚠ DNS RECORD PENDING</span>';
+
+    box.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+        <strong>Domain: ${escapeHtml(res.domain)}</strong>
+        ${statusBadge}
+      </div>
+      <div style="font-size:0.78rem; color:#a1a1aa; line-height:1.4;">
+        <div><strong>Expected CNAME:</strong> <code>${escapeHtml(res.expectedCname)}</code></div>
+        <div><strong>Resolved CNAME:</strong> ${res.resolvedCname?.length ? res.resolvedCname.map(c => `<code>${escapeHtml(c)}</code>`).join(', ') : '<em>None detected</em>'}</div>
+        <div><strong>Resolved A:</strong> ${res.resolvedA?.length ? res.resolvedA.map(a => `<code>${escapeHtml(a)}</code>`).join(', ') : '<em>None</em>'}</div>
+        <div><strong>SSL Active:</strong> ${res.sslActive ? 'Yes (HTTPS Valid)' : 'Pending'}</div>
+      </div>
+      <ol style="margin-top:0.4rem; padding-left:1.2rem; font-size:0.75rem; color:#9ca3af;">
+        ${(res.instructions || []).map(i => `<li>${escapeHtml(i)}</li>`).join('')}
+      </ol>
+    `;
+  } catch (err) {
+    box.innerHTML = `<span style="color:#f87171;">Diagnostic failed: ${escapeHtml(err.message)}</span>`;
+  }
 });
 
 document.getElementById('tabHosting').addEventListener('click', () => {
@@ -2676,6 +2958,47 @@ document.getElementById('openSignInBtn').addEventListener('click', () => {
 document.getElementById('openSignUpBtn').addEventListener('click', () => {
   document.getElementById('signUpServerError').hidden = true;
   document.getElementById('signUpDialog').showModal();
+});
+
+// Dual Payment Gateway: Stripe Checkout
+let stripeConfig = { configured: false, publishableKey: null };
+
+async function initStripeConfig() {
+  try {
+    stripeConfig = await apiFetch('/api/stripe/config');
+    const block = document.getElementById('stripeCheckoutBlock');
+    if (block) {
+      block.hidden = !stripeConfig.configured;
+    }
+  } catch (_e) {}
+}
+
+document.getElementById('payWithStripeBtn')?.addEventListener('click', async () => {
+  const planId = document.getElementById('checkoutPlanIdInput')?.value || 'plan_monthly_1';
+  const btn = document.getElementById('payWithStripeBtn');
+  btn.disabled = true;
+  btn.textContent = 'Opening Stripe Checkout...';
+  try {
+    const res = await apiFetch('/api/stripe/create-checkout-session', {
+      method: 'POST',
+      body: JSON.stringify({
+        planId,
+        spaceSlug: pendingHostingSlug || null,
+        renewConnectionId: pendingRenewConnectionId || null
+      })
+    });
+    if (res.url) {
+      window.location.href = res.url;
+    } else {
+      showToast('Stripe checkout URL not returned.');
+      btn.disabled = false;
+      btn.textContent = 'Pay with Card / Apple Pay ↗';
+    }
+  } catch (err) {
+    showToast(err.message || 'Stripe checkout failed');
+    btn.disabled = false;
+    btn.textContent = 'Pay with Card / Apple Pay ↗';
+  }
 });
 
 // Social Account Sign-In (Google / Gmail, GitHub, Apple)
@@ -3428,6 +3751,7 @@ document.getElementById('copyInstallLinkBtn')?.addEventListener('click', async (
   }
   updateAuthUI();
   initGoogleAuth();
+  initStripeConfig();
   await loadSpacesList();
 
   const params = new URLSearchParams(window.location.search);
@@ -3435,6 +3759,19 @@ document.getElementById('copyInstallLinkBtn')?.addEventListener('click', async (
     pendingResetToken = params.get('reset');
     document.getElementById('resetPasswordMessage').hidden = true;
     document.getElementById('resetPasswordDialog').showModal();
+  }
+  if (params.get('stripe_success') === '1' && params.get('session_id')) {
+    try {
+      const res = await apiFetch(`/api/stripe/verify-session?sessionId=${encodeURIComponent(params.get('session_id'))}`);
+      window.history.replaceState({}, '', window.location.pathname);
+      showToast(res.message || 'Payment confirmed via Stripe!');
+      document.getElementById('tabHosting')?.click();
+    } catch (_e) {
+      showToast('Payment verified via Stripe.');
+    }
+  } else if (params.get('stripe_canceled') === '1') {
+    window.history.replaceState({}, '', window.location.pathname);
+    showToast('Stripe checkout was canceled.');
   }
   if (params.get('paypal_return') === '1' && params.get('token')) {
     if (!state.user) {

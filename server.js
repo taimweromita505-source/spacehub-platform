@@ -643,6 +643,75 @@ form?.addEventListener('submit', async (e) => {
   }
 });`
     }
+  },
+  kanban: {
+    name: 'Agile Kanban Project Board',
+    emoji: '📋',
+    category: 'productivity',
+    colorFrom: 'indigo',
+    colorTo: 'purple',
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agile Flow — Kanban Board</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="board-app">
+    <header class="board-top">
+      <div>
+        <h1>Agile Flow Board</h1>
+        <p class="subtitle">Streamline delivery with interactive card workflows</p>
+      </div>
+      <div class="board-actions">
+        <button id="addCardBtn" class="btn-primary">+ Add Task</button>
+      </div>
+    </header>
+    <main class="kanban-grid">
+      <section class="kanban-col"><div class="col-head"><h2>To Do</h2></div><div class="cards-list" id="col-todo"></div></section>
+      <section class="kanban-col"><div class="col-head"><h2>In Progress</h2></div><div class="cards-list" id="col-progress"></div></section>
+      <section class="kanban-col"><div class="col-head"><h2>Completed</h2></div><div class="cards-list" id="col-done"></div></section>
+    </main>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #09090b; color: #fafafa; padding: 2rem; }
+.board-app { max-width: 1000px; margin: 0 auto; }
+.board-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+.kanban-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+.kanban-col { background: #18181b; border: 1px solid #27272a; border-radius: 0.5rem; padding: 1rem; min-height: 400px; }
+.btn-primary { background: #6366f1; color: white; border: none; padding: 0.6rem 1rem; border-radius: 0.4rem; cursor: pointer; }`,
+      'script.js': `console.log('Kanban ready');`
+    }
+  },
+  invoice: {
+    name: 'Client Invoice Generator',
+    emoji: '🧾',
+    category: 'tools',
+    colorFrom: 'emerald',
+    colorTo: 'teal',
+    files: {
+      'index.html': `<!DOCTYPE html><html><head><title>Invoice</title><link rel="stylesheet" href="style.css"></head><body><h1>Invoice</h1><script src="script.js"></script></body></html>`,
+      'style.css': `body { font-family: system-ui; background: #09090b; color: #fafafa; padding: 2rem; }`,
+      'script.js': `console.log('Invoice ready');`
+    }
+  },
+  portfolio: {
+    name: 'Developer Bento Portfolio',
+    emoji: '💼',
+    category: 'portfolio',
+    colorFrom: 'cyan',
+    colorTo: 'blue',
+    files: {
+      'index.html': `<!DOCTYPE html><html><head><title>Portfolio</title><link rel="stylesheet" href="style.css"></head><body><h1>Portfolio</h1><script src="script.js"></script></body></html>`,
+      'style.css': `body { font-family: system-ui; background: #09090b; color: #fafafa; padding: 2rem; }`,
+      'script.js': `console.log('Portfolio ready');`
+    }
   }
 };
 
@@ -2071,6 +2140,11 @@ app.get('/api/paypal/config', (_req, res) => {
   res.json({ configured: false, mode: 'live' });
 });
 
+// Stripe Dual-Gateway Config (Worker handles live Stripe sessions)
+app.get('/api/stripe/config', (_req, res) => {
+  res.json({ configured: false, publishableKey: null });
+});
+
 app.get('/api/hosting-plans', (req, res) => {
   const origin = `${req.protocol}://${req.get('host')}`;
   res.json({
@@ -2210,15 +2284,94 @@ app.delete('/api/hosting-connections/:id', (req, res) => {
 
 // --- TEMPLATES & SPACES ROUTES ---
 
-app.get('/api/templates', (_req, res) => {
-  const list = Object.entries(STARTER_TEMPLATES).map(([id, t]) => ({
+app.get('/api/templates', (req, res) => {
+  const db = loadDb();
+  const category = String(req.query.category || 'all').toLowerCase();
+  const search = String(req.query.search || '').trim().toLowerCase();
+  let list = Object.entries(STARTER_TEMPLATES).map(([id, t]) => ({
     id,
+    slug: id,
     name: t.name,
+    description: t.description || `Official ${t.name} template for SpaceHub`,
+    category: t.category || (id === 'landing' || id === 'waitlist' ? 'saas' : id === 'dashboard' ? 'analytics' : 'tools'),
     emoji: t.emoji,
     colorFrom: t.colorFrom,
-    colorTo: t.colorTo
+    colorTo: t.colorTo,
+    authorUsername: 'spacehub',
+    isCommunity: false,
+    cloneCount: 15,
+    files: t.files
   }));
+  const community = (db.spaces || [])
+    .filter((s) => s.isTemplate && s.visibility === 'public')
+    .map((s) => ({
+      id: s.slug,
+      slug: s.slug,
+      name: s.title,
+      description: s.templateDescription || s.description || 'Community SpaceHub template',
+      category: s.templateCategory || 'community',
+      emoji: s.appIconText || '🚀',
+      authorUsername: s.ownerUsername,
+      isCommunity: true,
+      cloneCount: s.cloneCount || 0,
+      files: s.publishedFiles || s.draftFiles || {}
+    }));
+  list = [...list, ...community];
+  if (category !== 'all') {
+    list = list.filter((t) => (t.category || '').toLowerCase() === category);
+  }
+  if (search) {
+    list = list.filter((t) =>
+      t.name.toLowerCase().includes(search) ||
+      t.description.toLowerCase().includes(search)
+    );
+  }
   res.json({ templates: list });
+});
+
+app.post('/api/templates/:slug/clone', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  if (!user) return res.status(401).json({ error: 'Please sign in to clone a template.' });
+  const tplSlug = req.params.slug.toLowerCase();
+  const tpl = STARTER_TEMPLATES[tplSlug] || (db.spaces || []).find((s) => s.slug === tplSlug);
+  if (!tpl) return res.status(404).json({ error: 'Template not found.' });
+
+  const newSlug = slugify(`${tplSlug}-${user.username}-${crypto.randomBytes(2).toString('hex')}`);
+  const newSpace = {
+    id: 'spc_' + crypto.randomBytes(8).toString('hex'),
+    ownerId: user.id,
+    ownerUsername: user.username,
+    slug: newSlug,
+    title: `${tpl.name || tpl.title} (Cloned)`,
+    description: tpl.description || 'Cloned from Template Marketplace',
+    visibility: 'private',
+    appPlatform: 'both',
+    appOrientation: 'any',
+    appIconText: tpl.emoji || '🚀',
+    appThemeColor: '#09090b',
+    draftFiles: JSON.parse(JSON.stringify(tpl.files || tpl.draftFiles || {})),
+    publishedFiles: JSON.parse(JSON.stringify(tpl.files || tpl.publishedFiles || {})),
+    status: 'draft',
+    version: 1,
+    snapshots: [
+      {
+        id: 'snap_' + crypto.randomBytes(4).toString('hex'),
+        label: `Cloned from ${tpl.name || tpl.title}`,
+        createdAt: new Date().toISOString(),
+        files: JSON.parse(JSON.stringify(tpl.files || tpl.draftFiles || {}))
+      }
+    ],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  db.spaces.push(newSpace);
+  saveDb(db);
+  res.status(201).json({
+    ok: true,
+    message: `Template cloned successfully!`,
+    space: formatSpaceSummary(newSpace, user)
+  });
 });
 
 app.get('/api/spaces', (req, res) => {

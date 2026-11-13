@@ -365,6 +365,354 @@ form?.addEventListener('submit', async (e) => {
   }
 });`
     }
+  },
+  kanban: {
+    name: 'Agile Kanban Project Board',
+    emoji: '📋',
+    category: 'productivity',
+    colorFrom: 'indigo',
+    colorTo: 'purple',
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agile Flow — Kanban Board</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="board-app">
+    <header class="board-top">
+      <div>
+        <h1>Agile Flow Board</h1>
+        <p class="subtitle">Streamline delivery with interactive card workflows</p>
+      </div>
+      <div class="board-actions">
+        <button id="addCardBtn" class="btn-primary">+ Add Task</button>
+        <button id="clearCardsBtn" class="btn-ghost">Reset Board</button>
+      </div>
+    </header>
+
+    <main class="kanban-grid">
+      <section class="kanban-col" data-col="todo">
+        <div class="col-head">
+          <h2>To Do</h2>
+          <span class="count-badge" id="count-todo">0</span>
+        </div>
+        <div class="cards-list" id="col-todo"></div>
+      </section>
+
+      <section class="kanban-col" data-col="progress">
+        <div class="col-head">
+          <h2>In Progress</h2>
+          <span class="count-badge" id="count-progress">0</span>
+        </div>
+        <div class="cards-list" id="col-progress"></div>
+      </section>
+
+      <section class="kanban-col" data-col="done">
+        <div class="col-head">
+          <h2>Completed</h2>
+          <span class="count-badge" id="count-done">0</span>
+        </div>
+        <div class="cards-list" id="col-done"></div>
+      </section>
+    </main>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #fafafa; min-height: 100vh; padding: 2rem; }
+.board-app { max-width: 1100px; margin: 0 auto; }
+.board-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+h1 { font-size: 1.6rem; font-weight: 700; }
+.subtitle { color: #a1a1aa; font-size: 0.9rem; margin-top: 0.2rem; }
+.board-actions { display: flex; gap: 0.6rem; }
+.btn-primary { background: #6366f1; color: white; border: none; padding: 0.6rem 1.1rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; }
+.btn-ghost { background: transparent; color: #a1a1aa; border: 1px solid #27272a; padding: 0.6rem 1rem; border-radius: 0.5rem; cursor: pointer; }
+.kanban-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+.kanban-col { background: #121215; border: 1px solid #27272a; border-radius: 0.75rem; padding: 1.25rem; display: flex; flex-direction: column; min-height: 480px; }
+.col-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid #27272a; }
+.col-head h2 { font-size: 1.1rem; font-weight: 600; }
+.count-badge { background: #27272a; color: #a1a1aa; font-size: 0.75rem; padding: 0.2rem 0.55rem; border-radius: 999px; font-weight: 700; }
+.cards-list { display: flex; flex-direction: column; gap: 0.75rem; flex: 1; }
+.card { background: #18181b; border: 1px solid #27272a; border-radius: 0.5rem; padding: 1rem; cursor: pointer; transition: transform 0.15s, border-color 0.15s; }
+.card:hover { border-color: #6366f1; transform: translateY(-2px); }
+.card h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.4rem; }
+.card p { font-size: 0.85rem; color: #a1a1aa; margin-bottom: 0.75rem; }
+.card-meta { display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; }
+.tag-high { color: #f87171; background: rgba(239,68,68,0.15); padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 600; }
+.advance-btn { background: #27272a; color: #fafafa; border: none; padding: 0.25rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }`,
+      'script.js': `let tasks = JSON.parse(localStorage.getItem('sh_tasks') || 'null') || [
+  { id: '1', title: 'Architect Database Schema', desc: 'Define SQLite / JSON KV schemas', status: 'done', priority: 'High' },
+  { id: '2', title: 'Implement Stripe Checkout', desc: 'Support card & Apple Pay alongside PayPal', status: 'progress', priority: 'High' },
+  { id: '3', title: 'Template Marketplace UI', desc: '1-click clone spaces directly into staging', status: 'todo', priority: 'Medium' }
+];
+
+function saveAndRender() {
+  localStorage.setItem('sh_tasks', JSON.stringify(tasks));
+  ['todo', 'progress', 'done'].forEach(col => {
+    const list = document.getElementById('col-' + col);
+    const count = document.getElementById('count-' + col);
+    const colTasks = tasks.filter(t => t.status === col);
+    if (count) count.textContent = colTasks.length;
+    if (list) {
+      list.innerHTML = colTasks.map(t => \`
+        <div class="card">
+          <h3>\${t.title}</h3>
+          <p>\${t.desc}</p>
+          <div class="card-meta">
+            <span class="tag-high">\${t.priority}</span>
+            <button class="advance-btn" onclick="advanceTask('\${t.id}')">Advance →</button>
+          </div>
+        </div>
+      \`).join('');
+    }
+  });
+}
+
+window.advanceTask = function(id) {
+  const t = tasks.find(x => x.id === id);
+  if (!t) return;
+  if (t.status === 'todo') t.status = 'progress';
+  else if (t.status === 'progress') t.status = 'done';
+  else t.status = 'todo';
+  saveAndRender();
+};
+
+document.getElementById('addCardBtn')?.addEventListener('click', () => {
+  const title = prompt('Enter task title:');
+  if (!title) return;
+  tasks.push({ id: String(Date.now()), title, desc: 'Created in SpaceHub Studio', status: 'todo', priority: 'Normal' });
+  saveAndRender();
+});
+
+document.getElementById('clearCardsBtn')?.addEventListener('click', () => {
+  if (confirm('Reset board to default tasks?')) {
+    localStorage.removeItem('sh_tasks');
+    location.reload();
+  }
+});
+
+saveAndRender();`
+    }
+  },
+  invoice: {
+    name: 'Client Invoice & Quote Generator',
+    emoji: '🧾',
+    category: 'tools',
+    colorFrom: 'emerald',
+    colorTo: 'teal',
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Client Invoice Generator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="invoice-box">
+    <header class="invoice-head">
+      <div>
+        <h1 id="invNumber">INVOICE #INV-2026-001</h1>
+        <p class="muted">Issued by SpaceHub Studio</p>
+      </div>
+      <button class="btn-print" onclick="window.print()">🖨️ Print / Save PDF</button>
+    </header>
+
+    <div class="bill-row">
+      <div>
+        <strong>Billed To:</strong>
+        <p contenteditable="true" id="clientName">Acme Corporation</p>
+        <p contenteditable="true" id="clientAddr">billing@acme.com</p>
+      </div>
+      <div class="meta-right">
+        <p><strong>Date:</strong> <span id="invDate">Nov 14, 2026</span></p>
+        <p><strong>Terms:</strong> Due on receipt</p>
+      </div>
+    </div>
+
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th>Description</th>
+          <th style="width: 80px;">Qty</th>
+          <th style="width: 120px;">Rate ($)</th>
+          <th style="width: 120px; text-align: right;">Amount ($)</th>
+        </tr>
+      </thead>
+      <tbody id="itemsBody">
+        <tr>
+          <td><input type="text" value="Custom Web App Development" class="row-desc" /></td>
+          <td><input type="number" value="1" min="1" class="row-qty" /></td>
+          <td><input type="number" value="500" min="0" class="row-rate" /></td>
+          <td class="row-total" style="text-align: right;">500.00</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="table-actions">
+      <button id="addItemBtn" class="btn-secondary">+ Add Line Item</button>
+    </div>
+
+    <div class="totals-section">
+      <div class="total-line"><span>Subtotal:</span><strong id="subTotal">$500.00</strong></div>
+      <div class="total-line"><span>Tax (10%):</span><strong id="taxAmount">$50.00</strong></div>
+      <div class="total-line grand"><span>Total Due:</span><strong id="grandTotal">$550.00</strong></div>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #fafafa; padding: 2rem; }
+.invoice-box { max-width: 760px; margin: 0 auto; background: #18181b; border: 1px solid #27272a; border-radius: 0.75rem; padding: 2.5rem; }
+.invoice-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #27272a; padding-bottom: 1.5rem; margin-bottom: 1.5rem; }
+.btn-print { background: #6366f1; color: white; border: none; padding: 0.6rem 1.2rem; border-radius: 0.5rem; cursor: pointer; font-weight: 600; }
+.bill-row { display: flex; justify-content: space-between; margin-bottom: 2rem; font-size: 0.95rem; }
+.items-table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+.items-table th { text-align: left; padding: 0.75rem 0.5rem; border-bottom: 2px solid #27272a; color: #a1a1aa; font-size: 0.85rem; }
+.items-table td { padding: 0.75rem 0.5rem; border-bottom: 1px solid #27272a; }
+input { background: #09090b; border: 1px solid #27272a; color: #fafafa; padding: 0.4rem 0.6rem; border-radius: 4px; width: 100%; }
+.table-actions { margin-bottom: 2rem; }
+.btn-secondary { background: #27272a; color: #fafafa; border: none; padding: 0.5rem 0.9rem; border-radius: 0.4rem; cursor: pointer; }
+.totals-section { max-width: 260px; margin-left: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+.total-line { display: flex; justify-content: space-between; font-size: 0.95rem; }
+.total-line.grand { font-size: 1.2rem; color: #34d399; border-top: 1px solid #27272a; padding-top: 0.75rem; }
+@media print {
+  body { background: white; color: black; padding: 0; }
+  .invoice-box { border: none; background: white; color: black; max-width: 100%; }
+  .btn-print, .table-actions { display: none; }
+  input { border: none; background: transparent; color: black; }
+}`,
+      'script.js': `function recalc() {
+  let sub = 0;
+  document.querySelectorAll('#itemsBody tr').forEach(tr => {
+    const qty = parseFloat(tr.querySelector('.row-qty')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.row-rate')?.value) || 0;
+    const total = qty * rate;
+    const totEl = tr.querySelector('.row-total');
+    if (totEl) totEl.textContent = total.toFixed(2);
+    sub += total;
+  });
+  const tax = sub * 0.10;
+  const grand = sub + tax;
+  const s = document.getElementById('subTotal');
+  const t = document.getElementById('taxAmount');
+  const g = document.getElementById('grandTotal');
+  if (s) s.textContent = '$' + sub.toFixed(2);
+  if (t) t.textContent = '$' + tax.toFixed(2);
+  if (g) g.textContent = '$' + grand.toFixed(2);
+}
+
+document.getElementById('itemsBody')?.addEventListener('input', recalc);
+document.getElementById('addItemBtn')?.addEventListener('click', () => {
+  const tr = document.createElement('tr');
+  tr.innerHTML = \`
+    <td><input type="text" value="New Service Item" class="row-desc" /></td>
+    <td><input type="number" value="1" min="1" class="row-qty" /></td>
+    <td><input type="number" value="100" min="0" class="row-rate" /></td>
+    <td class="row-total" style="text-align: right;">100.00</td>
+  \`;
+  document.getElementById('itemsBody')?.appendChild(tr);
+  recalc();
+});
+recalc();`
+    }
+  },
+  portfolio: {
+    name: 'Developer Bento Portfolio',
+    emoji: '💼',
+    category: 'portfolio',
+    colorFrom: 'cyan',
+    colorTo: 'blue',
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alex Rivera — Full-Stack Engineer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bento-container">
+    <header class="bento-hero">
+      <div class="avatar">👨‍💻</div>
+      <div>
+        <h1>Alex Rivera</h1>
+        <p class="tagline">Principal Systems Engineer & Open Source Contributor</p>
+      </div>
+      <div class="status-pill">● Available for Work</div>
+    </header>
+
+    <div class="bento-grid">
+      <div class="bento-card col-span-2">
+        <h2>Featured Project: SpaceHub</h2>
+        <p>Cloud edge web application hosting platform running on Cloudflare Workers for $1/month.</p>
+        <div class="badges">
+          <span class="badge">TypeScript</span>
+          <span class="badge">Workers KV</span>
+          <span class="badge">PayPal REST</span>
+        </div>
+      </div>
+
+      <div class="bento-card">
+        <h2>Tech Stack</h2>
+        <ul class="skills-list">
+          <li>JavaScript / Node.js</li>
+          <li>Cloudflare Edge</li>
+          <li>Web Audio / Canvas</li>
+          <li>PostgreSQL / KV</li>
+        </ul>
+      </div>
+
+      <div class="bento-card">
+        <h2>Stats</h2>
+        <div class="stats-row">
+          <div><strong>48+</strong><span>Shipped Apps</span></div>
+          <div><strong>99.9%</strong><span>Uptime</span></div>
+        </div>
+      </div>
+
+      <div class="bento-card col-span-2">
+        <h2>Let's Connect</h2>
+        <p>Drop me a message to collaborate on your next product.</p>
+        <button class="btn-connect" onclick="alert('Email copied: alex@example.com')">Copy Email</button>
+      </div>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #fafafa; padding: 2.5rem 1.5rem; min-height: 100vh; }
+.bento-container { max-width: 860px; margin: 0 auto; }
+.bento-hero { display: flex; align-items: center; gap: 1.5rem; margin-bottom: 2.5rem; flex-wrap: wrap; }
+.avatar { font-size: 2.5rem; background: #18181b; border: 1px solid #27272a; width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; }
+h1 { font-size: 1.8rem; font-weight: 800; letter-spacing: -0.02em; }
+.tagline { color: #a1a1aa; font-size: 0.95rem; }
+.status-pill { margin-left: auto; font-size: 0.75rem; font-weight: 700; color: #34d399; background: rgba(52,211,153,0.12); padding: 0.3rem 0.75rem; border-radius: 999px; border: 1px solid rgba(52,211,153,0.25); }
+.bento-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.25rem; }
+.bento-card { background: #18181b; border: 1px solid #27272a; border-radius: 0.85rem; padding: 1.5rem; transition: transform 0.15s, border-color 0.15s; }
+.bento-card:hover { border-color: #52525b; transform: translateY(-2px); }
+.col-span-2 { grid-column: span 2; }
+@media (max-width: 680px) { .col-span-2 { grid-column: span 1; } }
+h2 { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.5rem; }
+p { color: #a1a1aa; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1rem; }
+.badges { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.badge { font-size: 0.75rem; font-weight: 600; background: #27272a; color: #fafafa; padding: 0.25rem 0.6rem; border-radius: 4px; }
+.skills-list { list-style: none; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.88rem; color: #d4d4d8; }
+.stats-row { display: flex; gap: 2rem; margin-top: 0.75rem; }
+.stats-row strong { font-size: 1.8rem; font-weight: 800; color: #818cf8; display: block; }
+.stats-row span { font-size: 0.8rem; color: #a1a1aa; }
+.btn-connect { background: #fafafa; color: #09090b; font-weight: 700; border: none; padding: 0.6rem 1.2rem; border-radius: 0.5rem; cursor: pointer; }`,
+      'script.js': `console.log('Portfolio ready');`
+    }
   }
 };
 
@@ -460,10 +808,16 @@ let memoryDb = {
   hostingConnections: [],
   paypalOrders: [],
   paypalEvents: [],
+  stripeOrders: [],
+  stripeEvents: [],
   passwordResets: [],
   loginFailures: {},
   spaces: []
 };
+
+function stripeConfigured(env) {
+  return Boolean(env && (env.STRIPE_SECRET_KEY || env.STRIPE_KEY));
+}
 
 function paypalConfigured(env) {
   return Boolean(env && env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET);
@@ -713,6 +1067,188 @@ function applyPaypalReinstatement(db, rec) {
   return { conn, action: 'reinstated' };
 }
 
+function getMarketplaceTemplates(db) {
+  const builtIn = Object.entries(STARTER_TEMPLATES).map(([key, tpl]) => ({
+    slug: key,
+    name: tpl.name,
+    description: tpl.description || `Official responsive ${tpl.name} template for SpaceHub`,
+    category: tpl.category || (key === 'landing' || key === 'waitlist' ? 'saas' : key === 'dashboard' ? 'analytics' : 'tools'),
+    emoji: tpl.emoji || '⚡',
+    authorUsername: 'spacehub',
+    isCommunity: false,
+    cloneCount: tpl.cloneCount || 24,
+    tags: tpl.tags || ['starter', key],
+    files: tpl.files
+  }));
+
+  const community = (db?.spaces || [])
+    .filter((s) => s.isTemplate && s.visibility === 'public')
+    .map((s) => ({
+      slug: s.slug,
+      name: s.title,
+      description: s.templateDescription || s.description || 'Community SpaceHub template',
+      category: s.templateCategory || 'community',
+      emoji: s.appIconText || '🚀',
+      authorUsername: s.ownerUsername,
+      isCommunity: true,
+      cloneCount: s.cloneCount || 0,
+      tags: s.templateTags || ['community'],
+      files: s.publishedFiles || s.draftFiles || {}
+    }));
+
+  return [...builtIn, ...community];
+}
+
+function synthesizeAppFromPrompt(prompt, style = 'modern') {
+  const p = String(prompt || '').toLowerCase();
+  const title = prompt && prompt.length > 3 ? prompt.trim().slice(0, 45) : 'Next-Gen Web App';
+
+  if (p.includes('kanban') || p.includes('task') || p.includes('todo') || p.includes('board') || p.includes('agile')) {
+    return {
+      source: 'synthesizer',
+      summary: 'Responsive Agile Kanban Project Board with interactive cards, columns, and persistent storage.',
+      files: STARTER_TEMPLATES.kanban.files
+    };
+  }
+
+  if (p.includes('invoice') || p.includes('bill') || p.includes('quote') || p.includes('receipt')) {
+    return {
+      source: 'synthesizer',
+      summary: 'Client Invoice & Billing Calculator with live subtotal calculation, tax, and print-ready stylesheet.',
+      files: STARTER_TEMPLATES.invoice.files
+    };
+  }
+
+  if (p.includes('portfolio') || p.includes('resume') || p.includes('cv') || p.includes('showcase')) {
+    return {
+      source: 'synthesizer',
+      summary: 'Bento-Grid Developer Portfolio with interactive project cards, skills cloud, and contact modal.',
+      files: STARTER_TEMPLATES.portfolio.files
+    };
+  }
+
+  return {
+    source: 'synthesizer',
+    summary: `Interactive application: ${title} with responsive UI components and instant edge persistence.`,
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${title}</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-wrap">
+    <header class="app-top">
+      <div class="brand">⚡ ${title}</div>
+      <div class="badge">LIVE APP</div>
+    </header>
+
+    <main class="hero">
+      <h1>${title}</h1>
+      <p class="tagline">Built and deployed live on SpaceHub managed edge cloud.</p>
+      
+      <div class="counter-card">
+        <h2>Interactive Session</h2>
+        <div class="metric" id="metricVal">0</div>
+        <p class="metric-label">Interactions Recorded</p>
+        <div class="btn-group">
+          <button id="incBtn" class="btn-primary">Pulse Counter (+1)</button>
+          <button id="resetBtn" class="btn-ghost">Reset</button>
+        </div>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature">
+          <h3>⚡ Ultra-Fast Edge</h3>
+          <p>Global low-latency delivery via Cloudflare CDN.</p>
+        </div>
+        <div class="feature">
+          <h3>🔒 Built-in Storage</h3>
+          <p>Persistent JSON database wired to SpaceHub cloud.</p>
+        </div>
+        <div class="feature">
+          <h3>📱 PWA Ready</h3>
+          <p>Installable as standalone iOS and Android web app.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #fafafa; min-height: 100vh; padding: 2rem; }
+.app-wrap { max-width: 860px; margin: 0 auto; }
+.app-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3rem; }
+.brand { font-size: 1.15rem; font-weight: 700; color: #818cf8; }
+.badge { background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3); color: #818cf8; font-size: 0.72rem; padding: 0.2rem 0.6rem; border-radius: 999px; font-weight: 700; }
+.hero h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: 0.5rem; letter-spacing: -0.02em; }
+.tagline { color: #a1a1aa; font-size: 1.05rem; margin-bottom: 2.5rem; }
+.counter-card { background: #18181b; border: 1px solid #27272a; border-radius: 0.75rem; padding: 2rem; text-align: center; margin-bottom: 2.5rem; }
+.metric { font-size: 3.5rem; font-weight: 800; color: #34d399; margin: 0.5rem 0; font-variant-numeric: tabular-nums; }
+.metric-label { color: #a1a1aa; font-size: 0.85rem; margin-bottom: 1.5rem; }
+.btn-group { display: flex; gap: 0.75rem; justify-content: center; }
+.btn-primary { background: #6366f1; color: white; border: none; padding: 0.65rem 1.35rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; transition: transform 0.1s; }
+.btn-primary:active { transform: scale(0.97); }
+.btn-ghost { background: transparent; color: #a1a1aa; border: 1px solid #27272a; padding: 0.65rem 1rem; border-radius: 0.5rem; cursor: pointer; }
+.features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.25rem; }
+.feature { background: #121215; border: 1px solid #27272a; border-radius: 0.6rem; padding: 1.25rem; }
+.feature h3 { font-size: 1rem; margin-bottom: 0.4rem; color: #fafafa; }
+.feature p { font-size: 0.85rem; color: #a1a1aa; line-height: 1.4; }`,
+      'script.js': `let val = parseInt(localStorage.getItem('sh_demo_count') || '0', 10);
+const metric = document.getElementById('metricVal');
+if (metric) metric.textContent = val;
+document.getElementById('incBtn')?.addEventListener('click', () => {
+  val++;
+  if (metric) metric.textContent = val;
+  localStorage.setItem('sh_demo_count', String(val));
+});
+document.getElementById('resetBtn')?.addEventListener('click', () => {
+  val = 0;
+  if (metric) metric.textContent = val;
+  localStorage.removeItem('sh_demo_count');
+});`
+    }
+  };
+}
+
+async function generateAppWithGeminiOrSynthesizer(env, prompt, style = 'modern') {
+  const cleanPrompt = String(prompt || '').trim();
+  if (env && env.GEMINI_API_KEY) {
+    try {
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
+      const sysInstruction =
+        'You are an expert full-stack web engineer. Generate a production-ready, beautiful, responsive, self-contained single-page web application. Return ONLY a valid JSON object matching this schema without markdown fences: {"summary":"string","files":{"index.html":"string","style.css":"string","script.js":"string"}}';
+
+      const resp = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `${sysInstruction}\nUser Prompt: ${cleanPrompt}\nDesign Style: ${style}` }] }],
+          generationConfig: { responseMimeType: 'application/json' }
+        })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const parsed = JSON.parse(rawText.replace(/^```json/i, '').replace(/```$/i, '').trim());
+        if (parsed && parsed.files && parsed.files['index.html']) {
+          return {
+            source: 'gemini-2.5-flash',
+            summary: parsed.summary || `Generated application: ${cleanPrompt}`,
+            files: parsed.files
+          };
+        }
+      }
+    } catch (_err) {}
+  }
+
+  return synthesizeAppFromPrompt(cleanPrompt, style);
+}
+
 const KV_KEY = 'spacehub_prod_state_v2';
 
 async function loadDb(env) {
@@ -727,6 +1263,8 @@ async function loadDb(env) {
           hostingConnections: Array.isArray(raw.hostingConnections) ? raw.hostingConnections : [],
           paypalOrders: Array.isArray(raw.paypalOrders) ? raw.paypalOrders : [],
           paypalEvents: Array.isArray(raw.paypalEvents) ? raw.paypalEvents : [],
+          stripeOrders: Array.isArray(raw.stripeOrders) ? raw.stripeOrders : [],
+          stripeEvents: Array.isArray(raw.stripeEvents) ? raw.stripeEvents : [],
           passwordResets: Array.isArray(raw.passwordResets) ? raw.passwordResets : [],
           loginFailures: raw.loginFailures && typeof raw.loginFailures === 'object' ? raw.loginFailures : {},
           spaces: Array.isArray(raw.spaces) ? raw.spaces : []
@@ -3368,6 +3906,256 @@ const spaceHubWorker = {
         }
       }
 
+      // --- STRIPE DUAL-GATEWAY ROUTES ---
+      if (pathname === '/api/stripe/config' && method === 'GET') {
+        return jsonResponse({
+          configured: stripeConfigured(env),
+          publishableKey: env.STRIPE_PUBLISHABLE_KEY || null
+        });
+      }
+
+      if (pathname === '/api/stripe/create-checkout-session' && method === 'POST') {
+        if (!user) return jsonResponse({ error: 'Please sign in to buy a Space hosting plan.' }, 401);
+        const renewConn = body.renewConnectionId
+          ? db.hostingConnections.find((c) => c.id === body.renewConnectionId && c.userId === user.id && c.isSingleSpaceSlot)
+          : null;
+        if (body.renewConnectionId && !renewConn) {
+          return jsonResponse({ error: 'Hosting slot to renew was not found on this account.' }, 404);
+        }
+        if (renewConn && renewConn.suspended) {
+          return jsonResponse({ error: 'This hosting slot is suspended and cannot be renewed.' }, 403);
+        }
+        const plan =
+          HOSTING_PLANS.find((p) => p.id === (renewConn ? renewConn.planId || body.planId : body.planId)) ||
+          HOSTING_PLANS[0];
+        const spaceSlug = renewConn ? renewConn.assignedSpaceSlug || null : (body.spaceSlug ? slugify(body.spaceSlug) : null);
+        const amountCents = plan.id === 'plan_yearly_12' ? 1200 : 100;
+
+        if (!stripeConfigured(env)) {
+          return jsonResponse(
+            { error: 'Stripe API checkout is not configured yet. Please use PayPal.', fallback: true },
+            503
+          );
+        }
+
+        try {
+          const params = new URLSearchParams();
+          params.append('mode', 'payment');
+          params.append('success_url', `https://${url.host}/?stripe_success=1&session_id={CHECKOUT_SESSION_ID}`);
+          params.append('cancel_url', `https://${url.host}/?stripe_canceled=1`);
+          params.append('payment_method_types[0]', 'card');
+          params.append('line_items[0][price_data][currency]', 'usd');
+          params.append('line_items[0][price_data][unit_amount]', String(amountCents));
+          params.append('line_items[0][price_data][product_data][name]', `SpaceHub Hosting — ${plan.name}`);
+          params.append('line_items[0][price_data][product_data][description]', `Hosting slot ($${amountCents / 100} USD)`);
+          params.append('line_items[0][quantity]', '1');
+          params.append('client_reference_id', user.id);
+          params.append('metadata[userId]', user.id);
+          params.append('metadata[planId]', plan.id);
+          params.append('metadata[spaceSlug]', spaceSlug || '');
+          params.append('metadata[renewConnectionId]', renewConn ? renewConn.id : '');
+          if (user.email) params.append('customer_email', user.email);
+
+          const sRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: params.toString()
+          });
+
+          if (!sRes.ok) {
+            const errBody = await sRes.text();
+            return jsonResponse({ error: 'Stripe session creation failed: ' + errBody }, 502);
+          }
+
+          const session = await sRes.json();
+          db.stripeOrders = Array.isArray(db.stripeOrders) ? db.stripeOrders : [];
+          db.stripeOrders.push({
+            id: session.id,
+            userId: user.id,
+            planId: plan.id,
+            spaceSlug,
+            amountUsd: amountCents / 100,
+            renewConnectionId: renewConn ? renewConn.id : null,
+            status: 'PENDING',
+            createdAt: new Date().toISOString()
+          });
+          await saveDb(env, db);
+
+          return jsonResponse({
+            sessionId: session.id,
+            url: session.url
+          }, 201);
+        } catch (err) {
+          return jsonResponse({ error: err.message || 'Stripe request failed.' }, 502);
+        }
+      }
+
+      if (pathname === '/api/stripe/webhook' && method === 'POST') {
+        const event = body;
+        if (!event || !event.type) return jsonResponse({ error: 'Invalid event payload.' }, 400);
+
+        db.stripeEvents = Array.isArray(db.stripeEvents) ? db.stripeEvents : [];
+        if (db.stripeEvents.includes(event.id)) {
+          return jsonResponse({ received: true, deduplicated: true });
+        }
+        db.stripeEvents.push(event.id);
+        if (db.stripeEvents.length > 500) db.stripeEvents.shift();
+
+        if (event.type === 'checkout.session.completed') {
+          const session = event.data?.object || {};
+          const userId = session.client_reference_id || session.metadata?.userId;
+          const planId = session.metadata?.planId || 'plan_monthly_1';
+          const spaceSlug = session.metadata?.spaceSlug || null;
+          const renewConnId = session.metadata?.renewConnectionId || null;
+          const plan = HOSTING_PLANS.find((p) => p.id === planId) || HOSTING_PLANS[0];
+
+          db.stripeOrders = Array.isArray(db.stripeOrders) ? db.stripeOrders : [];
+          let orderRec = db.stripeOrders.find((o) => o.id === session.id);
+          if (!orderRec) {
+            orderRec = {
+              id: session.id,
+              userId,
+              planId,
+              spaceSlug,
+              amountUsd: (session.amount_total || 100) / 100,
+              createdAt: new Date().toISOString()
+            };
+            db.stripeOrders.push(orderRec);
+          }
+          orderRec.status = 'COMPLETED';
+          orderRec.capturedAt = new Date().toISOString();
+
+          if (renewConnId) {
+            const conn = db.hostingConnections.find((c) => c.id === renewConnId);
+            if (conn) {
+              conn.expiresAt = addDaysIso(conn.expiresAt || new Date().toISOString(), plan.periodDays || 30);
+              conn.suspended = false;
+            }
+          } else if (userId) {
+            const conn = provisionHostingConnection(db, { id: userId }, plan, {
+              spaceSlug,
+              paymentMethod: 'stripe_card',
+              paymentRef: session.id,
+              host: url.host
+            });
+            orderRec.connectionId = conn.id;
+          }
+          await saveDb(env, db);
+        }
+        return jsonResponse({ received: true });
+      }
+
+      if (pathname === '/api/stripe/verify-session' && method === 'GET') {
+        const sessionId = url.searchParams.get('sessionId');
+        if (!sessionId) return jsonResponse({ error: 'sessionId required' }, 400);
+        if (!stripeConfigured(env)) {
+          return jsonResponse({ error: 'Stripe not configured' }, 503);
+        }
+        try {
+          const sRes = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`, {
+            headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` }
+          });
+          if (!sRes.ok) return jsonResponse({ error: 'Session not found' }, 404);
+          const session = await sRes.json();
+          if (session.payment_status === 'paid') {
+            db.stripeOrders = Array.isArray(db.stripeOrders) ? db.stripeOrders : [];
+            let orderRec = db.stripeOrders.find((o) => o.id === session.id);
+            if (!orderRec && session.metadata?.userId) {
+              const plan = HOSTING_PLANS.find((p) => p.id === session.metadata.planId) || HOSTING_PLANS[0];
+              const conn = provisionHostingConnection(db, { id: session.metadata.userId }, plan, {
+                spaceSlug: session.metadata.spaceSlug,
+                paymentMethod: 'stripe_card',
+                paymentRef: session.id,
+                host: url.host
+              });
+              db.stripeOrders.push({
+                id: session.id,
+                userId: session.metadata.userId,
+                planId: plan.id,
+                spaceSlug: session.metadata.spaceSlug,
+                connectionId: conn.id,
+                amountUsd: (session.amount_total || 100) / 100,
+                status: 'COMPLETED',
+                createdAt: new Date().toISOString()
+              });
+              await saveDb(env, db);
+            }
+            return jsonResponse({ ok: true, paid: true, message: 'Hosting plan activated via Stripe!' });
+          }
+          return jsonResponse({ ok: false, paid: false, status: session.payment_status });
+        } catch (err) {
+          return jsonResponse({ error: err.message }, 502);
+        }
+      }
+
+      // --- TEMPLATES MARKETPLACE ROUTES ---
+      if (pathname === '/api/templates' && method === 'GET') {
+        const category = (url.searchParams.get('category') || 'all').toLowerCase();
+        const search = (url.searchParams.get('search') || '').trim().toLowerCase();
+        let list = getMarketplaceTemplates(db);
+        if (category !== 'all') {
+          list = list.filter((t) => (t.category || '').toLowerCase() === category);
+        }
+        if (search) {
+          list = list.filter((t) =>
+            t.name.toLowerCase().includes(search) ||
+            t.description.toLowerCase().includes(search) ||
+            (t.tags && t.tags.some((tag) => tag.toLowerCase().includes(search)))
+          );
+        }
+        return jsonResponse({ templates: list });
+      }
+
+      const tplCloneMatch = pathname.match(/^\/api\/templates\/([^/]+)\/clone$/i);
+      if (tplCloneMatch && method === 'POST') {
+        if (!user) return jsonResponse({ error: 'Please sign in to clone a template.' }, 401);
+        const tplSlug = decodeURIComponent(tplCloneMatch[1]).toLowerCase();
+        const allTpls = getMarketplaceTemplates(db);
+        const template = allTpls.find((t) => t.slug === tplSlug);
+        if (!template) return jsonResponse({ error: 'Template not found.' }, 404);
+
+        const newSlug = slugify(`${template.slug}-${user.username}-${randomHex(2)}`);
+        const newSpace = {
+          id: 'spc_' + randomHex(8),
+          ownerId: user.id,
+          ownerUsername: user.username,
+          slug: newSlug,
+          title: `${template.name} (Cloned)`,
+          description: template.description || 'Cloned from SpaceHub Template Marketplace',
+          visibility: 'private',
+          appPlatform: 'both',
+          appOrientation: 'any',
+          appIconText: template.emoji || '🚀',
+          appThemeColor: '#09090b',
+          draftFiles: { ...template.files },
+          publishedFiles: { ...template.files },
+          status: 'draft',
+          version: 1,
+          snapshots: [
+            {
+              id: 'snap_' + randomHex(4),
+              label: `Cloned from ${template.name}`,
+              createdAt: new Date().toISOString(),
+              files: { ...template.files }
+            }
+          ],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        db.spaces.push(newSpace);
+        template.cloneCount = (template.cloneCount || 0) + 1;
+        await saveDb(env, db);
+
+        return jsonResponse({
+          ok: true,
+          message: `Template "${template.name}" cloned into your staging workspace!`,
+          space: formatSpaceSummary(newSpace, user)
+        }, 201);
+      }
+
       if (pathname === '/api/hosting-plans/purchase' && method === 'POST') {
         if (!user) return jsonResponse({ error: 'Please sign in to buy a Space hosting plan.' }, 401);
         if (paypalConfigured(env)) {
@@ -3883,6 +4671,133 @@ const spaceHubWorker = {
           );
         }
 
+        if (action === 'ai-generate' && method === 'POST') {
+          if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+          if (!space || !canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          const prompt = String(body.prompt || '').trim();
+          if (!prompt) return jsonResponse({ error: 'Prompt is required.' }, 400);
+          const style = String(body.style || 'modern').trim();
+
+          const generated = await generateAppWithGeminiOrSynthesizer(env, prompt, style);
+          pushSpaceSnapshot(space, `AI: ${prompt.slice(0, 32)}`);
+          space.draftFiles = { ...space.draftFiles, ...generated.files };
+          space.hasUnpublishedChanges = true;
+          space.version = (space.version || 1) + 1;
+          space.updatedAt = new Date().toISOString();
+          await saveDb(env, db);
+
+          return jsonResponse({
+            ok: true,
+            message: 'Application generated successfully with AI!',
+            summary: generated.summary,
+            source: generated.source,
+            files: space.draftFiles,
+            version: space.version
+          });
+        }
+
+        if (action === 'domain-diagnostics' && method === 'GET') {
+          if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+          if (!space || !canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          const cleanDomain = normalizeCustomDomain(space.customDomain);
+          if (!cleanDomain) {
+            return jsonResponse({ error: 'No custom domain configured for this space.' }, 400);
+          }
+
+          let resolvedCname = [];
+          let resolvedA = [];
+          try {
+            const cRes = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(cleanDomain)}&type=CNAME`, {
+              headers: { accept: 'application/dns-json' }
+            });
+            if (cRes.ok) {
+              const cJson = await cRes.json();
+              resolvedCname = (cJson.Answer || []).map((a) => String(a.data).replace(/\.$/, '').toLowerCase());
+            }
+          } catch (_e) {}
+
+          try {
+            const aRes = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(cleanDomain)}&type=A`, {
+              headers: { accept: 'application/dns-json' }
+            });
+            if (aRes.ok) {
+              const aJson = await aRes.json();
+              resolvedA = (aJson.Answer || []).map((a) => String(a.data));
+            }
+          } catch (_e) {}
+
+          const cnameMatches = resolvedCname.some(
+            (c) => c === 'spacehub.win' || c === 'www.spacehub.win' || c.endsWith('.workers.dev')
+          );
+
+          let sslActive = false;
+          try {
+            const sslRes = await fetch(`https://${cleanDomain}`, { method: 'HEAD', redirect: 'manual' });
+            sslActive = sslRes.status < 500;
+          } catch (_e) {
+            sslActive = false;
+          }
+
+          let status = 'dns_pending';
+          if (cnameMatches && sslActive) {
+            status = 'ready';
+          } else if (cnameMatches && !sslActive) {
+            status = 'ssl_pending';
+          }
+
+          return jsonResponse({
+            domain: cleanDomain,
+            expectedCname: 'spacehub.win',
+            resolvedCname,
+            resolvedA,
+            cnameMatches,
+            sslActive,
+            status,
+            instructions: [
+              `Create a CNAME record in your DNS provider for "${cleanDomain}" pointing to "spacehub.win".`,
+              `Ensure TTL is set to 300 seconds (or Automatic).`,
+              `Cloudflare edge automatically provisions a free SSL certificate once DNS resolves.`
+            ],
+            checkedAt: new Date().toISOString()
+          });
+        }
+
+        if (action === 'publish-template' && method === 'POST') {
+          if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+          if (!space || !canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          space.isTemplate = true;
+          space.templateCategory = String(body.category || 'tools').trim();
+          space.templateDescription = String(body.description || space.description || '').trim();
+          space.templateTags = Array.isArray(body.tags) ? body.tags : ['community'];
+          space.visibility = 'public';
+          space.updatedAt = new Date().toISOString();
+          await saveDb(env, db);
+          return jsonResponse({
+            ok: true,
+            message: `Space "${space.title}" published to Template Marketplace!`
+          });
+        }
+
+        if (action === 'unpublish-template' && method === 'POST') {
+          if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+          if (!space || !canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          space.isTemplate = false;
+          space.updatedAt = new Date().toISOString();
+          await saveDb(env, db);
+          return jsonResponse({
+            ok: true,
+            message: `Space "${space.title}" unpublished from Template Marketplace.`
+          });
+        }
+
         if (!action && method === 'DELETE') {
           if (!user || !space || space.ownerId !== user.id) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
@@ -4087,5 +5002,15 @@ const spaceHubWorker = {
     return env.ASSETS.fetch(request);
   }
 };
+
+export class SpaceHubState {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+  }
+  async fetch(request) {
+    return new Response('OK');
+  }
+}
 
 export default spaceHubWorker;

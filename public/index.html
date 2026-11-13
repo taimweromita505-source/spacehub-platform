@@ -71,6 +71,9 @@
           <button type="button" class="nav-tab active" data-filter="public" id="tabExplore">
             Spaces
           </button>
+          <button type="button" class="nav-tab" id="tabTemplates">
+            Templates
+          </button>
           <button type="button" class="nav-tab" data-filter="mine" id="tabMySpaces" hidden>
             My Spaces
           </button>
@@ -176,6 +179,41 @@
       </div>
 
       <div id="spacesGrid" class="spaces-grid" aria-live="polite"></div>
+    </section>
+
+    <!-- VIEW: TEMPLATES MARKETPLACE -->
+    <section id="templatesView" hidden>
+      <div class="hero-banner">
+        <div class="hero-text">
+          <span class="eyebrow">SPACEHUB TEMPLATE MARKETPLACE</span>
+          <h2>Clone, Stage &amp; Launch in 1 Click</h2>
+          <p class="hero-lead">
+            Explore ready-to-run web applications created by the community and the SpaceHub team. Fork any template into your private staging space and host live for $1/month.
+          </p>
+        </div>
+      </div>
+
+      <div class="filter-strip" style="margin-block: 1.5rem;">
+        <div class="filter-tabs" role="tablist" id="templateCategoryTabs">
+          <button type="button" class="filter-tab active" data-tpl-cat="all">All Templates</button>
+          <button type="button" class="filter-tab" data-tpl-cat="saas">SaaS &amp; Startups</button>
+          <button type="button" class="filter-tab" data-tpl-cat="productivity">Productivity</button>
+          <button type="button" class="filter-tab" data-tpl-cat="tools">Tools &amp; Utilities</button>
+          <button type="button" class="filter-tab" data-tpl-cat="portfolio">Portfolios</button>
+          <button type="button" class="filter-tab" data-tpl-cat="community">Community</button>
+        </div>
+
+        <div class="filter-search">
+          <input
+            type="search"
+            id="templateSearchInput"
+            placeholder="Search templates by keyword..."
+            class="search-input"
+          />
+        </div>
+      </div>
+
+      <div id="templatesGrid" class="spaces-grid" aria-live="polite"></div>
     </section>
 
     <!-- VIEW 2: HOSTING SERVICES & PLANS -->
@@ -441,6 +479,12 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <a href="#" target="_blank" rel="noopener" class="btn btn-outline btn-sm" id="openStandaloneLink">
             Preview ↗
           </a>
+          <button type="button" class="btn btn-primary btn-sm" id="studioAiGenBtn" hidden>
+            ✨ AI App Generator
+          </button>
+          <button type="button" class="btn btn-outline btn-sm" id="publishTemplateBtn" hidden>
+            Publish Template
+          </button>
           <button type="button" class="btn btn-primary btn-sm" id="launchSpaceBtn" hidden>
             Deploy
           </button>
@@ -895,6 +939,12 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 autocapitalize="none"
                 spellcheck="false"
               />
+              <div style="margin-top: 0.4rem;">
+                <button type="button" class="btn btn-outline btn-sm" id="runDomainDiagBtn" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;">
+                  🔍 Run DNS &amp; SSL Diagnostic
+                </button>
+              </div>
+              <div id="domainDiagBox" class="arch-card" style="margin-top: 0.5rem; padding: 0.6rem; font-size: 0.8rem; background: #121215;" hidden></div>
             </div>
             <div class="field">
               <label for="settingsWebhookUrlInput">Form Notification Webhook URL (Optional)</label>
@@ -1665,6 +1715,16 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
       <input type="hidden" id="checkoutPlanIdInput" name="planId" value="plan_monthly_1" />
 
+      <div id="stripeCheckoutBlock" class="arch-card" style="margin-block-end: 1rem;" hidden>
+        <h3 style="margin-block-end: 0.4rem;">Pay with Card / Apple Pay (Stripe)</h3>
+        <p style="margin-block-end: 0.85rem;">
+          Direct checkout via Stripe for Credit/Debit Cards, Apple Pay, and Google Pay.
+        </p>
+        <button type="button" class="btn btn-primary btn-sm" id="payWithStripeBtn" style="width: 100%; background: #6366f1;">
+          Pay with Card / Apple Pay ↗
+        </button>
+      </div>
+
       <div id="paypalApiCheckoutBlock" class="arch-card" style="margin-block-end: 1rem;" hidden>
         <h3 style="margin-block-end: 0.4rem;">Pay securely with PayPal</h3>
         <p style="margin-block-end: 0.85rem;">
@@ -2000,6 +2060,100 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="apiTesterDialog">Close</button>
       </div>
     </div>
+  </dialog>
+
+  <!-- DIALOG 11: IN-STUDIO GEMINI AI APP GENERATOR -->
+  <dialog id="aiGenerateDialog" closedby="any" aria-labelledby="aiGenerateDialogTitle">
+    <form id="aiGenerateForm" novalidate>
+      <div class="dialog-header">
+        <h2 id="aiGenerateDialogTitle">✨ In-Studio AI App Generator</h2>
+        <button type="button" class="btn-icon" data-close-dialog="aiGenerateDialog" aria-label="Close dialog">✕</button>
+      </div>
+
+      <p class="dialog-lead">
+        Describe what you want to build. Google Gemini generates complete HTML, CSS, and Vanilla JavaScript with instant live preview.
+      </p>
+
+      <div class="field">
+        <label for="aiGenPromptInput">Application Prompt <span aria-hidden="true">*</span></label>
+        <textarea
+          id="aiGenPromptInput"
+          rows="3"
+          required
+          placeholder="e.g. Build an Agile Kanban board with columns, task priorities, and local storage..."
+        ></textarea>
+      </div>
+
+      <div style="margin-bottom: 1rem;">
+        <span class="hint" style="display:block; margin-bottom: 0.4rem;">Quick Idea Presets:</span>
+        <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+          <button type="button" class="btn btn-ghost btn-sm ai-preset-btn" data-preset="Build an interactive Agile Kanban board with columns for To Do, In Progress, and Done. Include priority tags and local storage.">📋 Kanban Board</button>
+          <button type="button" class="btn btn-ghost btn-sm ai-preset-btn" data-preset="Build a Client Invoice &amp; Billing Calculator with live subtotal calculation, tax, and print-ready stylesheet.">🧾 Invoice Generator</button>
+          <button type="button" class="btn btn-ghost btn-sm ai-preset-btn" data-preset="Build a minimalist Bento-Grid developer portfolio with project cards, skills list, and contact modal.">💼 Developer Bento</button>
+          <button type="button" class="btn btn-ghost btn-sm ai-preset-btn" data-preset="Build a Pomodoro Focus Timer with start, pause, reset, 25-minute work and 5-minute break cycles, and audio chimes.">⏱️ Focus Timer</button>
+          <button type="button" class="btn btn-ghost btn-sm ai-preset-btn" data-preset="Build a SaaS launch waitlist page with countdown timer, early access email form, and feature cards.">📬 Waitlist Landing</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="aiGenStyleSelect">Visual Style</label>
+        <select id="aiGenStyleSelect" class="select-control">
+          <option value="modern" selected>Modern Dark Mode (SpaceHub Standard)</option>
+          <option value="minimalist">Minimalist Clean</option>
+          <option value="cyberpunk">Cyberpunk Neon</option>
+          <option value="corporate">Corporate SaaS</option>
+        </select>
+      </div>
+
+      <div id="aiGenStatusBox" class="server-error" role="status" hidden></div>
+
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="aiGenerateDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm" id="confirmAiGenBtn">
+          ✨ Generate &amp; Apply Code
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- DIALOG 12: PUBLISH TO TEMPLATE MARKETPLACE -->
+  <dialog id="publishTemplateDialog" closedby="any" aria-labelledby="publishTemplateDialogTitle">
+    <form id="publishTemplateForm" novalidate>
+      <div class="dialog-header">
+        <h2 id="publishTemplateDialogTitle">🚀 Publish to Template Marketplace</h2>
+        <button type="button" class="btn-icon" data-close-dialog="publishTemplateDialog" aria-label="Close dialog">✕</button>
+      </div>
+
+      <p class="dialog-lead">
+        Share your Space as a public template. Anyone can 1-click clone and host it on SpaceHub!
+      </p>
+
+      <div class="field">
+        <label for="templateCategorySelect">Category</label>
+        <select id="templateCategorySelect" class="select-control">
+          <option value="saas">SaaS &amp; Startups</option>
+          <option value="productivity">Productivity &amp; Workflows</option>
+          <option value="tools">Calculators &amp; Utilities</option>
+          <option value="portfolio">Portfolios &amp; Resumes</option>
+          <option value="games">Games &amp; Interactive</option>
+          <option value="community" selected>Community</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="templateDescInput">Template Tagline / Description</label>
+        <input type="text" id="templateDescInput" placeholder="Brief 1-line summary for the marketplace catalog" />
+      </div>
+
+      <div id="publishTemplateError" class="server-error" role="alert" hidden></div>
+
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="publishTemplateDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm" id="confirmPublishTemplateBtn">
+          Publish Template
+        </button>
+      </div>
+    </form>
   </dialog>
 
   <script src="/app.js"></script>

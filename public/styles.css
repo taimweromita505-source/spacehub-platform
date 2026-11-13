@@ -1340,3 +1340,25 @@ dialog::backdrop {
   height: 1px;
   background-color: var(--border);
 }
+
+/* Wave 11: AI Presets, Diagnostics & Template Marketplace */
+.ai-preset-btn {
+  font-size: 0.76rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: #18181b;
+  border: 1px solid var(--border);
+  color: #d4d4d8;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.ai-preset-btn:hover {
+  border-color: var(--primary);
+  color: #fafafa;
+  background: #27272a;
+}
+
+#domainDiagBox {
+  border-left: 3px solid var(--primary);
+  border-radius: 0.4rem;
+}

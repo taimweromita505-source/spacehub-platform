@@ -21,7 +21,8 @@
     "PAYPAL_BUSINESS_EMAIL": "romitat924@gmail.com",
     "PAYPAL_MODE": "live",
     "ADMIN_USERNAMES": "",
-    "GOOGLE_CLIENT_ID": ""
+    "GOOGLE_CLIENT_ID": "",
+    "STRIPE_PUBLISHABLE_KEY": ""
   },
   "triggers": {
     "crons": ["0 */6 * * *"]
