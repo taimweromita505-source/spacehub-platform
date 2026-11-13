@@ -6,6 +6,16 @@
   "observability": {
     "enabled": true
   },
+  "routes": [
+    {
+      "pattern": "spacehub.win",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.spacehub.win",
+      "custom_domain": true
+    }
+  ],
   "vars": {
     "PAYPAL_BUSINESS_EMAIL": "romitat924@gmail.com"
   },

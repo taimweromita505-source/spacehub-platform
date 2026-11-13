@@ -7,11 +7,11 @@
   <title>SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)</title>
   <meta name="description" content="Stage and test your website or web app in a private workspace with your own AI coding agents. Launch to global edge hosting for $1/month or $12/year, or connect your own host." />
   <meta name="keywords" content="web app staging, website preview platform, AI coding agent workspace, $1 web hosting, Cloudflare edge hosting, Hugging Face Spaces alternative" />
-  <link rel="canonical" href="https://spacehub-platform.taimweromita505.workers.dev/" />
+  <link rel="canonical" href="https://spacehub.win/" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)" />
   <meta property="og:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year." />
-  <meta property="og:url" content="https://spacehub-platform.taimweromita505.workers.dev/" />
+  <meta property="og:url" content="https://spacehub.win/" />
   <meta property="og:site_name" content="SpaceHub" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)" />
@@ -23,7 +23,7 @@
     "name": "SpaceHub",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Web",
-    "url": "https://spacehub-platform.taimweromita505.workers.dev/",
+    "url": "https://spacehub.win/",
     "description": "Web application staging workspace, BYO coding agent builder, and $1/month cloud hosting platform.",
     "offers": [
       {
@@ -310,7 +310,7 @@
               Stage and deploy web applications programmatically:
             </p>
             <pre class="code-snippet"><code># 1. Create a Private Staging Space
-curl -X POST https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/spaces \
+curl -X POST https://spacehub.win/api/agent/v1/spaces \
   -H "Authorization: Bearer YOUR_SH_PAT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -324,13 +324,13 @@ curl -X POST https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/
   }'
 
 # 2. Update Staged Files
-curl -X PUT https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/spaces/USERNAME/my-web-app/files \
+curl -X PUT https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/files \
   -H "Authorization: Bearer YOUR_SH_PAT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"files": {"index.html": "..."}}'
 
 # 3. Deploy to Connected Host
-curl -X POST https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/spaces/USERNAME/my-web-app/deploy-external \
+curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy-external \
   -H "Authorization: Bearer YOUR_SH_PAT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"provider": "cloudflare_pages", "visibility": "public"}'</code></pre>
