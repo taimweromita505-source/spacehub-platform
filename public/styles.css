@@ -1413,3 +1413,26 @@ dialog::backdrop {
   .demo-workbench { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); }
   .demo-preview-page { overflow-wrap: anywhere; }
 }
+
+#firstProjectGuide {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: 0.45rem;
+  background: var(--surface-elevated);
+}
+
+#firstProjectAction { align-self: start; }
+
+.publish-review {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, auto) minmax(0, 1fr);
+  gap: 0.45rem 0.85rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+}
+
+.publish-review dt { color: var(--muted); }
+.publish-review dd { overflow-wrap: anywhere; }
+#publishError { color: var(--danger); }

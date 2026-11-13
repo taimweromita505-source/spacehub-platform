@@ -608,6 +608,10 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 </button>
               </div>
             </div>
+            <aside id="firstProjectGuide" class="field" hidden aria-label="First project">
+              <p id="firstProjectStep" role="status"></p>
+              <button type="button" class="btn btn-outline btn-xs" id="firstProjectAction"></button>
+            </aside>
             <label for="codeEditorTextarea" class="visually-hidden">Source Code Editor</label>
             <textarea
               id="codeEditorTextarea"
@@ -1665,6 +1669,12 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         />
       </div>
 
+      <section class="field" aria-labelledby="publishReviewHeading">
+        <h3 id="publishReviewHeading">Review before publishing</h3>
+        <dl id="publishReview" class="publish-review" aria-live="polite"></dl>
+        <button type="button" class="btn btn-outline btn-xs" id="publishDiffBtn">Compare files</button>
+        <p id="publishError" role="alert" hidden></p>
+      </section>
       <div class="dialog-footer" style="justify-content: space-between; flex-wrap: wrap;">
         <button type="button" class="btn btn-outline btn-sm" id="goToBuyHostingFromModalBtn">
           Buy Space Slot ($1/mo · $12/yr)
@@ -1672,7 +1682,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         <div style="display: flex; gap: 0.5rem;">
           <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="deployHostingDialog">Cancel</button>
           <button type="submit" class="btn btn-primary btn-sm" id="confirmDeployHostBtn">
-            Deploy Now
+            Publish Space
           </button>
         </div>
       </div>

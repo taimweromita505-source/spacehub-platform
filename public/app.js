@@ -683,6 +683,39 @@ function renderFileTabs() {
   });
 }
 
+let guidedProject = null;
+
+function renderFirstProjectGuide() {
+  const guide = document.getElementById('firstProjectGuide');
+  guide.hidden = !guidedProject || state.currentSpace?.slug !== guidedProject.slug ||
+    state.currentSpace?.ownerUsername !== guidedProject.owner || !state.currentSpace.isOwner;
+  if (guide.hidden) return;
+
+  const step = state.isDirty
+    ? ['Save your changes before checking the preview.', 'Save draft', 'saveDraftBtn']
+    : guidedProject.saved
+      ? ['Your draft is saved. Check how it looks on a phone.', 'Preview on a phone', null]
+      : ['Edit a line in index.html to make this starter your own.', 'Go to editor', 'codeEditorTextarea'];
+  document.getElementById('firstProjectStep').textContent = step[0];
+  const action = document.getElementById('firstProjectAction');
+  action.textContent = step[1];
+  action.onclick = () => {
+    if (step[2] === 'codeEditorTextarea') document.getElementById(step[2]).focus();
+    else if (step[2]) document.getElementById(step[2]).click();
+    else {
+      const phone = document.querySelector('.vp-btn[data-vp="mobile"]');
+      phone.click();
+      phone.focus();
+      guidedProject = null;
+      renderFirstProjectGuide();
+    }
+  };
+}
+
+document.getElementById('codeEditorTextarea').addEventListener('input', () => {
+  queueMicrotask(renderFirstProjectGuide);
+});
+
 async function openSpaceStudio(username, slug) {
   try {
     const data = await apiFetch(`/api/spaces/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`);
@@ -695,6 +728,7 @@ async function openSpaceStudio(username, slug) {
     state.workingFiles = JSON.parse(JSON.stringify(sourceFiles));
     state.activeFile = 'index.html';
     state.isDirty = false;
+    renderFirstProjectGuide();
 
     updateStudioHeaderBadges(space);
     renderFileTabs();
@@ -1221,9 +1255,11 @@ document.getElementById('auditSpaceBtn')?.addEventListener('click', () => {
 });
 
 // Staging vs. Published Live Code Diff Viewer
-function openSpaceDiffViewer() {
+function openSpaceDiffViewer(forPublish = false) {
   if (!state.currentSpace) return;
-  const draft = state.workingFiles || state.currentSpace.draftFiles || {};
+  const draft = forPublish
+    ? { ...state.currentSpace.draftFiles, ...state.workingFiles }
+    : state.workingFiles || state.currentSpace.draftFiles || {};
   const live = state.currentSpace.publishedFiles || {};
   const allFileNames = Array.from(new Set([...Object.keys(draft), ...Object.keys(live)]));
   const summaryEl = document.getElementById('spaceDiffSummaryText');
@@ -1276,7 +1312,7 @@ function openSpaceDiffViewer() {
   document.getElementById('spaceDiffDialog')?.showModal();
 }
 
-document.getElementById('diffSpaceBtn')?.addEventListener('click', openSpaceDiffViewer);
+document.getElementById('diffSpaceBtn')?.addEventListener('click', () => openSpaceDiffViewer());
 
 let visualEditEnabled = false;
 document.getElementById('visualEditSpaceBtn')?.addEventListener('click', () => {
@@ -1463,6 +1499,8 @@ document.getElementById('saveDraftBtn').addEventListener('click', async () => {
     state.isDirty = false;
     document.getElementById('dirtyIndicator').textContent = '✓ Staging draft saved';
     updateStudioHeaderBadges(data.space);
+    if (guidedProject?.slug === slug && guidedProject.owner === ownerUsername) guidedProject.saved = true;
+    renderFirstProjectGuide();
     showToast('Staging draft saved! Connect or buy hosting when ready to launch.');
   } catch (err) {
     showToast(err.message);
@@ -1632,9 +1670,57 @@ document.getElementById('copyEmbedSnippetBtn')?.addEventListener('click', async 
 });
 
 // Open "Ready to Launch: Connect or Buy Hosting" Dialog
+const deployForm = document.getElementById('deployHostingForm');
+const deployDialog = document.getElementById('deployHostingDialog');
+
+function getPublishOptions() {
+  return {
+    connectionId: document.getElementById('deployConnectionSelect').value,
+    provider: deployForm.querySelector('input[name="provider"]:checked')?.value || 'cloudflare_pages',
+    customLiveUrl: document.getElementById('deployCustomUrlInput').value.trim(),
+    webhookUrl: document.getElementById('deployWebhookUrlInput').value.trim()
+  };
+}
+
+function renderPublishReview() {
+  const space = state.currentSpace;
+  const options = getPublishOptions();
+  const connection = state.hostingConnections.find(({ id }) => id === options.connectionId);
+  const provider = connection?.provider || options.provider;
+  const draft = { ...space.draftFiles, ...state.workingFiles };
+  const live = space.publishedFiles || {};
+  const names = new Set([...Object.keys(draft), ...Object.keys(live)]);
+  const changes = [...names].filter((name) => draft[name] !== live[name]).length;
+  const suppliedUrl = options.customLiveUrl && (options.customLiveUrl.startsWith('http')
+    ? options.customLiveUrl : 'https://' + options.customLiveUrl);
+  const target = provider === 'github_pages'
+    ? (options.customLiveUrl || connection?.targetUrlOrProject || space.slug) + ' (GitHub target)'
+    : suppliedUrl || new URL('/live/' + encodeURIComponent(space.slug), location.origin).href;
+  const details = [
+    ['Destination', target],
+    ['Space visibility', space.visibility === 'public' ? 'Public' : 'Private'],
+    ['Draft', state.isDirty ? 'Includes unsaved edits' : 'Saved'],
+    ['Live version', space.publishedAt ? new Date(space.publishedAt).toLocaleString() : 'First publish'],
+    ['Files changed', String(changes)]
+  ];
+  const review = document.getElementById('publishReview');
+  review.replaceChildren(...details.flatMap(([label, value]) => {
+    const term = document.createElement('dt');
+    const description = document.createElement('dd');
+    term.textContent = label;
+    description.textContent = value;
+    return [term, description];
+  }));
+}
+
+deployForm.addEventListener('input', renderPublishReview);
+document.getElementById('publishDiffBtn').addEventListener('click', () => openSpaceDiffViewer(true));
+
 document.getElementById('launchSpaceBtn').addEventListener('click', async () => {
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const space = state.currentSpace;
   await loadHostingConnections();
+  if (state.currentSpace !== space || deployDialog.open) return;
 
   const select = document.getElementById('deployConnectionSelect');
   select.innerHTML =
@@ -1654,7 +1740,9 @@ document.getElementById('launchSpaceBtn').addEventListener('click', async () => 
 
   document.getElementById('deployCustomUrlInput').value =
     state.currentSpace.externalHost?.liveUrl || '';
-  document.getElementById('deployHostingDialog').showModal();
+  document.getElementById('publishError').hidden = true;
+  renderPublishReview();
+  deployDialog.showModal();
 });
 
 document.getElementById('goToBuyHostingFromModalBtn')?.addEventListener('click', () => {
@@ -1670,21 +1758,18 @@ document.getElementById('deployHostingForm').addEventListener('submit', async (e
   e.preventDefault();
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
 
-  const form = e.currentTarget;
-  const connectionId = document.getElementById('deployConnectionSelect').value;
-  const provider = form.querySelector('input[name="provider"]:checked')?.value || 'vercel';
-  const customLiveUrl = document.getElementById('deployCustomUrlInput').value.trim();
-  const webhookUrl = document.getElementById('deployWebhookUrlInput').value.trim();
+  const confirmButton = document.getElementById('confirmDeployHostBtn');
+  if (confirmButton.disabled) return;
+  const error = document.getElementById('publishError');
+  error.hidden = true;
+  confirmButton.disabled = true;
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
     const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/deploy-external`, {
       method: 'POST',
       body: JSON.stringify({
-        connectionId,
-        provider,
-        customLiveUrl,
-        webhookUrl,
+        ...getPublishOptions(),
         draftFiles: state.workingFiles
       })
     });
@@ -1693,9 +1778,12 @@ document.getElementById('deployHostingForm').addEventListener('submit', async (e
     document.getElementById('dirtyIndicator').textContent = `✓ Deployed to ${data.externalHost.providerLabel}`;
     document.getElementById('deployHostingDialog').close();
     updateStudioHeaderBadges(data.space);
-    showToast(`🚀 ${data.message}`);
+    showToast(data.message);
   } catch (err) {
-    showToast(err.message);
+    error.textContent = err.message;
+    error.hidden = false;
+  } finally {
+    confirmButton.disabled = false;
   }
 });
 
@@ -3360,7 +3448,8 @@ document.getElementById('createSpaceForm').addEventListener('submit', async (e) 
     });
     document.getElementById('createSpaceDialog').close();
     form.reset();
-    showToast('Space created in Staging! Check how your website looks, then buy or connect hosting to launch.');
+    guidedProject = { slug: data.space.slug, owner: data.space.ownerUsername, saved: false };
+    showToast('Workspace created.');
     openSpaceStudio(data.space.ownerUsername, data.space.slug);
   } catch (err) {
     showToast(err.message);
