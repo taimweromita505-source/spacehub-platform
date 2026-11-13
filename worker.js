@@ -2504,6 +2504,23 @@ const spaceHubWorker = {
       });
     }
 
+    const reviewMatch = pathname.match(/^\/api\/draft-review\/([a-f0-9]{64})$/);
+    if (reviewMatch && method === 'GET') {
+      const review = db.spaces.flatMap((space) => space.draftReviews || [])
+        .find((entry) => entry.token === reviewMatch[1] && entry.expiresAt > Date.now());
+      const headers = {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Referrer-Policy': 'no-referrer',
+        'X-Robots-Tag': 'noindex, nofollow',
+        'Content-Security-Policy': "sandbox allow-scripts; base-uri 'none'; form-action 'none'"
+      };
+      return new Response(review ? buildBundledHtml(review.files) : 'This draft review link is unavailable.', {
+        status: review ? 200 : 404,
+        headers
+      });
+    }
+
     // 1c. Short Clean Live URL Route (/live/:slug or /s/:slug) & Full Route (/spaces/:username/:slug/live)
     const shortLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/?$/i);
     const liveMatch = pathname.match(/^\/spaces\/([^/]+)\/([^/]+)\/live$/i);
@@ -3983,6 +4000,38 @@ const spaceHubWorker = {
               agentHistory: space.agentHistory
             }
           });
+        }
+
+        if (action === 'draft-reviews') {
+          if (!space || !user || user.id !== space.ownerId) {
+            return jsonResponse({ error: 'Only the Space owner can manage draft review links.' }, 403);
+          }
+          const now = Date.now();
+          const reviews = (space.draftReviews || []).filter((review) => review.expiresAt > now);
+          const summarize = ({ token, expiresAt }) => ({
+            token, expiresAt, url: new URL('/api/draft-review/' + token, url.origin).href
+          });
+          if (method === 'GET') return jsonResponse({ reviews: reviews.map(summarize) }, 200, { 'Cache-Control': 'no-store' });
+          if (method === 'POST') {
+            if (reviews.length >= 3) return jsonResponse({ error: 'Revoke an existing link before creating another.' }, 409);
+            const review = {
+              token: randomHex(32),
+              expiresAt: now + 24 * 60 * 60 * 1000,
+              files: structuredClone(space.draftFiles || {})
+            };
+            space.draftReviews = [...reviews, review];
+            await saveDb(env, db);
+            return jsonResponse(summarize(review), 201, { 'Cache-Control': 'no-store' });
+          }
+          if (method === 'DELETE') {
+            const { token } = (await request.json().catch(() => null)) || {};
+            if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+              return jsonResponse({ error: 'A valid review token is required.' }, 400);
+            }
+            space.draftReviews = reviews.filter((review) => review.token !== token);
+            await saveDb(env, db);
+            return jsonResponse({ revoked: true });
+          }
         }
 
         if (action === 'releases' && (method === 'GET' || method === 'POST')) {
