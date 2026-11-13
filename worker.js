@@ -456,8 +456,64 @@ let memoryDb = {
   sessions: {},
   agentKeys: [],
   hostingConnections: [],
+  paypalOrders: [],
   spaces: []
 };
+
+function paypalConfigured(env) {
+  return Boolean(env && env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET);
+}
+
+function paypalApiBase(env) {
+  return String(env.PAYPAL_MODE || 'live').toLowerCase() === 'sandbox'
+    ? 'https://api-m.sandbox.paypal.com'
+    : 'https://api-m.paypal.com';
+}
+
+async function paypalAccessToken(env) {
+  const res = await fetch(`${paypalApiBase(env)}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Basic ' + btoa(`${env.PAYPAL_CLIENT_ID}:${env.PAYPAL_CLIENT_SECRET}`),
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: 'grant_type=client_credentials'
+  });
+  if (!res.ok) {
+    throw new Error(
+      `PayPal authentication failed (HTTP ${res.status}). Check PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and PAYPAL_MODE.`
+    );
+  }
+  const data = await res.json();
+  return data.access_token;
+}
+
+function provisionHostingConnection(db, user, plan, opts = {}) {
+  const targetSpaceSlug = opts.spaceSlug ? slugify(opts.spaceSlug) : null;
+  const cleanDomain =
+    String(opts.customDomain || '').trim().toLowerCase().replace(/^https?:\/\//, '') ||
+    (targetSpaceSlug ? `${opts.host}/live/${targetSpaceSlug}` : `${opts.host}/live`);
+  const conn = {
+    id: 'host_' + randomHex(6),
+    userId: user.id,
+    provider: plan.provider,
+    providerLabel: `${plan.name} (${plan.priceLabel})`,
+    planName: plan.name,
+    priceLabel: plan.priceLabel,
+    isSingleSpaceSlot: true,
+    assignedSpaceSlug: targetSpaceSlug,
+    name: targetSpaceSlug
+      ? `${plan.name} — Space: ${targetSpaceSlug}`
+      : `${plan.name} — (1 Unassigned Space Slot)`,
+    targetUrlOrProject: cleanDomain,
+    paymentMethod: opts.paymentMethod || 'paypal_card',
+    paymentRef: opts.paymentRef || 'paypal_verified',
+    hasToken: true,
+    createdAt: new Date().toISOString()
+  };
+  db.hostingConnections.unshift(conn);
+  return conn;
+}
 
 const KV_KEY = 'spacehub_prod_state_v2';
 
@@ -471,6 +527,7 @@ async function loadDb(env) {
           sessions: raw.sessions || {},
           agentKeys: Array.isArray(raw.agentKeys) ? raw.agentKeys : [],
           hostingConnections: Array.isArray(raw.hostingConnections) ? raw.hostingConnections : [],
+          paypalOrders: Array.isArray(raw.paypalOrders) ? raw.paypalOrders : [],
           spaces: Array.isArray(raw.spaces) ? raw.spaces : []
         };
       }
@@ -2492,8 +2549,163 @@ const spaceHubWorker = {
         });
       }
 
+      if (pathname === '/api/paypal/config' && method === 'GET') {
+        return jsonResponse({
+          configured: paypalConfigured(env),
+          mode: String(env.PAYPAL_MODE || 'live').toLowerCase() === 'sandbox' ? 'sandbox' : 'live'
+        });
+      }
+
+      if (pathname === '/api/paypal/create-order' && method === 'POST') {
+        if (!user) return jsonResponse({ error: 'Please sign in to buy a Space hosting plan.' }, 401);
+        if (!paypalConfigured(env)) {
+          return jsonResponse({ error: 'PayPal API checkout is not configured yet.', fallback: true }, 503);
+        }
+        const plan = HOSTING_PLANS.find((p) => p.id === body.planId) || HOSTING_PLANS[0];
+        const spaceSlug = body.spaceSlug ? slugify(body.spaceSlug) : '';
+        try {
+          const accessToken = await paypalAccessToken(env);
+          const orderRes = await fetch(`${paypalApiBase(env)}/v2/checkout/orders`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'PayPal-Request-Id': 'sh_' + randomHex(12)
+            },
+            body: JSON.stringify({
+              intent: 'CAPTURE',
+              purchase_units: [
+                {
+                  reference_id: plan.id,
+                  description: `SpaceHub ${plan.name}`.slice(0, 120),
+                  custom_id: `${user.id}|${plan.id}|${spaceSlug}`.slice(0, 120),
+                  amount: { currency_code: 'USD', value: plan.amountUsd }
+                }
+              ],
+              payment_source: {
+                paypal: {
+                  experience_context: {
+                    brand_name: 'SpaceHub',
+                    user_action: 'PAY_NOW',
+                    shipping_preference: 'NO_SHIPPING',
+                    return_url: `${url.origin}/?paypal_return=1`,
+                    cancel_url: `${url.origin}/?paypal_canceled=1`
+                  }
+                }
+              }
+            })
+          });
+          const orderData = await orderRes.json().catch(() => ({}));
+          if (!orderRes.ok || !orderData.id) {
+            return jsonResponse(
+              { error: `PayPal could not create the order (HTTP ${orderRes.status}).` },
+              502
+            );
+          }
+          const approveLink = (orderData.links || []).find((l) =>
+            ['payer-action', 'approve'].includes(l.rel)
+          );
+          db.paypalOrders = Array.isArray(db.paypalOrders) ? db.paypalOrders : [];
+          db.paypalOrders.unshift({
+            id: orderData.id,
+            userId: user.id,
+            planId: plan.id,
+            spaceSlug,
+            amountUsd: plan.amountUsd,
+            status: 'CREATED',
+            createdAt: new Date().toISOString()
+          });
+          db.paypalOrders = db.paypalOrders.slice(0, 500);
+          await saveDb(env, db);
+          return jsonResponse({
+            ok: true,
+            orderId: orderData.id,
+            approveUrl: approveLink ? approveLink.href : null
+          });
+        } catch (err) {
+          return jsonResponse({ error: err.message || 'PayPal order creation failed.' }, 502);
+        }
+      }
+
+      if (pathname === '/api/paypal/capture-order' && method === 'POST') {
+        if (!user) return jsonResponse({ error: 'Please sign in to finish activating your plan.' }, 401);
+        if (!paypalConfigured(env)) {
+          return jsonResponse({ error: 'PayPal API checkout is not configured yet.' }, 503);
+        }
+        const orderId = String(body.orderId || '').trim();
+        db.paypalOrders = Array.isArray(db.paypalOrders) ? db.paypalOrders : [];
+        const rec = db.paypalOrders.find((o) => o.id === orderId && o.userId === user.id);
+        if (!rec) return jsonResponse({ error: 'Order not found for this account.' }, 404);
+        const plan = HOSTING_PLANS.find((p) => p.id === rec.planId) || HOSTING_PLANS[0];
+
+        if (rec.status === 'COMPLETED') {
+          const existing = db.hostingConnections.find((c) => c.id === rec.connectionId) || null;
+          return jsonResponse({
+            message: `Plan already activated (${plan.priceLabel})`,
+            connection: existing,
+            alreadyCaptured: true
+          });
+        }
+
+        try {
+          const accessToken = await paypalAccessToken(env);
+          const capRes = await fetch(
+            `${paypalApiBase(env)}/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                'PayPal-Request-Id': `cap_${orderId}`
+              },
+              body: '{}'
+            }
+          );
+          const capData = await capRes.json().catch(() => ({}));
+          const capture = capData?.purchase_units?.[0]?.payments?.captures?.[0];
+          const paidOk =
+            capRes.ok &&
+            capData.status === 'COMPLETED' &&
+            capture &&
+            capture.status === 'COMPLETED' &&
+            capture.amount?.currency_code === 'USD' &&
+            Number(capture.amount?.value) === Number(rec.amountUsd);
+          if (!paidOk) {
+            return jsonResponse(
+              {
+                error:
+                  'PayPal has not confirmed a completed payment for this order, so the plan was not activated.'
+              },
+              402
+            );
+          }
+          const conn = provisionHostingConnection(db, user, plan, {
+            spaceSlug: rec.spaceSlug,
+            host: url.host,
+            paymentMethod: 'paypal_api',
+            paymentRef: capture.id || orderId
+          });
+          rec.status = 'COMPLETED';
+          rec.connectionId = conn.id;
+          rec.capturedAt = new Date().toISOString();
+          await saveDb(env, db);
+          return jsonResponse(
+            { message: `Payment confirmed — activated ${plan.name} (${plan.priceLabel})`, connection: conn },
+            201
+          );
+        } catch (err) {
+          return jsonResponse({ error: err.message || 'PayPal capture failed.' }, 502);
+        }
+      }
+
       if (pathname === '/api/hosting-plans/purchase' && method === 'POST') {
         if (!user) return jsonResponse({ error: 'Please sign in to buy a Space hosting plan.' }, 401);
+        if (paypalConfigured(env)) {
+          return jsonResponse(
+            { error: 'Hosting is activated automatically after PayPal confirms your payment. Use "Pay securely with PayPal".' },
+            402
+          );
+        }
         const plan = HOSTING_PLANS.find((p) => p.id === body.planId) || HOSTING_PLANS[0];
         const targetSpaceSlug = body.spaceSlug ? slugify(body.spaceSlug) : null;
         const cleanDomain =

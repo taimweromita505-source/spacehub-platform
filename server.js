@@ -2058,6 +2058,11 @@ function decoratePlanWithPayPalUrls(plan, origin, paypalEmail) {
   };
 }
 
+// PayPal REST API checkout is only wired on the Cloudflare edge Worker (worker.js).
+app.get('/api/paypal/config', (_req, res) => {
+  res.json({ configured: false, mode: 'live' });
+});
+
 app.get('/api/hosting-plans', (req, res) => {
   const origin = `${req.protocol}://${req.get('host')}`;
   res.json({

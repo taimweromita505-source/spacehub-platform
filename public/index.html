@@ -1519,7 +1519,17 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
       <input type="hidden" id="checkoutPlanIdInput" name="planId" value="plan_monthly_1" />
 
-      <div class="arch-card" style="margin-block-end: 1rem;">
+      <div id="paypalApiCheckoutBlock" class="arch-card" style="margin-block-end: 1rem;" hidden>
+        <h3 style="margin-block-end: 0.4rem;">Pay securely with PayPal</h3>
+        <p style="margin-block-end: 0.85rem;">
+          Debit/Credit Card, Apple Pay, Google Pay, Venmo, or PayPal balance. Your hosting slot activates automatically as soon as PayPal confirms the payment.
+        </p>
+        <button type="button" class="btn btn-primary btn-sm" id="payWithPayPalApiBtn" style="width: 100%;">
+          Pay securely with PayPal ↗
+        </button>
+      </div>
+
+      <div id="legacyPayCard" class="arch-card" style="margin-block-end: 1rem;">
         <h3 style="margin-block-end: 0.4rem;">1. Complete Payment</h3>
         <p style="margin-block-end: 0.85rem;">
           Pay with Debit/Credit Card, Apple Pay, Google Pay, Venmo, or PayPal.
@@ -1548,7 +1558,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         </div>
       </div>
 
-      <div class="field">
+      <div class="field" id="legacyRefField">
         <label for="checkoutRefInput">2. Transaction Reference (Optional)</label>
         <input
           type="text"
@@ -1563,7 +1573,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
       <div class="dialog-footer">
         <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="paypalCheckoutDialog">Cancel</button>
-        <button type="submit" class="btn btn-primary btn-sm">Activate Hosting Slot</button>
+        <button type="submit" class="btn btn-primary btn-sm" id="legacyActivateBtn">Activate Hosting Slot</button>
       </div>
     </form>
   </dialog>

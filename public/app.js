@@ -2354,6 +2354,7 @@ async function loadHostingConnections() {
 async function loadHostingMarketplace() {
   const plansGrid = document.getElementById('hostingPlansGrid');
   try {
+    state.paypalApi = await apiFetch('/api/paypal/config').catch(() => ({ configured: false }));
     const data = await apiFetch('/api/hosting-plans');
     state.hostingPlans = data.plans || [];
     if (plansGrid) {
@@ -2404,6 +2405,12 @@ async function loadHostingMarketplace() {
             paypalBtn.textContent = `Pay ${plan.priceLabel} with PayPal / Venmo / Pay Later ↗`;
           }
 
+          const apiOn = Boolean(state.paypalApi?.configured);
+          document.getElementById('paypalApiCheckoutBlock').hidden = !apiOn;
+          document.getElementById('legacyPayCard').hidden = apiOn;
+          document.getElementById('legacyRefField').hidden = apiOn;
+          document.getElementById('legacyActivateBtn').hidden = apiOn;
+
           document.getElementById('paypalCheckoutDialog').showModal();
         });
       });
@@ -2413,6 +2420,27 @@ async function loadHostingMarketplace() {
   }
   await loadHostingConnections();
 }
+
+document.getElementById('payWithPayPalApiBtn')?.addEventListener('click', async () => {
+  if (!state.user) return;
+  const btn = document.getElementById('payWithPayPalApiBtn');
+  const planId = document.getElementById('checkoutPlanIdInput').value;
+  const spaceSlug = state.currentSpace?.slug || '';
+  btn.disabled = true;
+  btn.textContent = 'Contacting PayPal...';
+  try {
+    const res = await apiFetch('/api/paypal/create-order', {
+      method: 'POST',
+      body: JSON.stringify({ planId, spaceSlug })
+    });
+    if (!res.approveUrl) throw new Error('PayPal did not return a checkout link.');
+    window.location.assign(res.approveUrl);
+  } catch (err) {
+    showToast(err.message);
+    btn.disabled = false;
+    btn.textContent = 'Pay securely with PayPal ↗';
+  }
+});
 
 document.getElementById('paypalCheckoutForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2937,6 +2965,26 @@ document.getElementById('copyInstallLinkBtn')?.addEventListener('click', async (
   await loadSpacesList();
 
   const params = new URLSearchParams(window.location.search);
+  if (params.get('paypal_return') === '1' && params.get('token')) {
+    if (!state.user) {
+      showToast('Sign in, then reload this page to finish activating your hosting plan.');
+    } else {
+      try {
+        const res = await apiFetch('/api/paypal/capture-order', {
+          method: 'POST',
+          body: JSON.stringify({ orderId: params.get('token') })
+        });
+        window.history.replaceState({}, '', window.location.pathname);
+        showToast(res.message);
+        document.getElementById('tabHosting')?.click();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+  } else if (params.get('paypal_canceled') === '1') {
+    window.history.replaceState({}, '', window.location.pathname);
+    showToast('PayPal checkout was canceled — you have not been charged.');
+  }
   if (params.get('paypal_paid') === '1' && state.user) {
     const planId = params.get('planId') || 'plan_monthly_1';
     try {
