@@ -196,7 +196,7 @@ const HOSTING_PLANS = [
 ];
 
 function decoratePlanWithPayPalUrls(plan, origin, paypalEmail) {
-  const email = paypalEmail || 'taimweromita505@gmail.com';
+  const email = paypalEmail || 'romitat924@gmail.com';
   const amount = plan.amountUsd || (plan.id === 'plan_yearly_12' ? '12.00' : '1.00');
   const unit = plan.billingUnit || (plan.id === 'plan_yearly_12' ? 'Y' : 'M');
   const returnUrl = `${origin}/?paypal_paid=1&planId=${encodeURIComponent(plan.id)}`;
@@ -684,7 +684,7 @@ export default {
       }
 
       if (pathname === '/api/hosting-plans' && method === 'GET') {
-        const paypalEmail = env?.PAYPAL_BUSINESS_EMAIL || 'taimweromita505@gmail.com';
+        const paypalEmail = env?.PAYPAL_BUSINESS_EMAIL || 'romitat924@gmail.com';
         return jsonResponse({
           plans: HOSTING_PLANS.map((p) => decoratePlanWithPayPalUrls(p, url.origin, paypalEmail))
         });

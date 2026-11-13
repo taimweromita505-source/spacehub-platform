@@ -1316,7 +1316,7 @@ const HOSTING_PLANS = [
 ];
 
 function decoratePlanWithPayPalUrls(plan, origin, paypalEmail) {
-  const email = paypalEmail || process.env.PAYPAL_BUSINESS_EMAIL || 'taimweromita505@gmail.com';
+  const email = paypalEmail || process.env.PAYPAL_BUSINESS_EMAIL || 'romitat924@gmail.com';
   const amount = plan.amountUsd || (plan.id === 'plan_yearly_12' ? '12.00' : '1.00');
   const unit = plan.billingUnit || (plan.id === 'plan_yearly_12' ? 'Y' : 'M');
   const returnUrl = `${origin}/?paypal_paid=1&planId=${encodeURIComponent(plan.id)}`;
