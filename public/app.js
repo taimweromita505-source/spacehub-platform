@@ -191,7 +191,7 @@ function getBannerGradientClass(colorFrom, colorTo) {
   return 'grad-indigo-cyan';
 }
 
-function bundleClientPreview(files) {
+function bundleClientPreview(files, includeConsoleBridge = true) {
   let html = files['index.html'] || '<!DOCTYPE html><html><body><h1>Empty Space</h1></body></html>';
   const css = files['style.css'] || '';
   const js = files['script.js'] || '';
@@ -231,6 +231,15 @@ function bundleClientPreview(files) {
       }
     }
   });
+
+  if (includeConsoleBridge) {
+    const bridgeScript = `<script>(function(){function s(l,a){try{var m=Array.prototype.slice.call(a).map(function(x){return typeof x==='object'?JSON.stringify(x):String(x)}).join(' ');window.parent.postMessage({type:'sh_console',level:l,message:m},'*');}catch(_e){}}['log','warn','error'].forEach(function(k){var o=console[k];console[k]=function(){s(k,arguments);if(o)o.apply(console,arguments);};});window.addEventListener('error',function(e){s('error',[e.message||'Runtime error']);});window.addEventListener('unhandledrejection',function(e){s('error',['Unhandled Promise Rejection: '+(e.reason&&e.reason.message||e.reason)]);});})();</script>`;
+    if (html.includes('<head>')) {
+      html = html.replace('<head>', `<head>\n  ${bridgeScript}`);
+    } else {
+      html = `${bridgeScript}\n` + html;
+    }
+  }
   return html;
 }
 
@@ -452,13 +461,72 @@ function setStudioTab(tabName) {
   }
   if (tabName === 'submissions' && state.currentSpace?.isOwner) {
     loadSpaceSubmissions();
+    loadSpaceCloudStorage();
   }
 }
+
+let studioConsoleEntries = [];
+let lastRuntimeErrorMsg = '';
+
+function renderStudioConsole() {
+  const listEl = document.getElementById('consoleLogsList');
+  const countBadge = document.getElementById('consoleCountBadge');
+  const fixBtn = document.getElementById('fixErrorWithAiBtn');
+  if (!listEl) return;
+  if (countBadge) countBadge.textContent = String(studioConsoleEntries.length);
+  if (fixBtn) fixBtn.hidden = !lastRuntimeErrorMsg;
+
+  if (!studioConsoleEntries.length) {
+    listEl.innerHTML = `<div>Ready — console.log() and runtime errors appear here live.</div>`;
+    return;
+  }
+  listEl.innerHTML = studioConsoleEntries
+    .slice(-30)
+    .map((entry) => {
+      const color =
+        entry.level === 'error' ? '#f87171' : entry.level === 'warn' ? '#fbbf24' : '#a1a1aa';
+      const tag = entry.level.toUpperCase();
+      return `<div style="color:${color};word-break:break-word;"><strong>[${tag}]</strong> ${escapeHtml(entry.message)}</div>`;
+    })
+    .join('');
+  listEl.scrollTop = listEl.scrollHeight;
+}
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.type !== 'sh_console') return;
+  const level = ['log', 'warn', 'error'].includes(data.level) ? data.level : 'log';
+  const message = String(data.message ?? '').slice(0, 500);
+  studioConsoleEntries.push({ level, message });
+  if (level === 'error') {
+    lastRuntimeErrorMsg = message;
+  }
+  renderStudioConsole();
+});
+
+document.getElementById('clearConsoleBtn')?.addEventListener('click', () => {
+  studioConsoleEntries = [];
+  lastRuntimeErrorMsg = '';
+  renderStudioConsole();
+});
+
+document.getElementById('fixErrorWithAiBtn')?.addEventListener('click', () => {
+  if (!lastRuntimeErrorMsg) return;
+  const promptInput = document.getElementById('agentPromptInput');
+  const form = document.getElementById('studioAgentForm');
+  if (promptInput && form) {
+    promptInput.value = `Fix this runtime error in my Space: ${lastRuntimeErrorMsg}`;
+    form.requestSubmit();
+  }
+});
 
 function updateLiveStagingPreview() {
   const iframe = document.getElementById('workspacePreviewFrame');
   if (!iframe) return;
-  iframe.srcdoc = bundleClientPreview(state.workingFiles);
+  studioConsoleEntries = [];
+  lastRuntimeErrorMsg = '';
+  renderStudioConsole();
+  iframe.srcdoc = bundleClientPreview(state.workingFiles, true);
 }
 
 function updateStudioHeaderBadges(space) {
@@ -639,6 +707,13 @@ async function openSpaceStudio(username, slug) {
     if (themeColorSelect) themeColorSelect.value = space.appThemeColor || '#09090b';
     const passcodeInput = document.getElementById('settingsPasscodeInput');
     if (passcodeInput) passcodeInput.value = space.previewPasscode || '';
+    const secretsInput = document.getElementById('settingsSecretsInput');
+    if (secretsInput) {
+      const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+      secretsInput.value = Object.entries(secretsObj)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n');
+    }
 
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
@@ -682,6 +757,69 @@ document.getElementById('addCustomFileBtn')?.addEventListener('click', () => {
   showToast(`Created ${cleanName} in workspace!`);
 });
 
+// Import Local Files from Disk (Import button + Drag-and-Drop on Editor)
+async function handleImportedFileList(fileList) {
+  if (!state.currentSpace || !state.currentSpace.isOwner || !fileList?.length) return;
+  let importedCount = 0;
+  let lastImportedName = state.activeFile;
+
+  for (const file of Array.from(fileList)) {
+    const cleanName = file.name.trim().replace(/[^a-zA-Z0-9._-]/g, '');
+    if (!/\.(html|css|js|json|svg|txt|md)$/i.test(cleanName)) continue;
+    const content = await file.text();
+    state.workingFiles[cleanName] = content;
+    lastImportedName = cleanName;
+    importedCount++;
+
+    if (cleanName !== 'script.js' && cleanName.endsWith('.js') && state.workingFiles['index.html'] && !state.workingFiles['index.html'].includes(cleanName)) {
+      state.workingFiles['index.html'] = state.workingFiles['index.html'].replace(
+        '</body>',
+        `  <script src="${cleanName}"></script>\n</body>`
+      );
+    } else if (cleanName !== 'style.css' && cleanName.endsWith('.css') && state.workingFiles['index.html'] && !state.workingFiles['index.html'].includes(cleanName)) {
+      state.workingFiles['index.html'] = state.workingFiles['index.html'].replace(
+        '</head>',
+        `  <link rel="stylesheet" href="${cleanName}" />\n</head>`
+      );
+    }
+  }
+
+  if (!importedCount) {
+    showToast('Select .html, .css, .js, .json, .svg, .txt, or .md files to import.');
+    return;
+  }
+  state.activeFile = lastImportedName;
+  state.isDirty = true;
+  renderFileTabs();
+  document.getElementById('codeEditorTextarea').value = state.workingFiles[state.activeFile] || '';
+  document.getElementById('dirtyIndicator').textContent = `● Imported ${importedCount} file(s) (Unsaved)`;
+  updateLiveStagingPreview();
+  showToast(`Imported ${importedCount} file(s) into staging workspace!`);
+}
+
+document.getElementById('importLocalFilesBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  document.getElementById('importFilesInput')?.click();
+});
+
+document.getElementById('importFilesInput')?.addEventListener('change', async (e) => {
+  await handleImportedFileList(e.target.files);
+  e.target.value = '';
+});
+
+const editorPaneEl = document.getElementById('editorPane');
+if (editorPaneEl) {
+  editorPaneEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+  });
+  editorPaneEl.addEventListener('drop', async (e) => {
+    if (e.dataTransfer?.files?.length) {
+      e.preventDefault();
+      await handleImportedFileList(e.dataTransfer.files);
+    }
+  });
+}
+
 // 1-Click Library & Stack Injector (+ Add Library / Stack)
 document.getElementById('injectStackSelect')?.addEventListener('change', (e) => {
   const stack = e.target.value;
@@ -705,6 +843,39 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added Cloud Storage SDK helper functions to script.js!');
+    return;
+  }
+
+  if (stack === 'proxy_helper') {
+    const slug = state.currentSpace.slug;
+    const proxyCode = `\n// --- SpaceHub Server-Side API Proxy Helper (replaces {{SECRET_NAME}} server-side) ---\nasync function callSpaceProxy(url, options = {}) {\n  const res = await fetch('/live/${slug}/proxy', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      url,\n      method: options.method || 'GET',\n      headers: options.headers || { Authorization: 'Bearer {{API_KEY}}' },\n      body: options.body || null\n    })\n  });\n  return res.json();\n}\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + proxyCode;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    showToast('Added callSpaceProxy() helper to script.js! Configure secrets in Settings.');
+    return;
+  }
+
+  if (stack === 'creator_checkout') {
+    const recipient = encodeURIComponent(state.user?.email || 'romitat924@gmail.com');
+    const itemName = encodeURIComponent(`${state.currentSpace.title} — Creator Pass`);
+    const checkoutUrl = `https://www.paypal.com/cgi-bin/webscr?cmd=_xclick&business=${recipient}&item_name=${itemName}&amount=5.00&currency_code=USD&no_shipping=1`;
+    const widgetHtml = `\n  <!-- SpaceHub Creator Buy / Tip Button -->\n  <div style="margin:1.25rem 0;padding:1rem 1.25rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">\n    <div>\n      <strong style="display:block;color:#fafafa;font-size:0.95rem;">Support ${escapeHtml(state.currentSpace.title)}</strong>\n      <span style="color:#a1a1aa;font-size:0.82rem;">Instant checkout via Card, Apple Pay, Google Pay, or PayPal</span>\n    </div>\n    <a href="${checkoutUrl}" target="_blank" rel="noopener" style="background:#fafafa;color:#09090b;padding:0.55rem 1rem;border-radius:0.5rem;font-weight:700;font-size:0.85rem;text-decoration:none;">Buy / Tip $5 ↗</a>\n  </div>\n`;
+    let html = state.workingFiles['index.html'] || '';
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', `${widgetHtml}</body>`);
+    } else {
+      html += widgetHtml;
+    }
+    state.workingFiles['index.html'] = html;
+    state.activeFile = 'index.html';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = html;
+    updateLiveStagingPreview();
+    showToast('Injected Creator Buy / Tip Checkout widget into index.html!');
     return;
   }
 
@@ -956,7 +1127,7 @@ document.getElementById('exportBundleBtn')?.addEventListener('click', () => {
 
 document.getElementById('downloadSingleHtmlBtn')?.addEventListener('click', () => {
   if (!state.currentSpace) return;
-  const bundled = bundleClientPreview(state.workingFiles);
+  const bundled = bundleClientPreview(state.workingFiles, false);
   const blob = new Blob([bundled], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1223,6 +1394,62 @@ document.getElementById('clearSubmissionsBtn')?.addEventListener('click', async 
   }
 });
 
+// Visual Cloud JSON Database (/live/:slug/storage) Inspector & Editor
+async function loadSpaceCloudStorage() {
+  if (!state.currentSpace) return;
+  const textarea = document.getElementById('cloudStorageTextarea');
+  if (!textarea) return;
+  try {
+    const data = await apiFetch(`/live/${state.currentSpace.slug}/storage`);
+    textarea.value = JSON.stringify(data.data || {}, null, 2);
+  } catch (err) {
+    textarea.value = `{\n  "error": ${JSON.stringify(err.message)}\n}`;
+  }
+}
+
+document.getElementById('refreshCloudStorageBtn')?.addEventListener('click', () => {
+  loadSpaceCloudStorage();
+  showToast('Refreshed Cloud JSON Storage.');
+});
+
+document.getElementById('saveCloudStorageBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const textarea = document.getElementById('cloudStorageTextarea');
+  if (!textarea) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(textarea.value || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Root must be a JSON object {...}');
+    }
+  } catch (err) {
+    showToast(`Invalid JSON: ${err.message}`);
+    return;
+  }
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    await apiFetch(`/api/spaces/${ownerUsername}/${slug}`, {
+      method: 'PUT',
+      body: JSON.stringify({ appStorage: parsed })
+    });
+    await loadSpaceCloudStorage();
+    showToast('Saved Cloud JSON Database!');
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+document.getElementById('clearCloudStorageBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  try {
+    await apiFetch(`/live/${state.currentSpace.slug}/storage`, { method: 'DELETE' });
+    await loadSpaceCloudStorage();
+    showToast('Cleared Cloud JSON Database.');
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
 document.getElementById('copyClientPreviewBtn')?.addEventListener('click', async () => {
   if (!state.currentSpace) return;
   const code = document.getElementById('settingsPasscodeInput')?.value.trim() || '';
@@ -1252,6 +1479,7 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
   const appIconText = document.getElementById('settingsIconTextInput')?.value.trim() || '';
   const appThemeColor = document.getElementById('settingsThemeColorSelect')?.value || '#09090b';
   const previewPasscode = document.getElementById('settingsPasscodeInput')?.value.trim() || '';
+  const secrets = document.getElementById('settingsSecretsInput')?.value || '';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
@@ -1265,7 +1493,8 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
         appOrientation,
         appIconText,
         appThemeColor,
-        previewPasscode
+        previewPasscode,
+        secrets
       })
     });
     state.currentSpace = data.space;

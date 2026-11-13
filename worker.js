@@ -575,10 +575,41 @@ function canViewSpace(space, user) {
   return space.ownerId === user.id;
 }
 
+function normalizeSpaceSecrets(input) {
+  const out = {};
+  if (!input) return out;
+  if (typeof input === 'string') {
+    input.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim().replace(/[^a-zA-Z0-9_]/g, '');
+        const val = trimmed.slice(eqIdx + 1).trim();
+        if (key && val) out[key] = val.slice(0, 512);
+      }
+    });
+  } else if (typeof input === 'object') {
+    Object.entries(input).slice(0, 25).forEach(([k, v]) => {
+      const key = String(k).trim().replace(/[^a-zA-Z0-9_]/g, '');
+      const val = String(v ?? '').trim();
+      if (key && val) out[key] = val.slice(0, 512);
+    });
+  }
+  return out;
+}
+
+function replaceSecretPlaceholders(str, secrets = {}) {
+  return String(str ?? '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) =>
+    secrets[key] !== undefined ? secrets[key] : `{{${key}}}`
+  );
+}
+
 function formatSpaceSummary(space, user) {
   const isOwner = Boolean(user && space.ownerId === user.id);
   const stagingPreviewUrl = `/spaces/${space.ownerUsername}/${space.slug}/live`;
   const externalLiveUrl = space.externalHost?.liveUrl || null;
+  const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   return {
     id: space.id,
     ownerId: space.ownerId,
@@ -597,6 +628,8 @@ function formatSpaceSummary(space, user) {
     appThemeColor: space.appThemeColor || '#09090b',
     previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
     hasPreviewPasscode: Boolean(space.previewPasscode),
+    secrets: isOwner ? secretsObj : undefined,
+    secretKeys: Object.keys(secretsObj),
     status: space.status,
     likes: space.likes || 0,
     views: space.views || 0,
@@ -1004,6 +1037,71 @@ export default {
         else space.appStorage = {};
         await saveDb(env, db);
         return jsonResponse({ ok: true, data: space.appStorage });
+      }
+    }
+
+    // 1b-1. Per-Space Server-Side API Proxy & Secrets Vault (POST /live/:slug/proxy)
+    const proxyLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/proxy\/?$/i);
+    if (proxyLiveMatch && method === 'POST') {
+      const slug = decodeURIComponent(proxyLiveMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+
+      const payload = await request.json().catch(() => ({}));
+      const rawUrl = String(payload.url || '').trim();
+      if (!/^https?:\/\/|^mock:\/\//i.test(rawUrl)) {
+        return jsonResponse({ error: 'Proxy target URL must start with https:// or http://' }, 400);
+      }
+
+      const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+      const resolvedUrl = replaceSecretPlaceholders(rawUrl, secrets);
+      const reqMethod = String(payload.method || 'GET').toUpperCase();
+      const resolvedHeaders = {};
+      if (payload.headers && typeof payload.headers === 'object') {
+        Object.entries(payload.headers).forEach(([hk, hv]) => {
+          resolvedHeaders[hk] = replaceSecretPlaceholders(hv, secrets);
+        });
+      }
+      let resolvedBody = undefined;
+      if (payload.body !== undefined && payload.body !== null && reqMethod !== 'GET' && reqMethod !== 'HEAD') {
+        const bodyStr = typeof payload.body === 'string' ? payload.body : JSON.stringify(payload.body);
+        resolvedBody = replaceSecretPlaceholders(bodyStr, secrets);
+      }
+
+      if (resolvedUrl.startsWith('mock://')) {
+        return jsonResponse({
+          ok: true,
+          status: 200,
+          data: {
+            mockProxy: true,
+            resolvedUrl,
+            method: reqMethod,
+            headers: resolvedHeaders,
+            body: resolvedBody ? JSON.parse(resolvedBody) : null
+          }
+        });
+      }
+
+      try {
+        const upstreamRes = await fetch(resolvedUrl, {
+          method: reqMethod,
+          headers: resolvedHeaders,
+          body: resolvedBody
+        });
+        const text = await upstreamRes.text();
+        let parsed = text;
+        try {
+          parsed = JSON.parse(text);
+        } catch (_e) {
+          // keep text
+        }
+        return jsonResponse({
+          ok: upstreamRes.ok,
+          status: upstreamRes.status,
+          data: parsed
+        });
+      } catch (err) {
+        return jsonResponse({ error: err.message || 'Upstream proxy request failed.' }, 502);
       }
     }
 
@@ -1565,6 +1663,12 @@ export default {
           }
           if (typeof body.previewPasscode === 'string') {
             space.previewPasscode = body.previewPasscode.trim().slice(0, 32);
+          }
+          if (body.secrets !== undefined) {
+            space.secrets = normalizeSpaceSecrets(body.secrets);
+          }
+          if (body.appStorage !== undefined && typeof body.appStorage === 'object') {
+            space.appStorage = body.appStorage;
           }
           const incomingFiles = body.draftFiles || body.files;
           if (incomingFiles && typeof incomingFiles === 'object') {

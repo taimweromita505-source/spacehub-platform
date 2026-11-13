@@ -513,6 +513,10 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 <button type="button" class="btn btn-ghost btn-xs" id="addCustomFileBtn" title="Add a new file (.js, .css, .html, .json)">
                   + File
                 </button>
+                <button type="button" class="btn btn-ghost btn-xs" id="importLocalFilesBtn" title="Import .html, .css, .js, .json, .svg, .txt, or .md files from disk">
+                  Import
+                </button>
+                <input type="file" id="importFilesInput" multiple accept=".html,.css,.js,.json,.svg,.txt,.md" hidden />
               </div>
               <div class="editor-toolbar">
                 <label for="injectStackSelect" class="visually-hidden">Add Library or Stack</label>
@@ -525,6 +529,8 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                   <option value="threejs">Three.js 3D WebGL</option>
                   <option value="lucide">Lucide Vector Icons</option>
                   <option value="cloud_db">Space Cloud Storage Helper</option>
+                  <option value="proxy_helper">Server-Side API Proxy Helper</option>
+                  <option value="creator_checkout">Creator Buy / Tip Button</option>
                 </select>
                 <span class="unsaved-indicator" id="dirtyIndicator">Saved</span>
                 <button type="button" class="btn btn-ghost btn-xs" id="rollbackDraftBtn" hidden>
@@ -565,6 +571,22 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 title="Live Staging Preview"
                 sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
               ></iframe>
+            </div>
+            <div class="studio-console-bar" id="studioConsoleBar" style="border-top: 1px solid var(--border); background: #09090b; padding: 0.45rem 0.75rem; font-family: var(--font-mono); font-size: 0.74rem;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.25rem;">
+                <span style="color: var(--text-muted); font-weight: 600;">Console &amp; Runtime Inspector (<span id="consoleCountBadge">0</span>)</span>
+                <div style="display: flex; align-items: center; gap: 0.35rem;">
+                  <button type="button" class="btn btn-primary btn-xs" id="fixErrorWithAiBtn" hidden>
+                    Fix Error with AI Agent
+                  </button>
+                  <button type="button" class="btn btn-ghost btn-xs" id="clearConsoleBtn">
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div id="consoleLogsList" style="max-height: 84px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.2rem; color: #a1a1aa;">
+                <div>Ready — console.log() and runtime errors appear here live.</div>
+              </div>
             </div>
           </div>
         </div>
@@ -626,6 +648,34 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           </div>
 
           <div id="submissionsListContainer" class="pat-keys-list" aria-live="polite"></div>
+
+          <div class="arch-card" style="margin-block-start: 1.5rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; margin-block-end: 0.5rem;">
+              <div>
+                <h3 style="margin: 0;">Cloud JSON Database Inspector (<code>/live/:slug/storage</code>)</h3>
+                <p style="margin: 0.2rem 0 0;">View or edit your Space's persistent cloud key-value JSON store directly.</p>
+              </div>
+              <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+                <button type="button" class="btn btn-outline btn-xs" id="refreshCloudStorageBtn">
+                  Refresh Storage
+                </button>
+                <button type="button" class="btn btn-primary btn-xs" id="saveCloudStorageBtn">
+                  Save Storage JSON
+                </button>
+                <button type="button" class="btn btn-danger btn-xs" id="clearCloudStorageBtn">
+                  Clear Storage
+                </button>
+              </div>
+            </div>
+            <label for="cloudStorageTextarea" class="visually-hidden">Cloud Storage JSON</label>
+            <textarea
+              id="cloudStorageTextarea"
+              class="code-textarea"
+              rows="6"
+              style="min-height: 130px; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-block-start: 0.35rem;"
+              spellcheck="false"
+            >{}</textarea>
+          </div>
         </div>
       </div>
 
@@ -762,6 +812,21 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
               autocapitalize="none"
               spellcheck="false"
             />
+          </div>
+
+          <div class="field">
+            <label for="settingsSecretsInput">Server-Side API Secrets Vault (<code>KEY=VALUE</code>, one per line)</label>
+            <span class="hint">Secrets are stored privately on the server and injected into <code>POST /live/:slug/proxy</code> requests via <code>{{SECRET_NAME}}</code> placeholders so API keys never leak to browsers.</span>
+            <textarea
+              id="settingsSecretsInput"
+              name="secrets"
+              rows="3"
+              placeholder="OPENAI_API_KEY=sk-proj-...&#10;STRIPE_SECRET_KEY=sk_live_..."
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              style="font-family: var(--font-mono); font-size: 0.8rem;"
+            ></textarea>
           </div>
 
           <div class="settings-actions">

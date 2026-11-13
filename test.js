@@ -292,6 +292,38 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(storeGet.status, 200);
     assert.strictEqual(storeGet.body.data, 42);
 
+    console.log('12. Testing Server-Side API Proxy & Secrets Vault (POST /live/:slug/proxy)...');
+    const secretSave = await request(
+      server,
+      'PUT',
+      `/api/spaces/${uniqueUser}/${space.slug}`,
+      { secrets: 'API_KEY=sk_secret_vault_999\nWEBHOOK_TOKEN=wh_tok_123' },
+      token
+    );
+    assert.strictEqual(secretSave.status, 200);
+    assert.deepStrictEqual(secretSave.body.space.secretKeys, ['API_KEY', 'WEBHOOK_TOKEN']);
+
+    const proxyCall = await request(server, 'POST', `/live/${space.slug}/proxy`, {
+      url: 'mock://api.example.com/v1/data?token={{WEBHOOK_TOKEN}}',
+      method: 'POST',
+      headers: { Authorization: 'Bearer {{API_KEY}}' },
+      body: { prompt: 'Test with {{API_KEY}}' }
+    });
+    assert.strictEqual(proxyCall.status, 200);
+    assert.strictEqual(proxyCall.body.ok, true);
+    assert.strictEqual(
+      proxyCall.body.data.resolvedUrl,
+      'mock://api.example.com/v1/data?token=wh_tok_123'
+    );
+    assert.strictEqual(
+      proxyCall.body.data.headers.Authorization,
+      'Bearer sk_secret_vault_999'
+    );
+    assert.strictEqual(
+      proxyCall.body.data.body.prompt,
+      'Test with sk_secret_vault_999'
+    );
+
     console.log('ALL TESTS PASSED!');
   } finally {
     server.close();

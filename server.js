@@ -684,10 +684,41 @@ function canViewSpace(space, user) {
   return space.ownerId === user.id;
 }
 
+function normalizeSpaceSecrets(input) {
+  const out = {};
+  if (!input) return out;
+  if (typeof input === 'string') {
+    input.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim().replace(/[^a-zA-Z0-9_]/g, '');
+        const val = trimmed.slice(eqIdx + 1).trim();
+        if (key && val) out[key] = val.slice(0, 512);
+      }
+    });
+  } else if (typeof input === 'object') {
+    Object.entries(input).slice(0, 25).forEach(([k, v]) => {
+      const key = String(k).trim().replace(/[^a-zA-Z0-9_]/g, '');
+      const val = String(v ?? '').trim();
+      if (key && val) out[key] = val.slice(0, 512);
+    });
+  }
+  return out;
+}
+
+function replaceSecretPlaceholders(str, secrets = {}) {
+  return String(str ?? '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) =>
+    secrets[key] !== undefined ? secrets[key] : `{{${key}}}`
+  );
+}
+
 function formatSpaceSummary(space, user) {
   const isOwner = Boolean(user && space.ownerId === user.id);
   const stagingPreviewUrl = `/spaces/${space.ownerUsername}/${space.slug}/live`;
   const externalLiveUrl = space.externalHost?.liveUrl || null;
+  const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
 
   return {
     id: space.id,
@@ -707,6 +738,8 @@ function formatSpaceSummary(space, user) {
     appThemeColor: space.appThemeColor || '#09090b',
     previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
     hasPreviewPasscode: Boolean(space.previewPasscode),
+    secrets: isOwner ? secretsObj : undefined,
+    secretKeys: Object.keys(secretsObj),
     status: space.status,
     likes: space.likes || 0,
     views: space.views || 0,
@@ -2096,6 +2129,8 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
     appIconText,
     appThemeColor,
     previewPasscode,
+    secrets,
+    appStorage,
     colorFrom,
     colorTo,
     draftFiles
@@ -2123,6 +2158,12 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
   }
   if (typeof previewPasscode === 'string') {
     space.previewPasscode = previewPasscode.trim().slice(0, 32);
+  }
+  if (secrets !== undefined) {
+    space.secrets = normalizeSpaceSecrets(secrets);
+  }
+  if (appStorage !== undefined && typeof appStorage === 'object') {
+    space.appStorage = appStorage;
   }
 
   if (draftFiles && typeof draftFiles === 'object') {
@@ -2755,6 +2796,70 @@ app.delete(['/live/:slug/storage', '/s/:slug/storage'], (req, res) => {
   else space.appStorage = {};
   saveDb(db);
   res.json({ ok: true, data: space.appStorage });
+});
+
+// Per-Space Server-Side API Proxy & Secrets Vault (POST /live/:slug/proxy)
+app.post(['/live/:slug/proxy', '/s/:slug/proxy'], async (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+
+  const payload = req.body || {};
+  const rawUrl = String(payload.url || '').trim();
+  if (!/^https?:\/\/|^mock:\/\//i.test(rawUrl)) {
+    return res.status(400).json({ error: 'Proxy target URL must start with https:// or http://' });
+  }
+
+  const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+  const resolvedUrl = replaceSecretPlaceholders(rawUrl, secrets);
+  const reqMethod = String(payload.method || 'GET').toUpperCase();
+  const resolvedHeaders = {};
+  if (payload.headers && typeof payload.headers === 'object') {
+    Object.entries(payload.headers).forEach(([hk, hv]) => {
+      resolvedHeaders[hk] = replaceSecretPlaceholders(hv, secrets);
+    });
+  }
+  let resolvedBody = undefined;
+  if (payload.body !== undefined && payload.body !== null && reqMethod !== 'GET' && reqMethod !== 'HEAD') {
+    const bodyStr = typeof payload.body === 'string' ? payload.body : JSON.stringify(payload.body);
+    resolvedBody = replaceSecretPlaceholders(bodyStr, secrets);
+  }
+
+  if (resolvedUrl.startsWith('mock://')) {
+    return res.json({
+      ok: true,
+      status: 200,
+      data: {
+        mockProxy: true,
+        resolvedUrl,
+        method: reqMethod,
+        headers: resolvedHeaders,
+        body: resolvedBody ? JSON.parse(resolvedBody) : null
+      }
+    });
+  }
+
+  try {
+    const upstreamRes = await fetch(resolvedUrl, {
+      method: reqMethod,
+      headers: resolvedHeaders,
+      body: resolvedBody
+    });
+    const text = await upstreamRes.text();
+    let parsed = text;
+    try {
+      parsed = JSON.parse(text);
+    } catch (_e) {
+      // keep text
+    }
+    return res.json({
+      ok: upstreamRes.ok,
+      status: upstreamRes.status,
+      data: parsed
+    });
+  } catch (err) {
+    return res.status(502).json({ error: err.message || 'Upstream proxy request failed.' });
+  }
 });
 
 // Form & Waitlist Submissions API for Space Owners & Public Live Forms
