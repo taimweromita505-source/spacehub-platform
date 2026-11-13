@@ -628,6 +628,13 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 </button>
               </div>
             </div>
+            <aside id="draftRecovery" class="field" hidden>
+              <p id="draftRecoveryMessage"></p>
+              <div class="workspace-actions">
+                <button type="button" class="btn btn-outline btn-xs" id="restoreLocalDraft">Restore browser copy</button>
+                <button type="button" class="btn btn-ghost btn-xs" id="discardLocalDraft">Discard browser copy</button>
+              </div>
+            </aside>
             <aside id="firstProjectGuide" class="field" hidden aria-label="First project">
               <p id="firstProjectStep" role="status"></p>
               <button type="button" class="btn btn-outline btn-xs" id="firstProjectAction"></button>
@@ -1698,6 +1705,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         <div class="field" id="releaseHistoryPanel" hidden>
           <label for="releaseHistorySelect">Previous live releases</label>
           <select id="releaseHistorySelect" class="select-control"></select>
+          <button type="button" class="btn btn-outline btn-xs" id="compareReleaseBtn">Compare selected release</button>
           <button type="button" class="btn btn-outline btn-xs" id="restoreReleaseBtn">Restore selected release</button>
         </div>
         <p id="publishError" role="alert" hidden></p>

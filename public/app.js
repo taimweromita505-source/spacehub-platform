@@ -488,7 +488,7 @@ window.addEventListener('message', (event) => {
     const newText = String(data.newText || '');
     if (oldText && newText && state.workingFiles['index.html']?.includes(oldText)) {
       state.workingFiles['index.html'] = state.workingFiles['index.html'].replace(oldText, newText);
-      state.isDirty = true;
+      recordDraftEdit();
       document.getElementById('dirtyIndicator').textContent = '● Unsaved visual text edit';
       if (state.activeFile === 'index.html') {
         document.getElementById('codeEditorTextarea').value = state.workingFiles['index.html'];
@@ -688,6 +688,63 @@ function renderFileTabs() {
 }
 
 let guidedProject = null;
+const recoveryPanel = document.getElementById('draftRecovery');
+
+function recoveryKey(space = state.currentSpace) {
+  if (!state.user || !space?.isOwner) return null;
+  return 'spacehub-draft:' + JSON.stringify([state.user.username, space.ownerUsername, space.slug]);
+}
+
+function readRecovery(key) {
+  try { return key ? JSON.parse(localStorage.getItem(key)) : null; }
+  catch { return null; }
+}
+
+function clearRecovery(key) {
+  try { if (key) localStorage.removeItem(key); } catch {}
+}
+
+function recordDraftEdit() {
+  state.isDirty = true;
+  const key = recoveryKey();
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify({ files: state.workingFiles, savedAt: Date.now() }));
+    recoveryPanel.hidden = true;
+  } catch {
+    recoveryPanel.hidden = false;
+    document.getElementById('draftRecoveryMessage').textContent = 'Browser storage is unavailable. Save the draft to keep your edits.';
+    document.getElementById('restoreLocalDraft').hidden = true;
+    document.getElementById('discardLocalDraft').hidden = true;
+  }
+}
+
+function showDraftRecovery() {
+  const key = recoveryKey();
+  const copy = readRecovery(key);
+  recoveryPanel.hidden = !copy?.files;
+  if (recoveryPanel.hidden) return;
+  const message = document.getElementById('draftRecoveryMessage');
+  message.textContent = 'Unsaved edits from ' + new Date(copy.savedAt).toLocaleString() + ' are available on this browser.';
+  const restore = document.getElementById('restoreLocalDraft');
+  const discard = document.getElementById('discardLocalDraft');
+  restore.hidden = discard.hidden = false;
+  restore.onclick = () => {
+    if (recoveryKey() !== key) return;
+    state.workingFiles = copy.files;
+    state.activeFile = Object.hasOwn(copy.files, state.activeFile) ? state.activeFile : Object.keys(copy.files)[0] || 'index.html';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = copy.files[state.activeFile] || '';
+    document.getElementById('dirtyIndicator').textContent = 'Recovered edits · unsaved';
+    updateLiveStagingPreview();
+    renderFirstProjectGuide();
+  };
+  discard.onclick = () => {
+    clearRecovery(key);
+    recoveryPanel.hidden = true;
+  };
+}
 
 function renderFirstProjectGuide() {
   const guide = document.getElementById('firstProjectGuide');
@@ -733,6 +790,7 @@ async function openSpaceStudio(username, slug) {
     state.activeFile = 'index.html';
     state.isDirty = false;
     renderFirstProjectGuide();
+    showDraftRecovery();
 
     updateStudioHeaderBadges(space);
     renderFileTabs();
@@ -830,7 +888,7 @@ document.getElementById('addCustomFileBtn')?.addEventListener('click', () => {
     }
   }
   state.activeFile = cleanName;
-  state.isDirty = true;
+  recordDraftEdit();
   renderFileTabs();
   document.getElementById('codeEditorTextarea').value = state.workingFiles[cleanName];
   updateLiveStagingPreview();
@@ -869,7 +927,7 @@ async function handleImportedFileList(fileList) {
     return;
   }
   state.activeFile = lastImportedName;
-  state.isDirty = true;
+  recordDraftEdit();
   renderFileTabs();
   document.getElementById('codeEditorTextarea').value = state.workingFiles[state.activeFile] || '';
   document.getElementById('dirtyIndicator').textContent = `● Imported ${importedCount} file(s) (Unsaved)`;
@@ -931,7 +989,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const proxyCode = `\n// --- SpaceHub Server-Side API Proxy Helper (replaces {{SECRET_NAME}} server-side) ---\nasync function callSpaceProxy(url, options = {}) {\n  const res = await fetch('/live/${slug}/proxy', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      url,\n      method: options.method || 'GET',\n      headers: options.headers || { Authorization: 'Bearer {{API_KEY}}' },\n      body: options.body || null\n    })\n  });\n  return res.json();\n}\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + proxyCode;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added callSpaceProxy() helper to script.js! Configure secrets in Settings.');
@@ -943,7 +1001,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const authCode = `\n// --- SpaceHub Built-in Member Login & Auth SDK (/live/${slug}/auth) ---\nasync function spaceMemberAuth(email, password, name = '') {\n  const res = await fetch('/live/${slug}/auth', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ email, password, name })\n  });\n  const data = await res.json();\n  if (data.token) localStorage.setItem('space_member_token', data.token);\n  return data;\n}\nasync function getCurrentSpaceMember() {\n  const tok = localStorage.getItem('space_member_token') || '';\n  if (!tok) return null;\n  const res = await fetch('/live/${slug}/auth/me', {\n    headers: { Authorization: 'Bearer ' + tok }\n  });\n  if (!res.ok) return null;\n  return (await res.json()).user;\n}\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + authCode;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added spaceMemberAuth() & getCurrentSpaceMember() SDK to script.js!');
@@ -955,7 +1013,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const aiCode = `\n// --- SpaceHub Built-in AI Assistant SDK (/live/${slug}/ai) ---\nasync function askSpaceAI(prompt, system = '') {\n  const res = await fetch('/live/${slug}/ai', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ prompt, system })\n  });\n  return (await res.json()).reply;\n}\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + aiCode;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added askSpaceAI(prompt) helper to script.js!');
@@ -967,7 +1025,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const roomCode = `\n// --- SpaceHub Real-Time Multiplayer & Live Chat Room SDK (/live/${slug}/room) ---\nasync function sendRoomEvent(sender, text, payload = {}) {\n  const res = await fetch('/live/${slug}/room', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ sender, text, payload })\n  });\n  return (await res.json()).events || [];\n}\nasync function getRoomEvents() {\n  const res = await fetch('/live/${slug}/room');\n  return (await res.json()).events || [];\n}\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + roomCode;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     showToast('Added sendRoomEvent() & getRoomEvents() SDK to script.js!');
@@ -979,7 +1037,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const currentJs = state.workingFiles['script.js'] || '';
     state.workingFiles['script.js'] = currentJs + assetsSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -992,7 +1050,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const currentJs = state.workingFiles['script.js'] || '';
     state.workingFiles['script.js'] = currentJs + searchSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1004,7 +1062,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const tableSdk = `\n// --- SpaceHub Structured Table DB SDK (/live/:slug/db/:table) ---\nfunction getSpaceTable(tableName = 'items') {\n  const base = '/live/${state.currentSpace.slug}/db/' + encodeURIComponent(tableName);\n  return {\n    async list(where = '', sort = '') {\n      const q = new URLSearchParams();\n      if (where) q.set('where', where);\n      if (sort) q.set('sort', sort);\n      const res = await fetch(base + (q.toString() ? '?' + q.toString() : ''));\n      const json = await res.json();\n      return json.rows || [];\n    },\n    async insert(row) {\n      const res = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row) });\n      return res.json();\n    },\n    async update(id, patch) {\n      const res = await fetch(base + '?id=' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });\n      return res.json();\n    },\n    async remove(id) {\n      const res = await fetch(base + '?id=' + encodeURIComponent(id), { method: 'DELETE' });\n      return res.json();\n    }\n  };\n}\nwindow.SpaceDB = { table: getSpaceTable };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + tableSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1016,7 +1074,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const ordersSdk = `\n// --- SpaceHub Storefront & Order Checkout SDK (/live/:slug/orders) ---\nasync function createSpaceOrder(items, buyerEmail = '') {\n  const res = await fetch('/live/${state.currentSpace.slug}/orders', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ items, buyerEmail })\n  });\n  return res.json();\n}\nasync function getSpaceOrder(id) {\n  const res = await fetch('/live/${state.currentSpace.slug}/orders?id=' + encodeURIComponent(id));\n  return res.json();\n}\n// Usage: const { order } = await SpaceOrders.create([{ name: 'Pro Plan', priceUsd: 10, qty: 1 }], 'buyer@example.com'); window.location = order.checkoutUrl;\nwindow.SpaceOrders = { create: createSpaceOrder, get: getSpaceOrder };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + ordersSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1032,7 +1090,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
       showToast('Created index.b.html (Variant B). Publish to split live traffic 50/50 — use ?variant=a|b to force.');
     }
     state.activeFile = 'index.b.html';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['index.b.html'];
     return;
@@ -1051,7 +1109,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
       );
     }
     state.activeFile = 'redirects.json';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['redirects.json'];
     showToast('Created redirects.json — single-segment paths like /pricing redirect after publish.');
@@ -1070,7 +1128,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const fnSdk = `\n// --- SpaceHub Serverless Edge Function SDK (/live/:slug/fn) ---\nasync function callSpaceFn(action = 'ping', payload = {}) {\n  const res = await fetch('/live/${state.currentSpace.slug}/fn?action=' + encodeURIComponent(action), {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ action, ...payload })\n  });\n  return res.json();\n}\nwindow.SpaceFn = { call: callSpaceFn };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + fnSdk;
     state.activeFile = 'routes.json';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['routes.json'];
     updateLiveStagingPreview();
@@ -1082,7 +1140,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const analyticsSdk = `\n// --- SpaceHub Custom Event & Funnel Analytics SDK (/live/:slug/events) ---\nasync function trackSpaceEvent(event, props = {}) {\n  const res = await fetch('/live/${state.currentSpace.slug}/events', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ event, props })\n  });\n  return res.json();\n}\nasync function getSpaceAnalytics() {\n  const res = await fetch('/live/${state.currentSpace.slug}/events');\n  return res.json();\n}\nwindow.SpaceAnalytics = { track: trackSpaceEvent, getSummary: getSpaceAnalytics };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + analyticsSdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1094,7 +1152,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     const notifySdk = `\n// --- SpaceHub Transactional Email & Notification SDK (/live/:slug/notify) ---\nasync function sendSpaceNotification(to, subject, message) {\n  const res = await fetch('/live/${state.currentSpace.slug}/notify', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ to, subject, message })\n  });\n  return res.json();\n}\nwindow.SpaceNotify = { send: sendSpaceNotification };\n`;
     state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + notifySdk;
     state.activeFile = 'script.js';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
     updateLiveStagingPreview();
@@ -1115,7 +1173,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     }
     state.workingFiles['index.html'] = html;
     state.activeFile = 'index.html';
-    state.isDirty = true;
+    recordDraftEdit();
     renderFileTabs();
     document.getElementById('codeEditorTextarea').value = html;
     updateLiveStagingPreview();
@@ -1136,7 +1194,7 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     html = `${tag}\n` + html;
   }
   state.workingFiles['index.html'] = html;
-  state.isDirty = true;
+  recordDraftEdit();
   if (state.activeFile === 'index.html') {
     document.getElementById('codeEditorTextarea').value = html;
   }
@@ -1163,7 +1221,7 @@ document.getElementById('themePresetSelect')?.addEventListener('change', (e) => 
   let currentCss = state.workingFiles['style.css'] || '';
   currentCss = currentCss.replace(/\/\* --- SpaceHub Theme Preset:[\s\S]*$/, '').trim();
   state.workingFiles['style.css'] = `${currentCss}\n\n${cssBlock}\n`;
-  state.isDirty = true;
+  recordDraftEdit();
   if (state.activeFile === 'style.css') {
     document.getElementById('codeEditorTextarea').value = state.workingFiles['style.css'];
   }
@@ -1176,7 +1234,7 @@ let previewDebounce;
 document.getElementById('codeEditorTextarea').addEventListener('input', (e) => {
   if (!state.currentSpace || !state.currentSpace.isOwner) return;
   state.workingFiles[state.activeFile] = e.target.value;
-  state.isDirty = true;
+  recordDraftEdit();
   document.getElementById('dirtyIndicator').textContent = '● Unsaved edits (Live in staging check)';
   clearTimeout(previewDebounce);
   previewDebounce = setTimeout(updateLiveStagingPreview, 220);
@@ -1259,11 +1317,11 @@ document.getElementById('auditSpaceBtn')?.addEventListener('click', () => {
 });
 
 // Staging vs. Published Live Code Diff Viewer
-function openSpaceDiffViewer(forPublish = false) {
+function openSpaceDiffViewer(forPublish = false, releaseFiles) {
   if (!state.currentSpace) return;
-  const draft = forPublish
+  const draft = releaseFiles || (forPublish
     ? { ...state.currentSpace.draftFiles, ...state.workingFiles }
-    : state.workingFiles || state.currentSpace.draftFiles || {};
+    : state.workingFiles || state.currentSpace.draftFiles || {});
   const live = state.currentSpace.publishedFiles || {};
   const allFileNames = Array.from(new Set([...Object.keys(draft), ...Object.keys(live)]));
   const summaryEl = document.getElementById('spaceDiffSummaryText');
@@ -1366,7 +1424,7 @@ document.getElementById('autoFixAuditBtn')?.addEventListener('click', () => {
   }
 
   state.workingFiles['index.html'] = html;
-  state.isDirty = true;
+  recordDraftEdit();
   if (state.activeFile === 'index.html') {
     document.getElementById('codeEditorTextarea').value = html;
   }
@@ -1499,6 +1557,9 @@ document.getElementById('saveDraftBtn').addEventListener('click', async () => {
       method: 'PUT',
       body: JSON.stringify({ draftFiles: state.workingFiles })
     });
+    if (recoveryKey() !== key || JSON.stringify(state.workingFiles) !== submitted) return;
+    clearRecovery(key);
+    recoveryPanel.hidden = true;
     state.currentSpace = data.space;
     state.isDirty = false;
     document.getElementById('dirtyIndicator').textContent = '✓ Staging draft saved';
@@ -1833,6 +1894,17 @@ async function verifyRelease(release = pendingVerification, status = publishStat
   }
 }
 
+document.getElementById('compareReleaseBtn').addEventListener('click', async () => {
+  const space = state.currentSpace;
+  const id = historySelect.value;
+  if (!space || !id) return;
+  try {
+    const { files } = await apiFetch(releaseEndpoint(space) + '?release=' + encodeURIComponent(id));
+    if (state.currentSpace === space && deployDialog.open && historySelect.value === id) openSpaceDiffViewer(false, files);
+  } catch (error) {
+    publishStatus.textContent = error.message;
+  }
+});
 verifyButton.addEventListener('click', () => verifyRelease());
 restoreButton.addEventListener('click', async () => {
   const space = state.currentSpace;
