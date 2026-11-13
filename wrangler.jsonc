@@ -9,5 +9,11 @@
   "assets": {
     "directory": "public",
     "binding": "ASSETS"
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "SPACEHUB_KV",
+      "id": "3452b2de0b77450e8546c8337db54a99"
+    }
+  ]
 }

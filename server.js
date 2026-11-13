@@ -15,9 +15,13 @@ if (fs.existsSync(ENV_PATH)) {
   fs.readFileSync(ENV_PATH, 'utf8')
     .split(/\r?\n/)
     .forEach((line) => {
-      const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
       if (match && !process.env[match[1]]) {
         process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
+      } else if (/^(ghp_|github_pat_)/.test(trimmed) && !process.env.GITHUB_TOKEN) {
+        process.env.GITHUB_TOKEN = trimmed;
       }
     });
 }
@@ -390,187 +394,22 @@ animate();`
 
 function loadDb() {
   if (!fs.existsSync(DB_FILE)) {
-    const demoUserId = 'usr_demo1';
-    const now = new Date().toISOString();
-    const initialSpaces = [
-      {
-        id: 'spc_novacloud',
-        ownerId: demoUserId,
-        ownerUsername: 'alex',
-        slug: 'novacloud-landing',
-        title: 'NovaCloud Landing Page',
-        description: 'Responsive SaaS product launch page staged on SpaceHub and connected to Vercel.',
-        emoji: '✨',
-        colorFrom: 'indigo',
-        colorTo: 'cyan',
-        sdk: 'static',
-        visibility: 'public',
-        status: 'published',
-        likes: 18,
-        likedBy: [],
-        createdAt: now,
-        updatedAt: now,
-        publishedAt: now,
-        hasUnpublishedChanges: false,
-        agentHistory: [],
-        externalHost: {
-          provider: 'vercel',
-          providerLabel: 'Vercel',
-          projectName: 'novacloud-landing',
-          liveUrl: 'https://novacloud-landing-demo.vercel.app',
-          lastDeployedAt: now
-        },
-        draftFiles: {
-          ...STARTER_TEMPLATES.landing.files,
-          'README.md': generateReadme({
-            title: 'NovaCloud Landing Page',
-            emoji: '✨',
-            colorFrom: 'indigo',
-            colorTo: 'cyan',
-            visibility: 'public',
-            externalHostProvider: 'vercel',
-            description: 'Responsive SaaS product launch page staged on SpaceHub and connected to Vercel.'
-          })
-        },
-        publishedFiles: {
-          ...STARTER_TEMPLATES.landing.files,
-          'README.md': generateReadme({
-            title: 'NovaCloud Landing Page',
-            emoji: '✨',
-            colorFrom: 'indigo',
-            colorTo: 'cyan',
-            visibility: 'public',
-            externalHostProvider: 'vercel',
-            description: 'Responsive SaaS product launch page staged on SpaceHub and connected to Vercel.'
-          })
-        }
-      },
-      {
-        id: 'spc_pulsemetrics',
-        ownerId: demoUserId,
-        ownerUsername: 'alex',
-        slug: 'pulse-metrics-dashboard',
-        title: 'PulseMetrics Live Dashboard',
-        description: 'Real-time telemetry & conversion simulator staged on SpaceHub and connected to Netlify.',
-        emoji: '📊',
-        colorFrom: 'emerald',
-        colorTo: 'teal',
-        sdk: 'static',
-        visibility: 'public',
-        status: 'published',
-        likes: 11,
-        likedBy: [],
-        createdAt: now,
-        updatedAt: now,
-        publishedAt: now,
-        hasUnpublishedChanges: false,
-        agentHistory: [],
-        externalHost: {
-          provider: 'netlify',
-          providerLabel: 'Netlify',
-          projectName: 'pulse-metrics-dashboard',
-          liveUrl: 'https://pulse-metrics-demo.netlify.app',
-          lastDeployedAt: now
-        },
-        draftFiles: {
-          ...STARTER_TEMPLATES.dashboard.files,
-          'README.md': generateReadme({
-            title: 'PulseMetrics Live Dashboard',
-            emoji: '📊',
-            colorFrom: 'emerald',
-            colorTo: 'teal',
-            visibility: 'public',
-            externalHostProvider: 'netlify',
-            description: 'Real-time telemetry & conversion simulator staged on SpaceHub and connected to Netlify.'
-          })
-        },
-        publishedFiles: {
-          ...STARTER_TEMPLATES.dashboard.files,
-          'README.md': generateReadme({
-            title: 'PulseMetrics Live Dashboard',
-            emoji: '📊',
-            colorFrom: 'emerald',
-            colorTo: 'teal',
-            visibility: 'public',
-            externalHostProvider: 'netlify',
-            description: 'Real-time telemetry & conversion simulator staged on SpaceHub and connected to Netlify.'
-          })
-        }
-      }
-    ];
-
     const seed = {
-      users: [
-        {
-          id: demoUserId,
-          username: 'alex',
-          displayName: 'Alex Rivera',
-          passwordHash: hashPassword('demo1234'),
-          createdAt: now
-        }
-      ],
+      users: [],
       sessions: {},
-      agentKeys: [
-        {
-          id: 'key_demo1',
-          userId: demoUserId,
-          name: 'Default CLI Coding Agent Key',
-          token: 'sh_pat_demo_alex_agent_key_2026',
-          createdAt: now
-        }
-      ],
-      hostingConnections: [
-        {
-          id: 'host_cf_wrangler',
-          userId: demoUserId,
-          provider: 'cloudflare_pages',
-          providerLabel: 'Cloudflare Pages (Wrangler OAuth Connected)',
-          name: 'Cloudflare Pages — taimweromita505@gmail.com (0609aceb5bb38bd3f97d3f9c87f1a433)',
-          targetUrlOrProject: 'spacehub-live-app',
-          apiToken: 'wrangler_oauth',
-          hasToken: true,
-          createdAt: now
-        },
-        {
-          id: 'host_gh_pages',
-          userId: demoUserId,
-          provider: 'github_pages',
-          providerLabel: 'GitHub Pages (Repository Push)',
-          name: 'GitHub Pages — Connect GITHUB_TOKEN in .env or UI',
-          targetUrlOrProject: 'spacehub-web-app',
-          apiToken: process.env.GITHUB_TOKEN || '',
-          hasToken: Boolean(process.env.GITHUB_TOKEN),
-          createdAt: now
-        },
-        {
-          id: 'host_demo_vercel',
-          userId: demoUserId,
-          provider: 'vercel',
-          providerLabel: 'Vercel',
-          name: 'Alex Personal Vercel Team',
-          targetUrlOrProject: 'novacloud-landing',
-          hasToken: true,
-          createdAt: now
-        },
-        {
-          id: 'host_demo_netlify',
-          userId: demoUserId,
-          provider: 'netlify',
-          providerLabel: 'Netlify',
-          name: 'Alex Netlify Production',
-          targetUrlOrProject: 'pulse-metrics-dashboard',
-          hasToken: true,
-          createdAt: now
-        }
-      ],
-      spaces: initialSpaces
+      agentKeys: [],
+      hostingConnections: [],
+      spaces: []
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2), 'utf8');
     return seed;
   }
   const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  db.users = db.users || [];
+  db.sessions = db.sessions || {};
   db.agentKeys = db.agentKeys || [];
   db.hostingConnections = db.hostingConnections || [];
+  db.spaces = db.spaces || [];
   return db;
 }
 
@@ -1305,6 +1144,31 @@ app.post('/api/auth/register', (req, res) => {
   };
 
   db.users.push(newUser);
+  const now = new Date().toISOString();
+  db.hostingConnections.push({
+    id: 'host_' + crypto.randomBytes(6).toString('hex'),
+    userId: newUser.id,
+    provider: 'cloudflare_pages',
+    providerLabel: 'Cloudflare Pages',
+    name: 'Cloudflare Pages (Connected Account)',
+    targetUrlOrProject: `${cleanUser}-space`,
+    apiToken: 'wrangler_oauth',
+    hasToken: true,
+    createdAt: now
+  });
+  if (process.env.GITHUB_TOKEN) {
+    db.hostingConnections.push({
+      id: 'host_' + crypto.randomBytes(6).toString('hex'),
+      userId: newUser.id,
+      provider: 'github_pages',
+      providerLabel: 'GitHub Pages',
+      name: 'GitHub Pages (Connected Repository)',
+      targetUrlOrProject: `${cleanUser}-space`,
+      apiToken: process.env.GITHUB_TOKEN,
+      hasToken: true,
+      createdAt: now
+    });
+  }
   const token = crypto.randomBytes(24).toString('hex');
   db.sessions[token] = newUser.id;
   saveDb(db);

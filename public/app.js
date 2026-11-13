@@ -222,12 +222,12 @@ function updateAgentProviderBadge() {
   const badge = document.getElementById('activeAgentProviderBadge');
   if (!badge) return;
   const labels = {
-    builtin_agent: '⚡ Built-in Instant Agent',
-    gemini: `✨ Gemini (${state.agentConfig.model || 'gemini-3.8-flash'})`,
-    openai_compatible: `🔌 OpenAI-Compatible (${state.agentConfig.model || 'custom'})`,
-    custom_webhook: '🌐 Custom Agent Webhook'
+    builtin_agent: 'Built-in Agent',
+    gemini: `Gemini (${state.agentConfig.model || 'gemini-3.8-flash'})`,
+    openai_compatible: `OpenAI-Compatible (${state.agentConfig.model || 'custom'})`,
+    custom_webhook: 'Custom Webhook'
   };
-  badge.textContent = labels[state.agentConfig.provider] || '⚡ Built-in Instant Agent';
+  badge.textContent = labels[state.agentConfig.provider] || 'Built-in Agent';
 }
 
 function updateAuthUI() {
@@ -276,14 +276,14 @@ async function loadSpacesList() {
   const sub = document.getElementById('gridSubtext');
 
   if (state.filter === 'mine') {
-    heading.textContent = '🗂️ My Spaces (Staging Drafts, Private & Launched)';
-    sub.textContent = 'Check your website in the staging workspace first, then buy or connect hosting to launch';
+    heading.textContent = 'My Spaces';
+    sub.textContent = 'Your staging drafts, private projects, and deployed applications';
   } else if (state.filter === 'private') {
-    heading.textContent = '🔒 My Private Vault';
-    sub.textContent = 'Strictly hidden from the public hub and unauthorized visitors';
+    heading.textContent = 'Private Spaces';
+    sub.textContent = 'Only accessible to your account';
   } else {
-    heading.textContent = '🌍 Community Hub — Launched Spaces';
-    sub.textContent = 'Explore web applications staged on SpaceHub and deployed to connected hosts';
+    heading.textContent = 'Published Spaces';
+    sub.textContent = 'Public applications deployed by the community';
   }
 
   try {
@@ -300,22 +300,35 @@ async function loadSpacesList() {
 function renderSpacesGrid() {
   const grid = document.getElementById('spacesGrid');
   if (!state.spaces.length) {
+    const actionLabel = state.user ? '+ Create Space' : 'Create Account to Get Started';
     grid.innerHTML = `
-      <div class="arch-card" style="grid-column: 1 / -1; text-align: center; padding: 2.5rem;">
-        <h3>No Spaces found in this view</h3>
-        <p style="margin: 0.5rem 0 1.25rem;">Create a new Space to start coding or prompting your Coding Agent in the staging workspace.</p>
+      <div class="empty-state">
+        <h3>No Spaces yet</h3>
+        <p>${
+          state.user
+            ? 'Create a Space to start building in your private staging workspace.'
+            : 'Create an account or sign in to stage your web applications and connect your hosting provider.'
+        }</p>
+        <button type="button" class="btn btn-primary btn-sm" id="emptyStateCtaBtn">${actionLabel}</button>
       </div>
     `;
+    document.getElementById('emptyStateCtaBtn')?.addEventListener('click', () => {
+      if (state.user) {
+        document.getElementById('createSpaceDialog').showModal();
+      } else {
+        document.getElementById('signUpDialog').showModal();
+      }
+    });
     return;
   }
 
   grid.innerHTML = state.spaces
     .map((s) => {
       const gradClass = getBannerGradientClass(s.colorFrom, s.colorTo);
-      const visBadge = s.visibility === 'private' ? '🔒 Private' : '🌍 Public';
+      const visBadge = s.visibility === 'private' ? 'Private' : 'Public';
       const hostLabel = s.externalHost
-        ? `☁️ ${escapeHtml(s.externalHost.providerLabel)}`
-        : '📝 Staging Only';
+        ? escapeHtml(s.externalHost.providerLabel)
+        : 'Staging';
 
       return `
         <article class="space-card">
@@ -329,12 +342,12 @@ function renderSpacesGrid() {
           <div class="space-card-body">
             <h3 class="space-card-title">${escapeHtml(s.title)}</h3>
             <div class="space-card-path">@${escapeHtml(s.ownerUsername)} / ${escapeHtml(s.slug)}</div>
-            <p class="space-card-desc">${escapeHtml(s.description)}</p>
+            <p class="space-card-desc">${escapeHtml(s.description || 'Staged on SpaceHub')}</p>
             <div class="space-card-footer">
-              <span class="section-sub">♥ ${s.likes} likes</span>
+              <span class="section-sub">♥ ${s.likes}</span>
               <div style="display: flex; gap: 0.4rem;">
                 <button type="button" class="btn btn-primary btn-xs" data-open-space="${escapeHtml(s.ownerUsername)}/${escapeHtml(s.slug)}">
-                  ${s.isOwner ? '🛠️ Open Workspace' : '🖥️ Open Space'}
+                  ${s.isOwner ? 'Open Workspace' : 'Open Space'}
                 </button>
               </div>
             </div>
@@ -400,15 +413,15 @@ function updateStudioHeaderBadges(space) {
   document.getElementById('likeCountText').textContent = space.likes || 0;
 
   const visBadge = document.getElementById('studioVisibilityBadge');
-  visBadge.textContent = space.visibility === 'private' ? '🔒 Private (Hidden)' : '🌍 Public';
+  visBadge.textContent = space.visibility === 'private' ? 'Private' : 'Public';
 
   const statusBadge = document.getElementById('studioStatusBadge');
   if (space.status === 'draft') {
-    statusBadge.textContent = '📝 Staging Only (Check Before Launch)';
+    statusBadge.textContent = 'Staging';
   } else if (space.hasUnpublishedChanges) {
-    statusBadge.textContent = '⚡ Staged Edits Ready to Push';
+    statusBadge.textContent = 'Unpublished Changes';
   } else {
-    statusBadge.textContent = '✅ Launched to Connected Host';
+    statusBadge.textContent = 'Live';
   }
 
   const hostBadge = document.getElementById('studioHostBadge');
@@ -416,16 +429,16 @@ function updateStudioHeaderBadges(space) {
   const externalDirectLink = document.getElementById('externalHostDirectLink');
 
   if (space.externalHost) {
-    hostBadge.textContent = `☁️ Host: ${space.externalHost.providerLabel}`;
-    appViewHostSummary.innerHTML = `Connected to <strong>${escapeHtml(
+    hostBadge.textContent = space.externalHost.providerLabel;
+    appViewHostSummary.innerHTML = `Deployed on <strong>${escapeHtml(
       space.externalHost.providerLabel
-    )}</strong> → <code>${escapeHtml(space.externalHost.liveUrl)}</code>`;
+    )}</strong> · <code>${escapeHtml(space.externalHost.liveUrl)}</code>`;
     externalDirectLink.href = space.externalHost.liveUrl;
     externalDirectLink.hidden = false;
   } else {
-    hostBadge.textContent = '☁️ No Host Connected Yet';
+    hostBadge.textContent = 'No Host';
     appViewHostSummary.textContent =
-      'Staging preview active inside SpaceHub. Buy a hosting plan or connect Vercel / Netlify / GitHub Pages when ready to launch.';
+      'Staging preview active. Connect a hosting provider or select a plan when ready to deploy.';
     externalDirectLink.hidden = true;
   }
 
@@ -439,11 +452,9 @@ function updateStudioHeaderBadges(space) {
   if (space.isOwner) {
     quickPrivacyBtn.hidden = false;
     quickPrivacyBtn.textContent =
-      space.visibility === 'private' ? '🌍 Make Public' : '🔒 Hide (Make Private)';
+      space.visibility === 'private' ? 'Make Public' : 'Make Private';
     launchBtn.hidden = false;
-    launchBtn.textContent = space.externalHost
-      ? '🚀 Push Updates to Connected Host'
-      : '🚀 Ready to Launch? Buy / Connect Host';
+    launchBtn.textContent = space.externalHost ? 'Update Deployment' : 'Deploy';
     settingsTab.hidden = false;
     saveDraftBtn.hidden = false;
     codeTextarea.readOnly = false;
@@ -1130,11 +1141,6 @@ document.getElementById('openSignInBtn').addEventListener('click', () => {
 document.getElementById('openSignUpBtn').addEventListener('click', () => {
   document.getElementById('signUpServerError').hidden = true;
   document.getElementById('signUpDialog').showModal();
-});
-
-document.getElementById('fillDemoCredsBtn').addEventListener('click', () => {
-  document.getElementById('signInUsername').value = 'alex';
-  document.getElementById('signInPassword').value = 'demo1234';
 });
 
 // Sign In Submit

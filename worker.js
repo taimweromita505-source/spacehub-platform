@@ -1,28 +1,28 @@
-// Cloudflare Worker + Static Assets Entrypoint for SpaceHub Platform
-// Serves /api/* and /spaces/:username/:slug/live on Cloudflare Edge, and delegates static assets to env.ASSETS
+// Cloudflare Worker + KV + Static Assets Production Backend for SpaceHub
+// Uses env.SPACEHUB_KV for persistent global state and env.ASSETS for static frontend files
 
 function generateReadme(meta) {
   return `---
 title: ${meta.title}
 emoji: ${meta.emoji || '🚀'}
 colorFrom: ${meta.colorFrom || 'indigo'}
-colorTo: ${meta.colorTo || 'purple'}
+colorTo: ${meta.colorTo || 'cyan'}
 sdk: static
 app_file: index.html
-visibility: ${meta.visibility || 'public'}
+visibility: ${meta.visibility || 'private'}
 external_host: ${meta.externalHostProvider || 'none'}
-short_description: ${meta.description || 'A web application staged on SpaceHub'}
+short_description: ${meta.description || 'Web application staged on SpaceHub'}
 ---
 
-# ${meta.emoji || '🚀'} ${meta.title}
+# ${meta.title}
 
-${meta.description || 'Build and check how your website looks inside the SpaceHub staging workspace, then deploy to your connected hosting service.'}
+${meta.description || 'Staged and verified on SpaceHub.'}
 `;
 }
 
 const STARTER_TEMPLATES = {
   landing: {
-    name: 'Modern SaaS Landing Page',
+    name: 'SaaS Landing Page',
     emoji: '✨',
     colorFrom: 'indigo',
     colorTo: 'cyan',
@@ -32,69 +32,127 @@ const STARTER_TEMPLATES = {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NovaCloud — Next-Gen Web Platform</title>
+  <title>Product Launch</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <nav class="nav">
-    <div class="logo">✨ NovaCloud</div>
-    <button id="ctaBtn" class="btn-outline">Get Early Access</button>
-  </nav>
+  <header class="nav">
+    <div class="brand">AcmeStudio</div>
+    <button id="ctaBtn" class="btn-secondary">Request Access</button>
+  </header>
   <main class="hero">
-    <span class="badge">STAGED ON SPACEHUB · DEPLOY ANYWHERE</span>
-    <h1>Build &amp; Check in Staging. Deploy to Your Own Host.</h1>
-    <p>Test your layout in the staging workspace, connect your own coding agent, keep drafts private, and push directly to Cloudflare, Vercel, Netlify, or GitHub Pages.</p>
+    <span class="tag">NEW RELEASE</span>
+    <h1>Modern web infrastructure for fast-moving teams.</h1>
+    <p>Stage your application, verify across viewports, and deploy directly to your preferred cloud host.</p>
     <div class="actions">
-      <button id="launchDemoBtn" class="btn-primary">Run Interactive Demo</button>
-      <span id="counterText" class="counter">12 launches today</span>
+      <button id="launchDemoBtn" class="btn-primary">Test Interactive Action</button>
+      <span id="counterText" class="status">Ready</span>
     </div>
   </main>
   <script src="script.js"></script>
 </body>
 </html>`,
       'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui, sans-serif; background: radial-gradient(circle at top, #1e1b4b, #090d16); color: #f8fafc; min-height: 100vh; padding: 2rem; }
-.nav { display: flex; justify-content: space-between; align-items: center; max-width: 960px; margin: 0 auto 4rem; }
-.logo { font-weight: 800; font-size: 1.25rem; }
-.hero { max-width: 820px; margin: 0 auto; text-align: center; }
-.badge { display: inline-block; padding: 0.35rem 0.85rem; border-radius: 999px; background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.45); color: #a5b4fc; font-size: 0.75rem; font-weight: 700; margin-bottom: 1.25rem; }
-h1 { font-size: clamp(2.2rem, 5vw, 3.5rem); line-height: 1.1; margin-bottom: 1rem; }
-p { color: #94a3b8; font-size: 1.1rem; line-height: 1.6; margin-bottom: 2rem; }
-.actions { display: flex; gap: 1rem; justify-content: center; align-items: center; flex-wrap: wrap; }
-.btn-primary { background: linear-gradient(135deg, #6366f1, #06b6d4); color: white; border: none; padding: 0.85rem 1.6rem; border-radius: 0.65rem; font-weight: 600; cursor: pointer; }
-.btn-outline { background: transparent; color: #e2e8f0; border: 1px solid #334155; padding: 0.55rem 1rem; border-radius: 0.5rem; cursor: pointer; }
-.counter { font-size: 0.9rem; color: #38bdf8; font-weight: 600; }`,
-      'script.js': `let count = 12;
+body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #fafafa; min-height: 100vh; padding: 2.5rem; }
+.nav { display: flex; justify-content: space-between; align-items: center; max-width: 920px; margin: 0 auto 5rem; }
+.brand { font-weight: 700; font-size: 1.1rem; letter-spacing: -0.02em; }
+.hero { max-width: 680px; margin: 0 auto; }
+.tag { display: inline-block; padding: 0.25rem 0.65rem; border-radius: 999px; background: #18181b; border: 1px solid #27272a; color: #a1a1aa; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; margin-bottom: 1.25rem; }
+h1 { font-size: clamp(2rem, 4.5vw, 3.25rem); font-weight: 700; letter-spacing: -0.03em; line-height: 1.12; margin-bottom: 1rem; }
+p { color: #a1a1aa; font-size: 1.05rem; line-height: 1.6; margin-bottom: 2rem; }
+.actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.btn-primary { background: #fafafa; color: #09090b; border: none; padding: 0.75rem 1.35rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; }
+.btn-secondary { background: transparent; color: #e4e4e7; border: 1px solid #27272a; padding: 0.5rem 0.95rem; border-radius: 0.5rem; cursor: pointer; }
+.status { font-size: 0.88rem; color: #818cf8; font-weight: 500; }`,
+      'script.js': `let clicks = 0;
 const btn = document.getElementById('launchDemoBtn');
-const counterText = document.getElementById('counterText');
-if (btn && counterText) {
+const status = document.getElementById('counterText');
+if (btn && status) {
   btn.addEventListener('click', () => {
-    count++;
-    counterText.textContent = count + ' launches today 🚀';
+    clicks++;
+    status.textContent = 'Verified (' + clicks + ')';
   });
 }`
     }
   },
   dashboard: {
-    name: 'Interactive Analytics App',
+    name: 'Analytics Dashboard',
     emoji: '📊',
     colorFrom: 'emerald',
     colorTo: 'teal',
     files: {
-      'index.html': `<!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="style.css"></head><body><h1>📊 PulseMetrics Live</h1><p>Interactive telemetry simulator</p><button id="simulateBtn">Simulate Traffic Spike</button><div id="bars" class="bars"></div><script src="script.js"></script></body></html>`,
-      'style.css': `body { font-family: system-ui, sans-serif; background: #061311; color: #ecfdf5; padding: 2rem; } button { background: #10b981; color: #022c22; font-weight: 700; border: none; padding: 0.7rem 1.2rem; border-radius: 0.5rem; cursor: pointer; margin: 1rem 0; } .bars { display: flex; align-items: flex-end; gap: 0.5rem; height: 180px; } .bar { flex: 1; background: #34d399; border-radius: 4px 4px 0 0; }`,
-      'script.js': `const barsEl = document.getElementById('bars'); function renderBars() { barsEl.innerHTML = ''; for (let i = 0; i < 12; i++) { const b = document.createElement('div'); b.className = 'bar'; b.style.height = (20 + Math.floor(Math.random() * 80)) + '%'; barsEl.appendChild(b); } } document.getElementById('simulateBtn').addEventListener('click', renderBars); renderBars();`
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Metrics Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>System Telemetry</h1>
+        <p>Real-time throughput overview</p>
+      </div>
+      <button id="simulateBtn">Refresh Metrics</button>
+    </header>
+    <div id="bars" class="bars"></div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #09090b; color: #fafafa; padding: 2.5rem; }
+.wrap { max-width: 840px; margin: 0 auto; }
+.top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+h1 { font-size: 1.5rem; font-weight: 700; }
+p { color: #a1a1aa; font-size: 0.9rem; }
+button { background: #10b981; color: #052e16; font-weight: 600; border: none; padding: 0.6rem 1.1rem; border-radius: 0.5rem; cursor: pointer; }
+.bars { display: flex; align-items: flex-end; gap: 0.6rem; height: 220px; padding: 1.5rem; background: #18181b; border: 1px solid #27272a; border-radius: 0.75rem; }
+.bar { flex: 1; background: #10b981; border-radius: 4px 4px 0 0; transition: height 0.2s ease; }`,
+      'script.js': `const barsEl = document.getElementById('bars');
+function renderBars() {
+  barsEl.innerHTML = '';
+  for (let i = 0; i < 14; i++) {
+    const b = document.createElement('div');
+    b.className = 'bar';
+    b.style.height = (20 + Math.floor(Math.random() * 80)) + '%';
+    barsEl.appendChild(b);
+  }
+}
+document.getElementById('simulateBtn').addEventListener('click', renderBars);
+renderBars();`
     }
   },
   canvas: {
-    name: 'Interactive Synth & Particle Toy',
+    name: 'Minimal Web App',
     emoji: '🎨',
-    colorFrom: 'pink',
-    colorTo: 'orange',
+    colorFrom: 'indigo',
+    colorTo: 'purple',
     files: {
-      'index.html': `<!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="style.css"></head><body><h1>🎨 Cosmic Particle Studio</h1><script src="script.js"></script></body></html>`,
-      'style.css': `body { background: #090514; color: #fff; font-family: system-ui, sans-serif; padding: 2rem; }`,
-      'script.js': `console.log('Canvas studio ready');`
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Minimal App</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="card">
+    <h1>Minimal Web App</h1>
+    <p>Edit index.html, style.css, and script.js to build your application.</p>
+  </main>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `body { background: #09090b; color: #fafafa; font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+.card { padding: 2rem; border: 1px solid #27272a; border-radius: 0.75rem; background: #18181b; max-width: 460px; }
+h1 { font-size: 1.35rem; margin-bottom: 0.5rem; }
+p { color: #a1a1aa; font-size: 0.95rem; line-height: 1.5; }`,
+      'script.js': `console.log('Workspace ready');`
     }
   }
 };
@@ -102,210 +160,129 @@ if (btn && counterText) {
 const HOSTING_PLANS = [
   {
     id: 'plan_starter_edge',
-    name: 'Starter Static Edge Hosting',
+    name: 'Starter Edge Plan',
     priceMonthly: 5,
     priceLabel: '$5 / month',
     provider: 'cloudflare_pages',
-    providerLabel: 'Managed Edge CDN (Cloudflare Partner)',
+    providerLabel: 'Cloudflare Edge CDN',
     features: [
-      'Instant global CDN + automatic SSL',
-      'Connect up to 5 launched Spaces',
+      'Global Edge CDN + automatic SSL',
+      'Up to 5 production Spaces',
       'Custom subdomain (.spacehub-edge.app)',
       '100 GB monthly bandwidth'
     ]
   },
   {
     id: 'plan_pro_cloud',
-    name: 'Pro Web & Agent Cloud Hosting',
+    name: 'Pro Cloud Plan',
     priceMonthly: 15,
     priceLabel: '$15 / month',
     provider: 'netlify',
-    providerLabel: 'Managed Pro Cloud (Netlify Partner)',
+    providerLabel: 'Managed Pro Cloud',
     features: [
-      'Unlimited launched Spaces & custom domains',
-      'Continuous Coding Agent auto-deploys',
-      '1 TB monthly bandwidth + DDOS protection',
-      'Private password-protected live deployments'
+      'Unlimited Spaces & custom apex domains',
+      'Continuous Coding Agent deployments',
+      '1 TB monthly bandwidth + DDoS protection',
+      'Private access controls'
     ]
   },
   {
     id: 'plan_dedicated_custom',
-    name: 'Dedicated Business Cloud',
+    name: 'Business Dedicated Cloud',
     priceMonthly: 39,
     priceLabel: '$39 / month',
     provider: 'vercel',
-    providerLabel: 'Dedicated Global Edge (Vercel Partner)',
+    providerLabel: 'Dedicated Global Edge',
     features: [
-      'Dedicated edge workers & custom apex domains',
+      'Dedicated edge compute & custom domains',
       '99.99% uptime SLA + analytics',
-      'Team workspace & staging environments',
+      'Team staging environments',
       'Unlimited bandwidth'
     ]
   }
 ];
 
 const PROVIDER_LABELS = {
+  cloudflare_pages: 'Cloudflare Pages',
+  github_pages: 'GitHub Pages',
   vercel: 'Vercel',
   netlify: 'Netlify',
-  github_pages: 'GitHub Pages',
-  cloudflare_pages: 'Cloudflare Pages',
-  custom_webhook: 'Custom Deploy Webhook'
+  custom_webhook: 'Custom Webhook'
 };
 
-// In-memory Edge store initialized with demo data
-const nowInit = new Date().toISOString();
-const edgeDb = {
-  users: [
-    {
-      id: 'usr_demo1',
-      username: 'alex',
-      displayName: 'Alex Rivera',
-      passwordPlain: 'demo1234',
-      createdAt: nowInit
-    }
-  ],
+// Fallback in-memory store if KV is unavailable in local dev
+let memoryDb = {
+  users: [],
   sessions: {},
-  agentKeys: [
-    {
-      id: 'key_demo1',
-      userId: 'usr_demo1',
-      name: 'Default CLI Coding Agent Key',
-      token: 'sh_pat_demo_alex_agent_key_2026',
-      createdAt: nowInit
-    }
-  ],
-  hostingConnections: [
-    {
-      id: 'host_cf_wrangler',
-      userId: 'usr_demo1',
-      provider: 'cloudflare_pages',
-      providerLabel: 'Cloudflare Pages (Connected Account)',
-      name: 'Cloudflare Pages — taimweromita505@gmail.com',
-      targetUrlOrProject: 'spacehub-platform.taimweromita505.workers.dev',
-      hasToken: true,
-      createdAt: nowInit
-    },
-    {
-      id: 'host_gh_pages',
-      userId: 'usr_demo1',
-      provider: 'github_pages',
-      providerLabel: 'GitHub Pages (Repository Push)',
-      name: 'GitHub Pages — Connect Token',
-      targetUrlOrProject: 'spacehub-web-app',
-      hasToken: false,
-      createdAt: nowInit
-    }
-  ],
-  spaces: [
-    {
-      id: 'spc_novacloud',
-      ownerId: 'usr_demo1',
-      ownerUsername: 'alex',
-      slug: 'novacloud-landing',
-      title: 'NovaCloud Landing Page',
-      description: 'Responsive SaaS product launch page staged on SpaceHub and deployed on Cloudflare.',
-      emoji: '✨',
-      colorFrom: 'indigo',
-      colorTo: 'cyan',
-      sdk: 'static',
-      visibility: 'public',
-      status: 'published',
-      likes: 18,
-      likedBy: [],
-      createdAt: nowInit,
-      updatedAt: nowInit,
-      publishedAt: nowInit,
-      hasUnpublishedChanges: false,
-      agentHistory: [],
-      externalHost: {
-        provider: 'cloudflare_pages',
-        providerLabel: 'Cloudflare Pages',
-        projectName: 'novacloud-landing',
-        liveUrl: 'https://spacehub-platform.taimweromita505.workers.dev/spaces/alex/novacloud-landing/live',
-        lastDeployedAt: nowInit
-      },
-      draftFiles: {
-        ...STARTER_TEMPLATES.landing.files,
-        'README.md': generateReadme({
-          title: 'NovaCloud Landing Page',
-          emoji: '✨',
-          colorFrom: 'indigo',
-          colorTo: 'cyan',
-          visibility: 'public',
-          externalHostProvider: 'cloudflare_pages',
-          description: 'Responsive SaaS product launch page staged on SpaceHub and deployed on Cloudflare.'
-        })
-      },
-      publishedFiles: {
-        ...STARTER_TEMPLATES.landing.files,
-        'README.md': generateReadme({
-          title: 'NovaCloud Landing Page',
-          emoji: '✨',
-          colorFrom: 'indigo',
-          colorTo: 'cyan',
-          visibility: 'public',
-          externalHostProvider: 'cloudflare_pages',
-          description: 'Responsive SaaS product launch page staged on SpaceHub and deployed on Cloudflare.'
-        })
-      }
-    },
-    {
-      id: 'spc_pulsemetrics',
-      ownerId: 'usr_demo1',
-      ownerUsername: 'alex',
-      slug: 'pulse-metrics-dashboard',
-      title: 'PulseMetrics Live Dashboard',
-      description: 'Real-time telemetry & conversion simulator staged on SpaceHub and connected to Netlify.',
-      emoji: '📊',
-      colorFrom: 'emerald',
-      colorTo: 'teal',
-      sdk: 'static',
-      visibility: 'public',
-      status: 'published',
-      likes: 11,
-      likedBy: [],
-      createdAt: nowInit,
-      updatedAt: nowInit,
-      publishedAt: nowInit,
-      hasUnpublishedChanges: false,
-      agentHistory: [],
-      externalHost: {
-        provider: 'netlify',
-        providerLabel: 'Netlify',
-        projectName: 'pulse-metrics-dashboard',
-        liveUrl: 'https://pulse-metrics-demo.netlify.app',
-        lastDeployedAt: nowInit
-      },
-      draftFiles: {
-        ...STARTER_TEMPLATES.dashboard.files,
-        'README.md': generateReadme({
-          title: 'PulseMetrics Live Dashboard',
-          emoji: '📊',
-          colorFrom: 'emerald',
-          colorTo: 'teal',
-          visibility: 'public',
-          externalHostProvider: 'netlify',
-          description: 'Real-time telemetry & conversion simulator staged on SpaceHub and connected to Netlify.'
-        })
-      },
-      publishedFiles: {
-        ...STARTER_TEMPLATES.dashboard.files,
-        'README.md': generateReadme({
-          title: 'PulseMetrics Live Dashboard',
-          emoji: '📊',
-          colorFrom: 'emerald',
-          colorTo: 'teal',
-          visibility: 'public',
-          externalHostProvider: 'netlify',
-          description: 'Real-time telemetry & conversion simulator staged on SpaceHub and connected to Netlify.'
-        })
-      }
-    }
-  ]
+  agentKeys: [],
+  hostingConnections: [],
+  spaces: []
 };
 
-function randomId(prefix = 'id_') {
-  return prefix + Math.random().toString(36).slice(2, 12);
+const KV_KEY = 'spacehub_prod_state_v2';
+
+async function loadDb(env) {
+  if (env && env.SPACEHUB_KV) {
+    try {
+      const raw = await env.SPACEHUB_KV.get(KV_KEY, 'json');
+      if (raw && typeof raw === 'object') {
+        return {
+          users: Array.isArray(raw.users) ? raw.users : [],
+          sessions: raw.sessions || {},
+          agentKeys: Array.isArray(raw.agentKeys) ? raw.agentKeys : [],
+          hostingConnections: Array.isArray(raw.hostingConnections) ? raw.hostingConnections : [],
+          spaces: Array.isArray(raw.spaces) ? raw.spaces : []
+        };
+      }
+    } catch (_e) {
+      // fallback
+    }
+  }
+  return memoryDb;
+}
+
+async function saveDb(env, db) {
+  memoryDb = db;
+  if (env && env.SPACEHUB_KV) {
+    await env.SPACEHUB_KV.put(KV_KEY, JSON.stringify(db));
+  }
+}
+
+function randomHex(bytes = 16) {
+  const arr = new Uint8Array(bytes);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hashPasswordEdge(password, saltHex = null) {
+  const salt = saltHex || randomHex(16);
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(String(password)),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt: enc.encode(salt),
+      iterations: 50000,
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    256
+  );
+  const hashArray = Array.from(new Uint8Array(derivedBits));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return { salt, hash: hashHex };
+}
+
+async function verifyPasswordEdge(password, salt, expectedHash) {
+  if (!salt || !expectedHash) return false;
+  const { hash } = await hashPasswordEdge(password, salt);
+  return hash === expectedHash;
 }
 
 function slugify(text) {
@@ -314,7 +291,7 @@ function slugify(text) {
       .toLowerCase()
       .replace(/[^a-z0-9-_]+/g, '-')
       .replace(/^-+|-+$/g, '')
-      .slice(0, 48) || 'my-space'
+      .slice(0, 48) || 'space'
   );
 }
 
@@ -329,7 +306,7 @@ function parseCookies(cookieHeader = '') {
   return cookies;
 }
 
-function getCurrentUser(request, url) {
+function getCurrentUser(db, request, url) {
   const authHeader = request.headers.get('authorization') || '';
   const agentKey = request.headers.get('x-agent-key') || '';
   let token = null;
@@ -343,13 +320,13 @@ function getCurrentUser(request, url) {
   }
   if (!token) return null;
   if (token.startsWith('sh_pat_')) {
-    const pat = edgeDb.agentKeys.find((k) => k.token === token);
+    const pat = db.agentKeys.find((k) => k.token === token);
     if (!pat) return null;
-    return edgeDb.users.find((u) => u.id === pat.userId) || null;
+    return db.users.find((u) => u.id === pat.userId) || null;
   }
-  const userId = edgeDb.sessions[token];
+  const userId = db.sessions[token];
   if (!userId) return null;
-  return edgeDb.users.find((u) => u.id === userId) || null;
+  return db.users.find((u) => u.id === userId) || null;
 }
 
 function canViewSpace(space, user) {
@@ -410,6 +387,139 @@ function buildBundledHtml(files) {
   return html;
 }
 
+function synthesizeWithBuiltinAgent(prompt, spaceTitle) {
+  const safePrompt = String(prompt || 'Modern web application')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return {
+    summary: `Generated application build for "${prompt.slice(0, 70)}"`,
+    files: {
+      'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${spaceTitle}</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="header">
+      <div>
+        <span class="badge">AI GENERATED BUILD</span>
+        <h1>${spaceTitle}</h1>
+        <p>${safePrompt}</p>
+      </div>
+      <button id="actionBtn" class="btn">Run Action</button>
+    </header>
+    <section class="grid">
+      <div class="card">
+        <h3>Status</h3>
+        <div class="val" id="statusVal">Active</div>
+      </div>
+      <div class="card">
+        <h3>Events</h3>
+        <div class="val" id="countVal">1</div>
+      </div>
+      <div class="card">
+        <h3>Environment</h3>
+        <div class="val">Staging</div>
+      </div>
+    </section>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>`,
+      'style.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #09090b; color: #fafafa; padding: 2.5rem; }
+.shell { max-width: 880px; margin: 0 auto; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid #27272a; }
+.badge { display: inline-block; font-size: 0.7rem; font-weight: 600; color: #818cf8; margin-bottom: 0.5rem; letter-spacing: 0.05em; }
+h1 { font-size: 1.75rem; margin-bottom: 0.35rem; }
+p { color: #a1a1aa; font-size: 0.95rem; }
+.btn { background: #4f46e5; color: #fff; border: none; padding: 0.65rem 1.2rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+.card { background: #18181b; border: 1px solid #27272a; border-radius: 0.75rem; padding: 1.25rem; }
+.card h3 { font-size: 0.8rem; color: #a1a1aa; font-weight: 500; margin-bottom: 0.4rem; }
+.val { font-size: 1.5rem; font-weight: 700; }`,
+      'script.js': `let count = 1;
+document.getElementById('actionBtn').addEventListener('click', () => {
+  count++;
+  document.getElementById('countVal').textContent = String(count);
+  document.getElementById('statusVal').textContent = 'Updated ' + new Date().toLocaleTimeString();
+});`
+    }
+  };
+}
+
+async function pushFilesToGitHubEdge({ token, repoName, files, description }) {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'Content-Type': 'application/json',
+    'User-Agent': 'SpaceHub-Cloudflare-Edge'
+  };
+  const userRes = await fetch('https://api.github.com/user', { headers });
+  if (!userRes.ok) throw new Error(`GitHub authentication failed (${userRes.status})`);
+  const ghUser = await userRes.json();
+  const owner = ghUser.login;
+  const cleanRepo = slugify(repoName || 'spacehub-site');
+
+  const checkRes = await fetch(`https://api.github.com/repos/${owner}/${cleanRepo}`, { headers });
+  if (checkRes.status === 404) {
+    const createRes = await fetch('https://api.github.com/user/repos', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: cleanRepo,
+        description: description || 'Deployed from SpaceHub',
+        homepage: `https://${owner}.github.io/${cleanRepo}/`,
+        private: false,
+        auto_init: true
+      })
+    });
+    if (!createRes.ok) {
+      const errData = await createRes.json().catch(() => ({}));
+      throw new Error(errData.message || 'Failed to create GitHub repository.');
+    }
+  }
+
+  for (const [fileName, content] of Object.entries(files)) {
+    const fileUrl = `https://api.github.com/repos/${owner}/${cleanRepo}/contents/${encodeURIComponent(fileName)}`;
+    let existingSha = undefined;
+    const getFile = await fetch(fileUrl, { headers });
+    if (getFile.ok) {
+      const meta = await getFile.json();
+      existingSha = meta.sha;
+    }
+    const bytes = new TextEncoder().encode(String(content));
+    let binary = '';
+    bytes.forEach((b) => (binary += String.fromCharCode(b)));
+    const b64 = btoa(binary);
+
+    await fetch(fileUrl, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        message: `Deploy ${fileName} from SpaceHub`,
+        content: b64,
+        ...(existingSha ? { sha: existingSha } : {})
+      })
+    });
+  }
+
+  await fetch(`https://api.github.com/repos/${owner}/${cleanRepo}/pages`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ source: { branch: 'main', path: '/' } })
+  }).catch(() => {});
+
+  return {
+    repoUrl: `https://github.com/${owner}/${cleanRepo}`,
+    pagesUrl: `https://${owner}.github.io/${cleanRepo}/`
+  };
+}
+
 function jsonResponse(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -422,7 +532,14 @@ export default {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method = request.method.toUpperCase();
-    const user = getCurrentUser(request, url);
+
+    // Fast path for static files
+    if (!pathname.startsWith('/api/') && !pathname.startsWith('/spaces/')) {
+      return env.ASSETS.fetch(request);
+    }
+
+    const db = await loadDb(env);
+    const user = getCurrentUser(db, request, url);
 
     // 1. Live Space Preview Route (/spaces/:username/:slug/live)
     const liveMatch = pathname.match(/^\/spaces\/([^/]+)\/([^/]+)\/live$/i);
@@ -430,13 +547,11 @@ export default {
       const username = decodeURIComponent(liveMatch[1]).toLowerCase();
       const slug = decodeURIComponent(liveMatch[2]).toLowerCase();
       const mode = url.searchParams.get('mode') === 'draft' ? 'draft' : 'published';
-      const space = edgeDb.spaces.find(
-        (s) => s.ownerUsername === username && s.slug === slug
-      );
+      const space = db.spaces.find((s) => s.ownerUsername === username && s.slug === slug);
       const isOwner = Boolean(user && space && space.ownerId === user.id);
       if (!space || (space.visibility === 'private' && !isOwner) || (space.status === 'draft' && !isOwner)) {
         return new Response(
-          `<!DOCTYPE html><html><body style="background:#0b0f19;color:#fff;font-family:sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h1>🔒 404 — Private or Unlaunched Space</h1><p>This Space is private or still in staging.</p><a href="/" style="color:#818cf8">← Back to SpaceHub</a></div></body></html>`,
+          `<!DOCTYPE html><html><body style="background:#09090b;color:#fafafa;font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;padding:2rem;border:1px solid #27272a;border-radius:0.75rem;background:#18181b;max-width:420px"><h1 style="font-size:1.25rem;margin-bottom:0.5rem">404 — Private or Unlaunched Space</h1><p style="color:#a1a1aa;font-size:0.9rem;margin-bottom:1.25rem">This Space is set to private or is currently in staging.</p><a href="/" style="color:#818cf8;text-decoration:none;font-weight:600">← Return to SpaceHub</a></div></body></html>`,
           { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
         );
       }
@@ -462,10 +577,13 @@ export default {
 
       if (pathname === '/api/auth/login' && method === 'POST') {
         const cleanUser = String(body.username || '').trim().toLowerCase();
-        const found = edgeDb.users.find((u) => u.username === cleanUser && u.passwordPlain === body.password);
-        if (!found) return jsonResponse({ error: 'Invalid username or password.' }, 401);
-        const token = randomId('tok_') + randomId('');
-        edgeDb.sessions[token] = found.id;
+        const found = db.users.find((u) => u.username === cleanUser);
+        if (!found || !(await verifyPasswordEdge(body.password || '', found.salt, found.passwordHash))) {
+          return jsonResponse({ error: 'Invalid username or password.' }, 401);
+        }
+        const token = randomHex(24);
+        db.sessions[token] = found.id;
+        await saveDb(env, db);
         return jsonResponse(
           { token, user: { id: found.id, username: found.username, displayName: found.displayName } },
           200,
@@ -476,21 +594,27 @@ export default {
       if (pathname === '/api/auth/register' && method === 'POST') {
         const cleanUser = String(body.username || '').trim().toLowerCase();
         if (!/^[a-z0-9_-]{3,24}$/.test(cleanUser)) {
-          return jsonResponse({ error: 'Username must be 3-24 characters.' }, 400);
+          return jsonResponse({ error: 'Username must be 3–24 lowercase letters, numbers, - or _.' }, 400);
         }
-        if (edgeDb.users.some((u) => u.username === cleanUser)) {
+        if (!body.password || String(body.password).length < 6) {
+          return jsonResponse({ error: 'Password must be at least 6 characters.' }, 400);
+        }
+        if (db.users.some((u) => u.username === cleanUser)) {
           return jsonResponse({ error: 'Username is already taken.' }, 409);
         }
+        const { salt, hash } = await hashPasswordEdge(body.password);
         const newUser = {
-          id: randomId('usr_'),
+          id: 'usr_' + randomHex(8),
           username: cleanUser,
           displayName: String(body.displayName || cleanUser).trim(),
-          passwordPlain: String(body.password || 'password'),
+          salt,
+          passwordHash: hash,
           createdAt: new Date().toISOString()
         };
-        edgeDb.users.push(newUser);
-        const token = randomId('tok_') + randomId('');
-        edgeDb.sessions[token] = newUser.id;
+        db.users.push(newUser);
+        const token = randomHex(24);
+        db.sessions[token] = newUser.id;
+        await saveDb(env, db);
         return jsonResponse(
           { token, user: { id: newUser.id, username: newUser.username, displayName: newUser.displayName } },
           201,
@@ -499,6 +623,11 @@ export default {
       }
 
       if (pathname === '/api/auth/logout' && method === 'POST') {
+        const cookies = parseCookies(request.headers.get('cookie') || '');
+        if (cookies.spacehub_token && db.sessions[cookies.spacehub_token]) {
+          delete db.sessions[cookies.spacehub_token];
+          await saveDb(env, db);
+        }
         return jsonResponse(
           { ok: true },
           200,
@@ -515,9 +644,9 @@ export default {
         const plan = HOSTING_PLANS.find((p) => p.id === body.planId) || HOSTING_PLANS[0];
         const cleanDomain =
           String(body.customDomain || '').trim().toLowerCase().replace(/^https?:\/\//, '') ||
-          `${user.username}-cloud.spacehub-edge.app`;
+          `${user.username}.spacehub-edge.app`;
         const conn = {
-          id: randomId('host_'),
+          id: 'host_' + randomHex(6),
           userId: user.id,
           provider: plan.provider,
           providerLabel: `${plan.name} (${plan.priceLabel})`,
@@ -526,9 +655,10 @@ export default {
           hasToken: true,
           createdAt: new Date().toISOString()
         };
-        edgeDb.hostingConnections.unshift(conn);
+        db.hostingConnections.unshift(conn);
+        await saveDb(env, db);
         return jsonResponse({
-          message: `Purchased ${plan.name} (${plan.priceLabel}) and connected ${cleanDomain}!`,
+          message: `Activated ${plan.name} (${plan.priceLabel}) for ${cleanDomain}`,
           connection: conn
         }, 201);
       }
@@ -536,7 +666,9 @@ export default {
       if (pathname === '/api/hosting-connections' && method === 'GET') {
         if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
         return jsonResponse({
-          connections: edgeDb.hostingConnections.filter((c) => c.userId === user.id)
+          connections: db.hostingConnections
+            .filter((c) => c.userId === user.id)
+            .map(({ apiToken, ...rest }) => ({ ...rest, hasToken: Boolean(apiToken || rest.hasToken) }))
         });
       }
 
@@ -544,48 +676,74 @@ export default {
         if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
         const provider = PROVIDER_LABELS[body.provider] ? body.provider : 'cloudflare_pages';
         const conn = {
-          id: randomId('host_'),
+          id: 'host_' + randomHex(6),
           userId: user.id,
           provider,
           providerLabel: PROVIDER_LABELS[provider],
-          name: String(body.name || `${PROVIDER_LABELS[provider]} Account`).trim(),
+          name: String(body.name || `${PROVIDER_LABELS[provider]}`).trim(),
           targetUrlOrProject: String(body.targetUrlOrProject || '').trim(),
+          apiToken: String(body.apiToken || '').trim(),
+          webhookUrl: String(body.webhookUrl || '').trim(),
           hasToken: Boolean(body.apiToken),
           createdAt: new Date().toISOString()
         };
-        edgeDb.hostingConnections.push(conn);
-        return jsonResponse({ connection: conn }, 201);
+        db.hostingConnections.push(conn);
+        await saveDb(env, db);
+        const { apiToken, ...safeConn } = conn;
+        return jsonResponse({ connection: safeConn }, 201);
+      }
+
+      const delHostMatch = pathname.match(/^\/api\/hosting-connections\/([^/]+)$/i);
+      if (delHostMatch && method === 'DELETE') {
+        if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+        const id = delHostMatch[1];
+        db.hostingConnections = db.hostingConnections.filter((c) => !(c.id === id && c.userId === user.id));
+        await saveDb(env, db);
+        return jsonResponse({ ok: true });
       }
 
       if (pathname === '/api/agent-keys' && method === 'GET') {
         if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
-        return jsonResponse({ keys: edgeDb.agentKeys.filter((k) => k.userId === user.id) });
+        return jsonResponse({ keys: db.agentKeys.filter((k) => k.userId === user.id) });
       }
 
       if (pathname === '/api/agent-keys' && method === 'POST') {
         if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
         const key = {
-          id: randomId('key_'),
+          id: 'key_' + randomHex(6),
           userId: user.id,
-          name: String(body.name || 'External Coding Agent').trim(),
-          token: 'sh_pat_' + randomId('') + randomId(''),
+          name: String(body.name || 'Coding Agent Key').trim(),
+          token: 'sh_pat_' + randomHex(18),
           createdAt: new Date().toISOString()
         };
-        edgeDb.agentKeys.push(key);
+        db.agentKeys.push(key);
+        await saveDb(env, db);
         return jsonResponse({ key }, 201);
+      }
+
+      const delKeyMatch = pathname.match(/^\/api\/agent-keys\/([^/]+)$/i);
+      if (delKeyMatch && method === 'DELETE') {
+        if (!user) return jsonResponse({ error: 'Authentication required.' }, 401);
+        const id = delKeyMatch[1];
+        db.agentKeys = db.agentKeys.filter((k) => !(k.id === id && k.userId === user.id));
+        await saveDb(env, db);
+        return jsonResponse({ ok: true });
       }
 
       if (pathname === '/api/spaces' && method === 'GET') {
         const filter = url.searchParams.get('filter') || 'public';
         const q = (url.searchParams.get('search') || '').trim().toLowerCase();
-        let results = edgeDb.spaces.filter((space) => {
+        let results = db.spaces.filter((space) => {
           if (filter === 'mine') return Boolean(user && space.ownerId === user.id);
           if (filter === 'private') return Boolean(user && space.ownerId === user.id && space.visibility === 'private');
           return space.visibility === 'public' && space.status === 'published';
         });
         if (q) {
           results = results.filter(
-            (s) => s.title.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
+            (s) =>
+              s.title.toLowerCase().includes(q) ||
+              s.description.toLowerCase().includes(q) ||
+              s.ownerUsername.toLowerCase().includes(q)
           );
         }
         return jsonResponse({ spaces: results.map((s) => formatSpaceSummary(s, user)) });
@@ -594,21 +752,28 @@ export default {
       if ((pathname === '/api/spaces' || pathname === '/api/agent/v1/spaces') && method === 'POST') {
         if (!user) return jsonResponse({ error: 'Please sign in to create a Space.' }, 401);
         const slug = slugify(body.slug || body.title);
+        if (db.spaces.some((s) => s.ownerId === user.id && s.slug === slug)) {
+          return jsonResponse({ error: `You already have a Space named "${slug}".` }, 409);
+        }
         const tpl = STARTER_TEMPLATES[body.templateId] || STARTER_TEMPLATES.landing;
         const now = new Date().toISOString();
         const files = body.files || tpl.files;
+        const cleanTitle = String(body.title || 'Untitled Space').trim();
+        const cleanDesc = String(body.description || '').trim();
+        const vis = body.visibility === 'public' ? 'public' : 'private';
+
         const newSpace = {
-          id: randomId('spc_'),
+          id: 'spc_' + randomHex(8),
           ownerId: user.id,
           ownerUsername: user.username,
           slug,
-          title: String(body.title || 'New Space').trim(),
-          description: String(body.description || 'Staged on SpaceHub').trim(),
-          emoji: body.emoji || '🚀',
-          colorFrom: body.colorFrom || 'indigo',
-          colorTo: body.colorTo || 'cyan',
+          title: cleanTitle,
+          description: cleanDesc,
+          emoji: body.emoji || tpl.emoji || '🚀',
+          colorFrom: body.colorFrom || tpl.colorFrom || 'indigo',
+          colorTo: body.colorTo || tpl.colorTo || 'cyan',
           sdk: 'static',
-          visibility: body.visibility === 'public' ? 'public' : 'private',
+          visibility: vis,
           status: 'draft',
           likes: 0,
           likedBy: [],
@@ -621,15 +786,16 @@ export default {
           draftFiles: {
             ...files,
             'README.md': generateReadme({
-              title: String(body.title || 'New Space').trim(),
-              emoji: body.emoji || '🚀',
-              visibility: body.visibility === 'public' ? 'public' : 'private',
-              description: String(body.description || '').trim()
+              title: cleanTitle,
+              emoji: body.emoji || tpl.emoji || '🚀',
+              visibility: vis,
+              description: cleanDesc
             })
           },
           publishedFiles: null
         };
-        edgeDb.spaces.unshift(newSpace);
+        db.spaces.unshift(newSpace);
+        await saveDb(env, db);
         return jsonResponse({
           space: {
             ...formatSpaceSummary(newSpace, user),
@@ -646,7 +812,7 @@ export default {
         const username = decodeURIComponent(spaceMatch[1]).toLowerCase();
         const slug = decodeURIComponent(spaceMatch[2]).toLowerCase();
         const action = spaceMatch[3] ? spaceMatch[3].toLowerCase() : '';
-        const space = edgeDb.spaces.find((s) => s.ownerUsername === username && s.slug === slug);
+        const space = db.spaces.find((s) => s.ownerUsername === username && s.slug === slug);
 
         if (!action && method === 'GET') {
           if (!space || !canViewSpace(space, user)) {
@@ -667,8 +833,8 @@ export default {
           if (!user || !space || space.ownerId !== user.id) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
           }
-          if (body.title) space.title = body.title;
-          if (body.description !== undefined) space.description = body.description;
+          if (body.title) space.title = String(body.title).trim();
+          if (body.description !== undefined) space.description = String(body.description).trim();
           if (body.visibility === 'public' || body.visibility === 'private') {
             space.visibility = body.visibility;
           }
@@ -678,6 +844,7 @@ export default {
             space.hasUnpublishedChanges = true;
           }
           space.updatedAt = new Date().toISOString();
+          await saveDb(env, db);
           return jsonResponse({
             space: {
               ...formatSpaceSummary(space, user),
@@ -688,26 +855,76 @@ export default {
           });
         }
 
+        if (!action && method === 'DELETE') {
+          if (!user || !space || space.ownerId !== user.id) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          db.spaces = db.spaces.filter((s) => s.id !== space.id);
+          await saveDb(env, db);
+          return jsonResponse({ ok: true });
+        }
+
         if (action === 'agent-build' && method === 'POST') {
           if (!user || !space || space.ownerId !== user.id) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
           }
-          const prompt = String(body.prompt || 'Interactive App').trim();
+          const prompt = String(body.prompt || '').trim();
+          if (!prompt) return jsonResponse({ error: 'Prompt is required.' }, 400);
+
+          let result;
+          const provider = body.provider || 'builtin_agent';
+
+          if (provider === 'openai_compatible' && body.apiKey) {
+            const endpoint = body.endpointUrl || 'https://api.openai.com/v1/chat/completions';
+            const r = await fetch(endpoint, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${body.apiKey}`
+              },
+              body: JSON.stringify({
+                model: body.model || 'gpt-4o-mini',
+                response_format: { type: 'json_object' },
+                messages: [
+                  {
+                    role: 'system',
+                    content: 'Return JSON: {"summary":"...","files":{"index.html":"...","style.css":"...","script.js":"..."}}'
+                  },
+                  { role: 'user', content: prompt }
+                ]
+              })
+            });
+            if (!r.ok) return jsonResponse({ error: `Provider returned HTTP ${r.status}` }, 400);
+            const d = await r.json();
+            result = JSON.parse(d.choices?.[0]?.message?.content || '{}');
+          } else if (provider === 'custom_webhook' && body.endpointUrl) {
+            const r = await fetch(body.endpointUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prompt, spaceTitle: space.title, files: space.draftFiles })
+            });
+            if (!r.ok) return jsonResponse({ error: `Webhook returned HTTP ${r.status}` }, 400);
+            result = await r.json();
+          } else {
+            result = synthesizeWithBuiltinAgent(prompt, space.title);
+          }
+
           space.draftFiles = {
             ...space.draftFiles,
-            'index.html': `<!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="style.css"></head><body><div class="box"><span class="pill">🤖 BUILT BY CODING AGENT</span><h1>${space.title}</h1><p>${prompt.replace(/</g, '&lt;')}</p><button id="btn">Test Staging Interaction</button><p id="out"></p></div><script src="script.js"></script></body></html>`,
-            'style.css': `body { font-family: system-ui, sans-serif; background: #090d16; color: #f8fafc; padding: 2.5rem; } .box { max-width: 720px; margin: 0 auto; background: #111827; border: 1px solid #263248; padding: 2rem; border-radius: 1rem; } .pill { font-size: 0.72rem; color: #38bdf8; font-weight: 800; } button { background: #6366f1; color: #fff; border: none; padding: 0.7rem 1.2rem; border-radius: 0.5rem; cursor: pointer; margin-top: 1rem; }`,
-            'script.js': `document.getElementById('btn').addEventListener('click', () => { document.getElementById('out').textContent = '✓ Verified in Staging at ' + new Date().toLocaleTimeString(); });`
+            ...(result.files || {})
           };
           space.hasUnpublishedChanges = true;
-          const summary = `Synthesized staging build for: "${prompt.slice(0, 60)}"`;
+          space.updatedAt = new Date().toISOString();
+          const summary = result.summary || `Updated staging files for "${prompt.slice(0, 60)}"`;
+          space.agentHistory = space.agentHistory || [];
           space.agentHistory.unshift({
-            id: randomId('agt_'),
+            id: 'agt_' + randomHex(6),
             prompt,
-            provider: body.provider || 'builtin_agent',
+            provider,
             summary,
-            createdAt: new Date().toISOString()
+            createdAt: space.updatedAt
           });
+          await saveDb(env, db);
           return jsonResponse({
             summary,
             space: {
@@ -729,17 +946,40 @@ export default {
           if (body.draftFiles) {
             space.draftFiles = { ...space.draftFiles, ...body.draftFiles };
           }
-          const provider = PROVIDER_LABELS[body.provider] ? body.provider : 'cloudflare_pages';
-          const providerLabel = PROVIDER_LABELS[provider];
-          const liveUrl =
-            body.customLiveUrl ||
-            `${url.origin}/spaces/${space.ownerUsername}/${space.slug}/live`;
+          let conn = null;
+          if (body.connectionId) {
+            conn = db.hostingConnections.find((c) => c.id === body.connectionId && c.userId === user.id);
+          }
+          const provider = conn?.provider || (PROVIDER_LABELS[body.provider] ? body.provider : 'cloudflare_pages');
+          const providerLabel = PROVIDER_LABELS[provider] || 'Cloudflare Pages';
+          const apiToken = body.apiToken || conn?.apiToken || '';
+          const targetProject = body.customLiveUrl || conn?.targetUrlOrProject || space.slug;
+
+          let liveUrl = `${url.origin}/spaces/${space.ownerUsername}/${space.slug}/live`;
+          let deployNote = `Published on ${providerLabel}`;
+
+          if (provider === 'github_pages' && apiToken) {
+            const ghResult = await pushFilesToGitHubEdge({
+              token: apiToken,
+              repoName: targetProject || space.slug,
+              files: space.draftFiles,
+              description: space.description
+            });
+            liveUrl = ghResult.pagesUrl;
+            deployNote = `Pushed to GitHub repository (${ghResult.repoUrl})`;
+          } else if (body.customLiveUrl) {
+            liveUrl = String(body.customLiveUrl).startsWith('http')
+              ? body.customLiveUrl
+              : `https://${body.customLiveUrl}`;
+          }
+
           const now = new Date().toISOString();
           space.externalHost = {
             provider,
             providerLabel,
             projectName: space.slug,
             liveUrl,
+            deployNote,
             lastDeployedAt: now
           };
           space.publishedFiles = JSON.parse(JSON.stringify(space.draftFiles));
@@ -747,14 +987,15 @@ export default {
           space.publishedAt = now;
           space.updatedAt = now;
           space.hasUnpublishedChanges = false;
+          await saveDb(env, db);
           return jsonResponse({
-            message: `Deployed to ${providerLabel} (${liveUrl})`,
+            message: `${deployNote} → ${liveUrl}`,
             externalHost: space.externalHost,
             space: {
               ...formatSpaceSummary(space, user),
               draftFiles: space.draftFiles,
               publishedFiles: space.publishedFiles,
-              agentHistory: space.agentHistory
+              agentHistory: space.agentHistory || []
             }
           });
         }
@@ -776,13 +1017,17 @@ export default {
 
         if (action === 'like' && method === 'POST') {
           if (!user || !space) return jsonResponse({ error: 'Sign in required' }, 401);
-          space.likes = (space.likes || 0) + 1;
-          return jsonResponse({ likes: space.likes, likedByMe: true });
+          space.likedBy = space.likedBy || [];
+          const idx = space.likedBy.indexOf(user.id);
+          if (idx === -1) space.likedBy.push(user.id);
+          else space.likedBy.splice(idx, 1);
+          space.likes = space.likedBy.length;
+          await saveDb(env, db);
+          return jsonResponse({ likes: space.likes, likedByMe: idx === -1 });
         }
       }
     }
 
-    // 3. Static Asset Fallback
     return env.ASSETS.fetch(request);
   }
 };

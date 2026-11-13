@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
-  <title>SpaceHub — Stage, Check &amp; Connect Hosting for Web Spaces</title>
+  <title>SpaceHub — Web Application Staging &amp; Deployment Platform</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -12,43 +12,42 @@
     <div class="topbar-inner">
       <div class="brand-group">
         <a href="#/" class="brand" id="navHomeBtn">
-          <span class="brand-logo" aria-hidden="true">🪐</span>
+          <span class="brand-mark" aria-hidden="true">◆</span>
           <span class="brand-name">SpaceHub</span>
-          <span class="brand-tag">Stage · Check · Connect Host</span>
         </a>
+
+        <nav class="main-nav" aria-label="Primary Navigation">
+          <button type="button" class="nav-tab active" data-filter="public" id="tabExplore">
+            Explore
+          </button>
+          <button type="button" class="nav-tab" data-filter="mine" id="tabMySpaces" hidden>
+            My Spaces
+          </button>
+          <button type="button" class="nav-tab" data-filter="private" id="tabPrivateSpaces" hidden>
+            Private
+          </button>
+          <button type="button" class="nav-tab" id="tabHosting">
+            Hosting
+          </button>
+          <button type="button" class="nav-tab" id="tabAgents">
+            Agent API
+          </button>
+          <button type="button" class="nav-tab" id="tabArchitecture">
+            Docs
+          </button>
+        </nav>
       </div>
 
-      <nav class="main-nav" aria-label="Primary Navigation">
-        <button type="button" class="nav-tab active" data-filter="public" id="tabExplore">
-          🌍 Community Hub
-        </button>
-        <button type="button" class="nav-tab" data-filter="mine" id="tabMySpaces" hidden>
-          🗂️ My Spaces
-        </button>
-        <button type="button" class="nav-tab" data-filter="private" id="tabPrivateSpaces" hidden>
-          🔒 Private Vault
-        </button>
-        <button type="button" class="nav-tab" id="tabHosting">
-          ☁️ Buy &amp; Connect Hosting
-        </button>
-        <button type="button" class="nav-tab" id="tabAgents">
-          🤖 Coding Agent API
-        </button>
-        <button type="button" class="nav-tab" id="tabArchitecture">
-          📐 How It Works
-        </button>
-      </nav>
-
       <div class="user-bar">
-        <button type="button" class="btn btn-primary" id="newSpaceBtn">
+        <button type="button" class="btn btn-primary btn-sm" id="newSpaceBtn">
           + New Space
         </button>
         <div id="guestActions" class="auth-buttons">
-          <button type="button" class="btn btn-ghost" id="openSignInBtn">Sign In</button>
-          <button type="button" class="btn btn-outline" id="openSignUpBtn">Sign Up</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="openSignInBtn">Sign In</button>
+          <button type="button" class="btn btn-outline btn-sm" id="openSignUpBtn">Create Account</button>
         </div>
         <div id="userProfileBar" class="user-profile" hidden>
-          <span class="user-pill" id="currentUserBadge">@alex</span>
+          <span class="user-pill" id="currentUserBadge"></span>
           <button type="button" class="btn btn-ghost btn-sm" id="logoutBtn">Sign Out</button>
         </div>
       </div>
@@ -62,110 +61,120 @@
     <section id="hubView">
       <div class="hero-banner">
         <div class="hero-text">
-          <span class="eyebrow">STAGING WORKSPACE, CODING AGENTS &amp; HOSTING CONNECTOR</span>
-          <h1>Build &amp; Check Your Website in the Platform First. Buy or Connect Hosting When Ready to Launch.</h1>
+          <span class="eyebrow">STAGING WORKSPACE &amp; CLOUD DEPLOYMENT</span>
+          <h1>Stage, preview, and launch web applications.</h1>
           <p>
-            Work on your website or app in a private staging workspace with live Desktop/Tablet/Mobile previews and your own AI Coding Agents. When you're ready to launch, <strong>buy a hosting plan</strong> or <strong>connect your own hosting service</strong> (Vercel, Netlify, GitHub Pages, Cloudflare Pages, or Custom Webhook).
+            Build and test your website in a private staging workspace with live responsive previews and your own coding agents. Connect your hosting provider or purchase a plan when you are ready to launch.
           </p>
         </div>
         <div class="hero-stats">
           <div class="stat-card">
-            <span class="stat-val" id="statPublicCount">2</span>
-            <span class="stat-label">Launched Spaces</span>
+            <span class="stat-val" id="statPublicCount">0</span>
+            <span class="stat-label">Public Spaces</span>
           </div>
           <div class="stat-card">
             <span class="stat-val" id="statMyCount">0</span>
-            <span class="stat-label">Your Staged Spaces</span>
+            <span class="stat-label">Your Spaces</span>
           </div>
         </div>
       </div>
 
-      <search class="hub-search-bar" aria-label="Filter Spaces">
-        <form id="searchForm" action="/api/spaces" method="GET">
-          <div class="search-row">
-            <div class="search-field-wrap">
-              <label for="searchInput" class="visually-hidden">Search Spaces by name, author, or description</label>
-              <input
-                type="search"
-                id="searchInput"
-                name="search"
-                placeholder="Search Spaces by title, description, or @owner..."
-                autocorrect="off"
-                autocapitalize="none"
-                spellcheck="false"
-                enterkeyhint="search"
-              />
-            </div>
-            <button type="submit" class="btn btn-outline">Search</button>
-          </div>
-        </form>
-      </search>
+      <div class="toolbar-row">
+        <div class="section-title-wrap">
+          <h2 id="gridHeading">Published Spaces</h2>
+          <span class="section-sub" id="gridSubtext">Public applications deployed by the community</span>
+        </div>
 
-      <div class="section-header">
-        <h2 id="gridHeading">🌍 Community Hub — Launched Spaces</h2>
-        <span class="section-sub" id="gridSubtext">Showing public Spaces deployed to connected hosting services</span>
+        <search class="hub-search-bar" aria-label="Filter Spaces">
+          <form id="searchForm" action="/api/spaces" method="GET">
+            <div class="search-row">
+              <div class="search-field-wrap">
+                <label for="searchInput" class="visually-hidden">Search Spaces</label>
+                <input
+                  type="search"
+                  id="searchInput"
+                  name="search"
+                  placeholder="Search spaces..."
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  enterkeyhint="search"
+                />
+              </div>
+              <button type="submit" class="btn btn-outline btn-sm">Search</button>
+            </div>
+          </form>
+        </search>
       </div>
 
       <div id="spacesGrid" class="spaces-grid" aria-live="polite"></div>
     </section>
 
-    <!-- VIEW 2: BUY & CONNECT HOSTING SERVICES MARKETPLACE -->
+    <!-- VIEW 2: HOSTING SERVICES & PLANS -->
     <section id="hostingHubView" hidden>
       <div class="arch-panel">
-        <span class="eyebrow">READY TO LAUNCH YOUR SPACE?</span>
-        <h2>☁️ Buy a Hosting Plan or Connect Your Own Hosting Service</h2>
-        <p class="arch-lead">
-          Checking and building your website in the SpaceHub Staging Workspace is always free and private. When you are ready to launch to a live production URL, either <strong>buy a managed hosting plan</strong> below or <strong>connect your existing hosting provider</strong> (Vercel, Netlify, GitHub Pages, Cloudflare Pages, or Custom Webhook).
-        </p>
-
-        <h3 style="margin-block-end: 0.75rem;">🛒 Option 1: Buy Hosting Services (Instant Auto-Connect)</h3>
-        <div class="field" style="max-width: 460px; margin-block-end: 1rem;">
-          <label for="purchaseCustomDomainInput">Desired Custom Domain or Subdomain for Your Plan</label>
-          <input
-            type="text"
-            id="purchaseCustomDomainInput"
-            placeholder="e.g. mybrand-app.com or studio.spacehub-edge.app"
-            autocorrect="off"
-            autocapitalize="none"
-            spellcheck="false"
-          />
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">PRODUCTION DEPLOYMENT</span>
+            <h2>Hosting Plans &amp; Provider Connections</h2>
+            <p class="arch-lead">
+              Staging and previewing your projects on SpaceHub is always free. When you are ready to launch to a production domain, select a managed plan or connect your existing cloud provider.
+            </p>
+          </div>
         </div>
-        <div id="hostingPlansGrid" class="spaces-grid" style="margin-block-end: 2.25rem;"></div>
 
-        <div class="agent-hub-grid">
+        <div class="subsection">
+          <div class="subsection-head">
+            <h3>Managed Hosting Plans</h3>
+            <div class="domain-inline-field">
+              <label for="purchaseCustomDomainInput" class="visually-hidden">Custom Domain</label>
+              <input
+                type="text"
+                id="purchaseCustomDomainInput"
+                placeholder="Optional custom domain (e.g. app.yourdomain.com)"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+              />
+            </div>
+          </div>
+          <div id="hostingPlansGrid" class="spaces-grid"></div>
+        </div>
+
+        <div class="agent-hub-grid" style="margin-block-start: 2rem;">
           <div class="arch-card">
-            <h3>🔌 Option 2: Connect Your Existing Hosting Service (BYO Host)</h3>
-            <p style="margin-block-end: 1rem;">
-              Already have an account on Vercel, Netlify, GitHub Pages, Cloudflare Pages, or your own server? Connect it here to deploy any Space from your staging workspace.
+            <h3>Connect External Provider</h3>
+            <p style="margin-block-end: 1.25rem;">
+              Connect Cloudflare Pages, GitHub Pages, Vercel, Netlify, or a custom deployment webhook.
             </p>
             <form id="connectHostingForm" method="POST" action="/api/hosting-connections">
               <div class="field">
-                <label for="connProviderSelect">Hosting Provider</label>
+                <label for="connProviderSelect">Provider</label>
                 <select id="connProviderSelect" name="provider" class="select-control">
-                  <option value="vercel">▲ Vercel (Deployments API / Project)</option>
-                  <option value="netlify">💠 Netlify (Site / Build Hook)</option>
-                  <option value="github_pages">🐙 GitHub Pages (Repository)</option>
-                  <option value="cloudflare_pages">⚡ Cloudflare Pages</option>
-                  <option value="custom_webhook">🌐 Custom Server / Deploy Webhook</option>
+                  <option value="cloudflare_pages">Cloudflare Pages</option>
+                  <option value="github_pages">GitHub Pages</option>
+                  <option value="vercel">Vercel</option>
+                  <option value="netlify">Netlify</option>
+                  <option value="custom_webhook">Custom Webhook</option>
                 </select>
               </div>
               <div class="field">
-                <label for="connNameInput">Connection Label <span aria-hidden="true">*</span></label>
+                <label for="connNameInput">Connection Name <span aria-hidden="true">*</span></label>
                 <input
                   type="text"
                   id="connNameInput"
                   name="name"
-                  placeholder="e.g. My Production Vercel Account"
+                  placeholder="e.g. Production Cloudflare"
                   required
                 />
               </div>
               <div class="field">
-                <label for="connTargetInput">Project Name or Production Domain</label>
+                <label for="connTargetInput">Project Name or Domain</label>
                 <input
                   type="text"
                   id="connTargetInput"
                   name="targetUrlOrProject"
-                  placeholder="e.g. my-saas-site.vercel.app or my-project"
+                  placeholder="e.g. my-web-app"
                   autocorrect="off"
                   autocapitalize="none"
                   spellcheck="false"
@@ -173,7 +182,7 @@
               </div>
               <div class="field">
                 <div class="label-row">
-                  <label for="connTokenInput">Provider API Token (Optional if using Webhook/Domain Link)</label>
+                  <label for="connTokenInput">API Token (Optional)</label>
                   <button
                     type="button"
                     class="btn-link toggle-pw-btn"
@@ -185,7 +194,7 @@
                   type="password"
                   id="connTokenInput"
                   name="apiToken"
-                  placeholder="Vercel / Netlify / GitHub Token"
+                  placeholder="Provider API token"
                   autocomplete="off"
                 />
               </div>
@@ -201,14 +210,14 @@
                   spellcheck="false"
                 />
               </div>
-              <button type="submit" class="btn btn-primary">+ Connect Hosting Service</button>
+              <button type="submit" class="btn btn-primary btn-sm">Connect Provider</button>
             </form>
           </div>
 
           <div class="arch-card">
-            <h3>✅ Your Connected &amp; Purchased Hosting Services</h3>
-            <p style="margin-block-end: 1rem;">
-              Select any of these targets when clicking <strong>🚀 Launch / Deploy to Host</strong> inside a Space's workspace.
+            <h3>Active Connections</h3>
+            <p style="margin-block-end: 1.25rem;">
+              Available deployment targets when launching a Space from the workspace.
             </p>
             <div id="hostingConnectionsList" class="pat-keys-list" aria-live="polite"></div>
           </div>
@@ -216,127 +225,128 @@
       </div>
     </section>
 
-    <!-- VIEW 3: BRING YOUR OWN CODING AGENT (BYOA & REST API HUB) -->
+    <!-- VIEW 3: CODING AGENT API -->
     <section id="agentApiView" hidden>
       <div class="arch-panel">
         <div class="section-header">
           <div>
-            <span class="eyebrow">PROGRAMMATIC WORKSPACE &amp; BYOK AGENT INTEGRATION</span>
-            <h2>🤖 Bring Your Own Coding Agents via API</h2>
+            <span class="eyebrow">DEVELOPER &amp; AGENT API</span>
+            <h2>Bring Your Own Coding Agents</h2>
+            <p class="arch-lead">
+              Configure an AI model for the in-studio builder or generate Personal Access Tokens (<code>sh_pat_...</code>) for external CLI agents and automation pipelines.
+            </p>
           </div>
           <button type="button" class="btn btn-outline btn-sm" id="openAgentConfigDialogBtn">
-            ⚙️ Configure In-Studio Agent Provider (BYOK)
+            Configure Studio Agent
           </button>
         </div>
-        <p class="arch-lead">
-          Connect your own coding agents in two ways: (1) plug your API key/endpoint into the <strong>In-Studio Coding Agent</strong> inside any Space's Workspace, or (2) generate a <strong>SpaceHub Agent API Key (<code>sh_pat_...</code>)</strong> so external CLI agents, scripts, or autonomous runners can create Spaces, push code to staging for you to preview, and deploy to your connected hosting service when ready.
-        </p>
 
         <div class="agent-hub-grid">
           <div class="arch-card">
-            <h3>🔑 Your SpaceHub Agent API Keys (<code>sh_pat_...</code>)</h3>
+            <h3>Personal Access Tokens</h3>
             <p style="margin-block-end: 1rem;">
-              Use these Bearer tokens in external coding agents (Claude Code, Antigravity scripts, Cursor, CI pipelines) to push HTML/CSS/JS files into your staging workspace.
+              Authenticate external coding agents with <code>Authorization: Bearer sh_pat_...</code> to create Spaces and push files to staging.
             </p>
             <form id="createPatForm" class="pat-form" method="POST" action="/api/agent-keys">
-              <label for="patNameInput" class="visually-hidden">Agent Key Label</label>
+              <label for="patNameInput" class="visually-hidden">Token Name</label>
               <input
                 type="text"
                 id="patNameInput"
                 name="name"
-                placeholder="e.g. My Autonomous Builder Agent"
+                placeholder="Token label (e.g. CLI Agent)"
                 required
                 minlength="2"
               />
-              <button type="submit" class="btn btn-primary btn-sm">+ Generate Key</button>
+              <button type="submit" class="btn btn-primary btn-sm">Generate Token</button>
             </form>
             <div id="patKeysList" class="pat-keys-list" aria-live="polite"></div>
           </div>
 
           <div class="arch-card">
-            <h3>📡 External Coding Agent REST Endpoints</h3>
+            <h3>REST API Reference</h3>
             <p style="margin-block-end: 0.75rem;">
-              External agents authenticate with <code>Authorization: Bearer sh_pat_...</code> or <code>X-Agent-Key: sh_pat_...</code>:
+              Stage and deploy web applications programmatically:
             </p>
-            <pre class="code-snippet"><code># 1. Create a Private Staging Space via Agent API
-curl -X POST http://localhost:3000/api/agent/v1/spaces \
-  -H "Authorization: Bearer sh_pat_demo_alex_agent_key_2026" \
+            <pre class="code-snippet"><code># 1. Create a Private Staging Space
+curl -X POST https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/spaces \
+  -H "Authorization: Bearer YOUR_SH_PAT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "title": "Agent Built Web App",
+    "title": "my-web-app",
     "visibility": "private",
     "files": {
-      "index.html": "&lt;!DOCTYPE html&gt;&lt;h1&gt;Built by Agent&lt;/h1&gt;",
-      "style.css": "body { background: #090d16; color: #fff; }",
-      "script.js": "console.log(\"Ready in staging!\");"
+      "index.html": "&lt;!DOCTYPE html&gt;&lt;h1&gt;Hello&lt;/h1&gt;",
+      "style.css": "body { font-family: sans-serif; }",
+      "script.js": "console.log(\"Ready\");"
     }
   }'
 
-# 2. Push Updated Files to Staging Workspace (Check before launch)
-curl -X PUT http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/files \
-  -H "Authorization: Bearer sh_pat_demo_alex_agent_key_2026" \
+# 2. Update Staged Files
+curl -X PUT https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/spaces/USERNAME/my-web-app/files \
+  -H "Authorization: Bearer YOUR_SH_PAT_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"summary": "Refined hero layout", "files": {"index.html": "..."}}'
+  -d '{"files": {"index.html": "..."}}'
 
-# 3. Deploy to Connected Hosting Service when verified
-curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/deploy-external \
-  -H "Authorization: Bearer sh_pat_demo_alex_agent_key_2026" \
+# 3. Deploy to Connected Host
+curl -X POST https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/spaces/USERNAME/my-web-app/deploy-external \
+  -H "Authorization: Bearer YOUR_SH_PAT_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"provider": "vercel", "visibility": "public"}'</code></pre>
+  -d '{"provider": "cloudflare_pages", "visibility": "public"}'</code></pre>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- VIEW 4: HOW HUGGING FACE SPACES WORK (ARCHITECTURE GUIDE) -->
+    <!-- VIEW 4: DOCUMENTATION -->
     <section id="archView" hidden>
       <div class="arch-panel">
-        <h2>📐 How SpaceHub Works: Staging Workspace + BYO Coding Agents + Connect Hosting</h2>
+        <span class="eyebrow">PLATFORM OVERVIEW</span>
+        <h2>How SpaceHub Works</h2>
         <p class="arch-lead">
-          Inspired by Hugging Face Spaces, SpaceHub gives every user a private staging studio to build and verify their website first, then buy or connect external hosting when ready to launch:
+          A streamlined workflow for staging, testing, and launching modern web applications.
         </p>
         <div class="arch-grid">
           <article class="arch-card">
-            <h3>1. Work &amp; Check in Staging First</h3>
+            <h3>1. Private Staging Workspace</h3>
             <p>
-              Every Space starts in <strong>Staging Draft</strong> mode with multi-file editing (<code>index.html</code>, <code>style.css</code>, <code>script.js</code>, and <code>README.md</code> YAML metadata) and an interactive viewport tester (Desktop, Tablet, Mobile) so you can verify how your website looks before paying for or connecting hosting.
+              Every Space begins in staging mode with multi-file editing (<code>index.html</code>, <code>style.css</code>, <code>script.js</code>, and <code>README.md</code>) and live Desktop, Tablet, and Mobile viewport previews.
             </p>
           </article>
           <article class="arch-card">
-            <h3>2. Privacy Option (Public vs. Private)</h3>
+            <h3>2. Granular Privacy Controls</h3>
             <p>
-              Toggle any Space to <strong>Private (🔒)</strong> so only you can view the code or preview it. Unauthorized visitors receive a <code>404 Private Space</code> lock screen.
+              Keep work-in-progress projects set to <strong>Private</strong> so only your account can access the source files or preview URL. Switch to <strong>Public</strong> when ready to share.
             </p>
           </article>
           <article class="arch-card">
-            <h3>3. Bring Your Own Coding Agent (BYOA)</h3>
+            <h3>3. Bring Your Own Coding Agent</h3>
             <p>
-              Use the in-studio Coding Agent bar (Gemini 3.8 Flash / 4 Argon, Antigravity Agent, OpenAI-compatible, or Built-in Agent) or use <code>sh_pat_...</code> API keys from external CLI agents.
+              Connect Google Gemini, OpenAI-compatible models, or custom webhooks inside the workspace, or push code from external CLI agents via REST API.
             </p>
           </article>
           <article class="arch-card">
-            <h3>4. Buy or Connect Hosting to Launch</h3>
+            <h3>4. Flexible Cloud Deployment</h3>
             <p>
-              When you are ready to launch, buy a hosting plan ($5/mo Starter Edge, $15/mo Pro Cloud) or connect your existing Vercel, Netlify, GitHub Pages, Cloudflare Pages, or Custom Deploy Webhook to push your staged files live.
+              Deploy verified staging builds directly to Cloudflare Pages, GitHub Pages, Vercel, Netlify, or export a portable static bundle.
             </p>
           </article>
         </div>
       </div>
     </section>
 
-    <!-- VIEW 5: SINGLE SPACE STUDIO (APP PREVIEW + WORKSPACE IDE + CODING AGENT + HOSTING DEPLOY) -->
+    <!-- VIEW 5: SPACE STUDIO (WORKSPACE IDE + PREVIEW + SETTINGS) -->
     <section id="spaceStudioView" hidden>
       <div class="studio-header">
         <div class="studio-breadcrumb">
-          <button type="button" class="btn btn-ghost btn-sm" id="backToHubBtn">← Back to Hub</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="backToHubBtn">← Back</button>
           <span class="crumb-sep">/</span>
           <span class="space-emoji-badge" id="studioEmoji">🚀</span>
-          <strong class="studio-owner" id="studioOwner">@alex</strong>
+          <span class="studio-owner" id="studioOwner"></span>
           <span class="crumb-sep">/</span>
-          <h1 class="studio-title" id="studioTitle">my-space</h1>
-          <span class="status-pill" id="studioVisibilityBadge">🔒 Private</span>
-          <span class="status-pill" id="studioStatusBadge">📝 Draft</span>
-          <span class="status-pill" id="studioHostBadge">☁️ Not Connected</span>
+          <h1 class="studio-title" id="studioTitle"></h1>
+          <span class="status-pill" id="studioVisibilityBadge">Private</span>
+          <span class="status-pill" id="studioStatusBadge">Staging</span>
+          <span class="status-pill" id="studioHostBadge">No Host</span>
         </div>
 
         <div class="studio-actions">
@@ -344,73 +354,73 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
             ♥ <span id="likeCountText">0</span>
           </button>
           <button type="button" class="btn btn-outline btn-sm" id="quickPrivacyToggleBtn" hidden>
-            🔒 Make Public
+            Make Public
           </button>
           <button type="button" class="btn btn-outline btn-sm" id="exportBundleBtn">
-            📦 Export Bundle
+            Export
           </button>
           <a href="#" target="_blank" rel="noopener" class="btn btn-outline btn-sm" id="openStandaloneLink">
-            ↗ Open Preview / Live URL
+            Preview ↗
           </a>
           <button type="button" class="btn btn-primary btn-sm" id="launchSpaceBtn" hidden>
-            🚀 Ready to Launch (Buy / Connect Host)
+            Deploy
           </button>
         </div>
       </div>
 
       <div class="studio-tabs-bar">
-        <div class="studio-tabs" role="tablist" aria-label="Space Sections">
+        <div class="studio-tabs" role="tablist" aria-label="Space Views">
           <button type="button" class="studio-tab active" id="studioTabWorkspace" role="tab" aria-selected="true">
-            🛠️ Workspace, Agent &amp; Live Check (Staging)
+            Workspace
           </button>
           <button type="button" class="studio-tab" id="studioTabApp" role="tab" aria-selected="false">
-            🖥️ Full Preview &amp; Connected Host Info
+            Live Preview
           </button>
           <button type="button" class="studio-tab" id="studioTabSettings" role="tab" aria-selected="false" hidden>
-            ⚙️ Privacy &amp; Settings
+            Settings
           </button>
         </div>
 
         <div class="viewport-controls" id="viewportControls">
-          <span class="viewport-label">Check Viewport:</span>
-          <button type="button" class="vp-btn active" data-vp="desktop">🖥️ Desktop (100%)</button>
-          <button type="button" class="vp-btn" data-vp="tablet">📱 Tablet (768px)</button>
-          <button type="button" class="vp-btn" data-vp="mobile">📲 Mobile (390px)</button>
+          <span class="viewport-label">Viewport:</span>
+          <button type="button" class="vp-btn active" data-vp="desktop">Desktop</button>
+          <button type="button" class="vp-btn" data-vp="tablet">Tablet</button>
+          <button type="button" class="vp-btn" data-vp="mobile">Mobile</button>
         </div>
       </div>
 
-      <!-- TAB PANEL 1: WORKSPACE, BYOA CODING AGENT & LIVE PREVIEW -->
+      <!-- TAB PANEL 1: WORKSPACE & LIVE PREVIEW -->
       <div id="panelWorkspace" class="studio-panel">
         <div id="studioAgentBar" class="agent-studio-bar">
           <form id="studioAgentForm" class="agent-prompt-form">
             <div class="agent-bar-top">
               <div class="agent-bar-title">
-                <span>🤖 <strong>Coding Agent Builder</strong></span>
-                <span class="badge-pill" id="activeAgentProviderBadge">Built-in Instant Agent</span>
+                <strong>AI Coding Agent</strong>
+                <span class="status-pill" id="activeAgentProviderBadge">Built-in Agent</span>
               </div>
               <div class="agent-quick-chips">
-                <button type="button" class="chip-btn" data-prompt="Build an interactive Kanban task board with To Do, In Progress, and Ready for Host columns">
-                  ✨ Kanban Task App
+                <button type="button" class="chip-btn" data-prompt="Build a clean Kanban board with To Do, In Progress, and Completed columns">
+                  Kanban Board
                 </button>
-                <button type="button" class="chip-btn" data-prompt="Build a futuristic AI SaaS control center with telemetry and accent switcher">
-                  🚀 AI Control Center
+                <button type="button" class="chip-btn" data-prompt="Build a SaaS analytics dashboard with KPI cards and interactive metrics">
+                  Analytics Dashboard
                 </button>
                 <button type="button" class="btn btn-ghost btn-xs" id="configureStudioAgentBtn">
-                  ⚙️ Connect Gemini / OpenAI / Custom Agent API
+                  Configure Agent
                 </button>
               </div>
             </div>
             <div class="agent-input-row">
-              <label for="agentPromptInput" class="visually-hidden">Prompt your coding agent to build or modify this Space</label>
+              <label for="agentPromptInput" class="visually-hidden">Agent prompt</label>
               <textarea
                 id="agentPromptInput"
                 name="prompt"
-                rows="2"
-                placeholder="Ask your Coding Agent to build or update your website in staging (press Enter to run, Shift+Enter for new line)..."
+                rows="1"
+                placeholder="Describe what to build or update in your staging workspace (Enter to run)..."
                 required
               ></textarea>
-              <button type="submit" class="btn btn-primary" id="runAgentBtn">
-                ⚡ Generate to Staging
+              <button type="submit" class="btn btn-primary btn-sm" id="runAgentBtn">
+                Generate
               </button>
             </div>
             <div id="agentLastSummary" class="agent-summary-line" hidden></div>
@@ -418,7 +428,7 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
         </div>
 
         <div class="workspace-split">
-          <!-- Left: Multi-file Editor -->
+          <!-- Left: Code Editor -->
           <div class="editor-pane" id="editorPane">
             <div class="file-tabs-bar">
               <div class="file-tabs" id="fileTabsList">
@@ -428,9 +438,9 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
                 <button type="button" class="file-tab" data-file="README.md">README.md</button>
               </div>
               <div class="editor-toolbar">
-                <span class="unsaved-indicator" id="dirtyIndicator">Synced</span>
+                <span class="unsaved-indicator" id="dirtyIndicator">Saved</span>
                 <button type="button" class="btn btn-outline btn-xs" id="saveDraftBtn">
-                  💾 Save Staging Draft
+                  Save Draft
                 </button>
               </div>
             </div>
@@ -444,17 +454,17 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
             ></textarea>
           </div>
 
-          <!-- Right: Live Staging Sandbox Preview -->
+          <!-- Right: Live Staging Preview -->
           <div class="preview-pane">
             <div class="preview-chrome">
               <div class="chrome-dots" aria-hidden="true">
                 <span></span><span></span><span></span>
               </div>
               <div class="chrome-address" id="previewAddressBar">
-                staging-preview://index.html (Check Before Buying / Connecting Hosting)
+                staging://index.html
               </div>
               <button type="button" class="btn btn-ghost btn-xs" id="refreshPreviewBtn">
-                ↻ Refresh Check
+                Refresh
               </button>
             </div>
             <div class="preview-stage" id="previewStage">
@@ -469,12 +479,12 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
         </div>
       </div>
 
-      <!-- TAB PANEL 2: FULL APP PREVIEW & CONNECTED EXTERNAL HOSTING STATUS -->
+      <!-- TAB PANEL 2: FULL APP PREVIEW -->
       <div id="panelApp" class="studio-panel" hidden>
         <div class="app-view-banner" id="appViewNotice">
-          <span id="appViewHostSummary">Staging preview active. Connect or buy a hosting service to launch externally.</span>
+          <span id="appViewHostSummary">Staging preview active.</span>
           <a href="#" target="_blank" rel="noopener" id="externalHostDirectLink" class="btn btn-primary btn-xs" hidden>
-            ↗ Visit External Hosted Site
+            Open Live URL ↗
           </a>
         </div>
         <div class="preview-stage full-app-stage">
@@ -490,8 +500,8 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
       <!-- TAB PANEL 3: PRIVACY & SPACE SETTINGS -->
       <div id="panelSettings" class="studio-panel" hidden>
         <form id="spaceSettingsForm" class="settings-form" method="POST" action="/api/spaces">
-          <h2>⚙️ Space Metadata &amp; Privacy Settings</h2>
-          <p class="form-sub">Control who can discover and access your Space in the platform.</p>
+          <h2>Space Settings &amp; Privacy</h2>
+          <p class="form-sub">Manage metadata and visibility for this Space.</p>
 
           <div class="field">
             <label for="settingsTitleInput">Space Title <span aria-hidden="true">*</span></label>
@@ -516,28 +526,28 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
           </div>
 
           <fieldset class="radio-fieldset">
-            <legend>Space Privacy &amp; Visibility</legend>
+            <legend>Visibility</legend>
             <div class="radio-card-list">
               <div class="radio-option">
                 <input type="radio" id="visPublic" name="visibility" value="public" />
                 <label for="visPublic">
-                  <strong>🌍 Public Space</strong>
-                  <span>Visible on the Community Hub once deployed to a connected host.</span>
+                  <strong>Public</strong>
+                  <span>Visible in Explore once deployed.</span>
                 </label>
               </div>
               <div class="radio-option">
                 <input type="radio" id="visPrivate" name="visibility" value="private" />
                 <label for="visPrivate">
-                  <strong>🔒 Private Space (Hidden)</strong>
-                  <span>Hidden from everyone else. Only you can view the code or preview it in the workspace.</span>
+                  <strong>Private</strong>
+                  <span>Only accessible to your account.</span>
                 </label>
               </div>
             </div>
           </fieldset>
 
           <div class="settings-actions">
-            <button type="submit" class="btn btn-primary">Save Settings</button>
-            <button type="button" class="btn btn-danger" id="deleteSpaceBtn">Delete Space</button>
+            <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
+            <button type="button" class="btn btn-danger btn-sm" id="deleteSpaceBtn">Delete Space</button>
           </div>
         </form>
       </div>
@@ -548,17 +558,17 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
   <dialog id="createSpaceDialog" closedby="any" aria-labelledby="createSpaceDialogTitle">
     <form id="createSpaceForm" method="POST" action="/api/spaces" novalidate>
       <div class="dialog-header">
-        <h2 id="createSpaceDialogTitle">🚀 Create a New Space (Staging Workspace)</h2>
+        <h2 id="createSpaceDialogTitle">Create a New Space</h2>
         <button type="button" class="btn-icon" data-close-dialog="createSpaceDialog" aria-label="Close dialog">✕</button>
       </div>
 
       <p class="dialog-lead">
-        Work in the platform first to check how your website or app looks. You can buy or connect hosting whenever you are ready to launch.
+        Start building in your private staging workspace. You can connect hosting whenever you are ready to launch.
       </p>
 
       <div class="field">
-        <label for="spaceTitleInput">Space Name / Title <span aria-hidden="true">*</span></label>
-        <span id="spaceTitleHint" class="hint">2–50 characters. Used to generate your Space slug.</span>
+        <label for="spaceTitleInput">Name <span aria-hidden="true">*</span></label>
+        <span id="spaceTitleHint" class="hint">2–50 characters.</span>
         <input
           type="text"
           id="spaceTitleInput"
@@ -568,75 +578,75 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
           maxlength="50"
           aria-describedby="spaceTitleHint"
           data-error="spaceTitleError"
-          placeholder="e.g. Portfolio Studio or AI Weather App"
+          placeholder="my-web-app"
           autofocus
         />
         <div id="spaceTitleError" class="error-msg">
-          <span role="img" aria-label="Error">❌</span> Please enter a Space title (at least 2 characters).
+          <span role="img" aria-label="Error">❌</span> Please enter a Space name (at least 2 characters).
         </div>
       </div>
 
       <div class="field">
-        <label for="spaceDescInput">Short Description</label>
+        <label for="spaceDescInput">Description</label>
         <input
           type="text"
           id="spaceDescInput"
           name="description"
           maxlength="120"
-          placeholder="What does your website or web app do?"
+          placeholder="Optional short description"
         />
       </div>
 
       <fieldset class="radio-fieldset">
-        <legend>Starter SDK Template</legend>
+        <legend>Starter Template</legend>
         <div class="radio-card-list compact-grid">
           <div class="radio-option">
             <input type="radio" id="tplLanding" name="templateId" value="landing" checked />
             <label for="tplLanding">
-              <strong>✨ SaaS Landing Page</strong>
-              <span>Hero banner, feature cards &amp; interactive counter</span>
+              <strong>SaaS Landing Page</strong>
+              <span>Clean hero section and interactive call-to-action</span>
             </label>
           </div>
           <div class="radio-option">
             <input type="radio" id="tplDashboard" name="templateId" value="dashboard" />
             <label for="tplDashboard">
-              <strong>📊 Analytics Web App</strong>
-              <span>KPI cards &amp; live telemetry chart simulator</span>
+              <strong>Analytics Dashboard</strong>
+              <span>Telemetry layout with interactive chart</span>
             </label>
           </div>
           <div class="radio-option">
             <input type="radio" id="tplCanvas" name="templateId" value="canvas" />
             <label for="tplCanvas">
-              <strong>🎨 Interactive Particle Studio</strong>
-              <span>HTML5 Canvas generative visual playground</span>
+              <strong>Minimal Starter</strong>
+              <span>Clean HTML, CSS, and JS boilerplate</span>
             </label>
           </div>
         </div>
       </fieldset>
 
       <fieldset class="radio-fieldset">
-        <legend>Privacy Setting</legend>
+        <legend>Privacy</legend>
         <div class="radio-card-list">
           <div class="radio-option">
             <input type="radio" id="createVisPrivate" name="visibility" value="private" checked />
             <label for="createVisPrivate">
-              <strong>🔒 Private (Recommended while checking in staging)</strong>
-              <span>Only you can view and test this Space. You can make it Public anytime.</span>
+              <strong>Private</strong>
+              <span>Only you can view and test this Space.</span>
             </label>
           </div>
           <div class="radio-option">
             <input type="radio" id="createVisPublic" name="visibility" value="public" />
             <label for="createVisPublic">
-              <strong>🌍 Public</strong>
-              <span>Will appear on the Community Hub once you connect hosting and launch.</span>
+              <strong>Public</strong>
+              <span>Listed in Explore once deployed.</span>
             </label>
           </div>
         </div>
       </fieldset>
 
       <div class="dialog-footer">
-        <button type="button" class="btn btn-ghost" data-close-dialog="createSpaceDialog">Cancel</button>
-        <button type="submit" class="btn btn-primary">Create Space &amp; Open Staging</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="createSpaceDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Create Space</button>
       </div>
     </form>
   </dialog>
@@ -645,12 +655,12 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
   <dialog id="signInDialog" closedby="any" aria-labelledby="signInDialogTitle">
     <form id="signInForm" method="POST" action="/api/auth/login" novalidate>
       <div class="dialog-header">
-        <h2 id="signInDialogTitle">Sign In to SpaceHub</h2>
+        <h2 id="signInDialogTitle">Sign In</h2>
         <button type="button" class="btn-icon" data-close-dialog="signInDialog" aria-label="Close dialog">✕</button>
       </div>
 
       <p class="dialog-lead">
-        Demo account ready: username <code>alex</code> / password <code>demo1234</code>
+        Sign in to access your Spaces, coding agents, and connected hosts.
       </p>
 
       <div class="field">
@@ -702,19 +712,23 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
       <div id="signInServerError" class="server-error" role="alert" hidden></div>
 
       <div class="dialog-footer">
-        <button type="button" class="btn btn-outline btn-sm" id="fillDemoCredsBtn">Use Demo Account (@alex)</button>
-        <button type="submit" class="btn btn-primary">Sign In</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="signInDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Sign In</button>
       </div>
     </form>
   </dialog>
 
-  <!-- DIALOG 3: SIGN UP -->
+  <!-- DIALOG 3: CREATE ACCOUNT -->
   <dialog id="signUpDialog" closedby="any" aria-labelledby="signUpDialogTitle">
     <form id="signUpForm" method="POST" action="/api/auth/register" novalidate>
       <div class="dialog-header">
-        <h2 id="signUpDialogTitle">Create Your SpaceHub Account</h2>
+        <h2 id="signUpDialogTitle">Create Account</h2>
         <button type="button" class="btn-icon" data-close-dialog="signUpDialog" aria-label="Close dialog">✕</button>
       </div>
+
+      <p class="dialog-lead">
+        Create your account to stage projects and connect your cloud hosting providers.
+      </p>
 
       <div class="field">
         <label for="signUpFullName">Display Name <span aria-hidden="true">*</span></label>
@@ -786,61 +800,60 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
       <div id="signUpServerError" class="server-error" role="alert" hidden></div>
 
       <div class="dialog-footer">
-        <button type="button" class="btn btn-ghost" data-close-dialog="signUpDialog">Cancel</button>
-        <button type="submit" class="btn btn-primary">Create Account</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="signUpDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Create Account</button>
       </div>
     </form>
   </dialog>
 
-  <!-- DIALOG 4: CONFIGURE BYOA CODING AGENT PROVIDER -->
+  <!-- DIALOG 4: CONFIGURE CODING AGENT PROVIDER -->
   <dialog id="agentConfigDialog" closedby="any" aria-labelledby="agentConfigDialogTitle">
     <form id="agentConfigForm" method="dialog">
       <div class="dialog-header">
-        <h2 id="agentConfigDialogTitle">🤖 Connect Your Own Coding Agent (BYOA)</h2>
+        <h2 id="agentConfigDialogTitle">Configure Coding Agent</h2>
         <button type="button" class="btn-icon" data-close-dialog="agentConfigDialog" aria-label="Close dialog">✕</button>
       </div>
 
       <p class="dialog-lead">
-        Choose which Coding Agent engine powers the In-Studio Builder inside your Workspace.
+        Select the AI provider that powers the in-studio code generator.
       </p>
 
       <fieldset class="radio-fieldset">
-        <legend>Coding Agent Provider</legend>
+        <legend>Provider</legend>
         <div class="radio-card-list">
           <div class="radio-option">
             <input type="radio" id="provBuiltin" name="agentProvider" value="builtin_agent" checked />
             <label for="provBuiltin">
-              <strong>⚡ Built-in Instant Coding Agent (Zero-Config)</strong>
-              <span>Synthesizes interactive HTML/CSS/JS apps immediately without an external API key.</span>
+              <strong>Built-in Instant Agent</strong>
+              <span>Zero-configuration generator for rapid staging prototypes.</span>
             </label>
           </div>
           <div class="radio-option">
             <input type="radio" id="provGemini" name="agentProvider" value="gemini" />
             <label for="provGemini">
-              <strong>✨ Google Gemini &amp; Antigravity Agent (<code>@google/genai</code>)</strong>
-              <span>Uses official Interactions API with <code>gemini-3.8-flash</code>, <code>gemini-4-argon</code>, or <code>antigravity-preview-09-2026</code>.</span>
+              <strong>Google Gemini &amp; Antigravity (<code>@google/genai</code>)</strong>
+              <span>Supports <code>gemini-3.8-flash</code>, <code>gemini-4-argon</code>, and <code>antigravity-preview-09-2026</code>.</span>
             </label>
           </div>
           <div class="radio-option">
             <input type="radio" id="provOpenAI" name="agentProvider" value="openai_compatible" />
             <label for="provOpenAI">
-              <strong>🔌 OpenAI-Compatible / Local LLM Endpoint</strong>
-              <span>Connect OpenRouter, Together, vLLM, Ollama, or OpenAI chat completions.</span>
+              <strong>OpenAI-Compatible Endpoint</strong>
+              <span>Connect OpenAI, OpenRouter, Together, or local LLM servers.</span>
             </label>
           </div>
           <div class="radio-option">
             <input type="radio" id="provWebhook" name="agentProvider" value="custom_webhook" />
             <label for="provWebhook">
-              <strong>🌐 Custom Coding Agent Webhook</strong>
-              <span>POSTs <code>{ prompt, spaceTitle, files }</code> to your own agent server URL and expects <code>{ summary, files }</code>.</span>
+              <strong>Custom Agent Webhook</strong>
+              <span>Send prompts to your custom HTTP endpoint.</span>
             </label>
           </div>
         </div>
       </fieldset>
 
       <div class="field">
-        <label for="agentModelInput">Model or Managed Agent ID</label>
-        <span class="hint">For Gemini: <code>gemini-3.8-flash</code>, <code>gemini-4-argon</code>, or <code>antigravity-preview-09-2026</code></span>
+        <label for="agentModelInput">Model ID</label>
         <input
           type="text"
           id="agentModelInput"
@@ -854,7 +867,7 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
 
       <div class="field">
         <div class="label-row">
-          <label for="agentApiKeyInput">Provider API Key (Optional for Built-in / Local)</label>
+          <label for="agentApiKeyInput">API Key</label>
           <button
             type="button"
             class="btn-link toggle-pw-btn"
@@ -866,7 +879,7 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
           type="password"
           id="agentApiKeyInput"
           name="agentApiKey"
-          placeholder="AIza... or sk-..."
+          placeholder="Optional for Built-in Agent"
           autocomplete="off"
           autocorrect="off"
           autocapitalize="none"
@@ -875,7 +888,7 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
       </div>
 
       <div class="field">
-        <label for="agentEndpointInput">Custom Base / Webhook URL (For OpenAI-Compatible or Webhook)</label>
+        <label for="agentEndpointInput">Custom Endpoint / Webhook URL</label>
         <input
           type="text"
           id="agentEndpointInput"
@@ -888,72 +901,72 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
       </div>
 
       <div class="dialog-footer">
-        <button type="button" class="btn btn-ghost" data-close-dialog="agentConfigDialog">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save Agent Configuration</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="agentConfigDialog">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Save Configuration</button>
       </div>
     </form>
   </dialog>
 
-  <!-- DIALOG 5: READY TO LAUNCH — BUY OR CONNECT HOSTING SERVICE -->
+  <!-- DIALOG 5: DEPLOY TO HOSTING -->
   <dialog id="deployHostingDialog" closedby="any" aria-labelledby="deployHostingDialogTitle">
     <form id="deployHostingForm" method="POST" action="/api/spaces">
       <div class="dialog-header">
-        <h2 id="deployHostingDialogTitle">🚀 Ready to Launch? Connect or Buy Hosting</h2>
+        <h2 id="deployHostingDialogTitle">Deploy Space</h2>
         <button type="button" class="btn-icon" data-close-dialog="deployHostingDialog" aria-label="Close dialog">✕</button>
       </div>
 
       <p class="dialog-lead">
-        You've checked your website in the staging workspace! Select a <strong>purchased/connected hosting service</strong> below, connect a new host, or open the Hosting Marketplace to buy a plan.
+        Publish your staged files to a connected hosting provider or purchase a managed plan.
       </p>
 
       <div class="field">
-        <label for="deployConnectionSelect">Choose Connected / Purchased Hosting Target</label>
+        <label for="deployConnectionSelect">Connected Hosting Target</label>
         <select id="deployConnectionSelect" name="connectionId" class="select-control">
-          <option value="">-- Configure custom host below --</option>
+          <option value="">-- Or select a provider below --</option>
         </select>
       </div>
 
       <fieldset class="radio-fieldset">
-        <legend>Or Select Hosting Provider Directly</legend>
+        <legend>Provider</legend>
         <div class="radio-card-list compact-grid">
           <div class="radio-option">
-            <input type="radio" id="depVercel" name="provider" value="vercel" checked />
-            <label for="depVercel">
-              <strong>▲ Vercel</strong>
-              <span>Deploy via Vercel API or link your <code>.vercel.app</code> domain</span>
-            </label>
-          </div>
-          <div class="radio-option">
-            <input type="radio" id="depNetlify" name="provider" value="netlify" />
-            <label for="depNetlify">
-              <strong>💠 Netlify</strong>
-              <span>Deploy via Netlify Build Hook or link your <code>.netlify.app</code> site</span>
+            <input type="radio" id="depCloudflare" name="provider" value="cloudflare_pages" checked />
+            <label for="depCloudflare">
+              <strong>Cloudflare Pages</strong>
+              <span>Deploy to Cloudflare Edge</span>
             </label>
           </div>
           <div class="radio-option">
             <input type="radio" id="depGithub" name="provider" value="github_pages" />
             <label for="depGithub">
-              <strong>🐙 GitHub Pages</strong>
-              <span>Push static files to your <code>github.io</code> repository</span>
+              <strong>GitHub Pages</strong>
+              <span>Push to GitHub repository</span>
             </label>
           </div>
           <div class="radio-option">
-            <input type="radio" id="depWebhook" name="provider" value="custom_webhook" />
-            <label for="depWebhook">
-              <strong>🌐 Custom Host / Deploy Webhook</strong>
-              <span>POST staged files to your own server webhook URL</span>
+            <input type="radio" id="depVercel" name="provider" value="vercel" />
+            <label for="depVercel">
+              <strong>Vercel</strong>
+              <span>Deploy to Vercel</span>
+            </label>
+          </div>
+          <div class="radio-option">
+            <input type="radio" id="depNetlify" name="provider" value="netlify" />
+            <label for="depNetlify">
+              <strong>Netlify</strong>
+              <span>Deploy to Netlify</span>
             </label>
           </div>
         </div>
       </fieldset>
 
       <div class="field">
-        <label for="deployCustomUrlInput">Your External Hosted Live URL (Optional override)</label>
+        <label for="deployCustomUrlInput">Custom Production URL (Optional)</label>
         <input
           type="text"
           id="deployCustomUrlInput"
           name="customLiveUrl"
-          placeholder="https://my-launched-site.vercel.app"
+          placeholder="https://app.yourdomain.com"
           autocorrect="off"
           autocapitalize="none"
           spellcheck="false"
@@ -961,12 +974,12 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
       </div>
 
       <div class="field">
-        <label for="deployWebhookUrlInput">Deploy Webhook URL (Optional — POSTs staged files on launch)</label>
+        <label for="deployWebhookUrlInput">Deploy Webhook URL (Optional)</label>
         <input
           type="text"
           id="deployWebhookUrlInput"
           name="webhookUrl"
-          placeholder="https://api.netlify.com/build_hooks/... or custom endpoint"
+          placeholder="https://api.netlify.com/build_hooks/..."
           autocorrect="off"
           autocapitalize="none"
           spellcheck="false"
@@ -975,12 +988,12 @@ curl -X POST http://localhost:3000/api/agent/v1/spaces/alex/agent-built-web-app/
 
       <div class="dialog-footer" style="justify-content: space-between; flex-wrap: wrap;">
         <button type="button" class="btn btn-outline btn-sm" id="goToBuyHostingFromModalBtn">
-          🛒 Need Hosting? Buy a Plan ($5/mo)
+          View Hosting Plans
         </button>
         <div style="display: flex; gap: 0.5rem;">
-          <button type="button" class="btn btn-ghost" data-close-dialog="deployHostingDialog">Cancel</button>
-          <button type="submit" class="btn btn-primary" id="confirmDeployHostBtn">
-            🚀 Deploy &amp; Launch Space
+          <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="deployHostingDialog">Cancel</button>
+          <button type="submit" class="btn btn-primary btn-sm" id="confirmDeployHostBtn">
+            Deploy Now
           </button>
         </div>
       </div>
