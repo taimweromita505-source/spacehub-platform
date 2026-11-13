@@ -2505,6 +2505,30 @@ const spaceHubWorker = {
     }
 
     const reviewMatch = pathname.match(/^\/api\/draft-review\/([a-f0-9]{64})$/);
+    const feedbackMatch = pathname.match(/^\/api\/draft-review\/([a-f0-9]{64})\/feedback$/);
+    if (feedbackMatch && ['GET', 'POST'].includes(method)) {
+      const review = db.spaces.flatMap((space) => space.draftReviews || [])
+        .find((entry) => entry.token === feedbackMatch[1] && entry.expiresAt > Date.now());
+      const headers = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+        'X-Robots-Tag': 'noindex, nofollow',
+        'Content-Security-Policy': "default-src 'none'; frame-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" };
+      if (!review) return new Response('This draft review link is unavailable.', { status: 404, headers });
+      if (method === 'POST') {
+        const form = await request.formData().catch(() => null);
+        const message = String(form?.get('message') || '').trim();
+        if (!message || message.length > 1000) return new Response('Enter a comment of 1–1000 characters.', { status: 400, headers });
+        review.comments ||= [];
+        if (review.comments.length >= 25) return new Response('This review has reached its comment limit.', { status: 409, headers });
+        review.comments.push({ id: crypto.randomUUID(), message, createdAt: Date.now(), resolved: false });
+        await saveDb(env, db);
+        return new Response(null, { status: 303, headers: { ...headers, Location: pathname + '?sent=1' } });
+      }
+      return new Response('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceHub draft feedback</title><h1>Review this draft</h1>' +
+        '<iframe title="Draft snapshot" sandbox="allow-scripts" width="95%" height="480" src="/api/draft-review/' + feedbackMatch[1] + '"></iframe>' +
+        (url.searchParams.has('sent') ? '<p role="status">Comment submitted.</p>' : '') +
+        '<form method="post"><label for="message">Feedback for the Space owner</label><br><textarea id="message" name="message" maxlength="1000" required rows="5" cols="34"></textarea><br><button>Send feedback</button></form></html>',
+        { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' } });
+    }
     if (reviewMatch && method === 'GET') {
       const review = db.spaces.flatMap((space) => space.draftReviews || [])
         .find((entry) => entry.token === reviewMatch[1] && entry.expiresAt > Date.now());
@@ -4008,10 +4032,18 @@ const spaceHubWorker = {
           }
           const now = Date.now();
           const reviews = (space.draftReviews || []).filter((review) => review.expiresAt > now);
-          const summarize = ({ token, expiresAt }) => ({
-            token, expiresAt, url: new URL('/api/draft-review/' + token, url.origin).href
+          const summarize = ({ token, expiresAt, comments = [] }) => ({
+            token, expiresAt, comments, url: new URL('/api/draft-review/' + token, url.origin).href
           });
           if (method === 'GET') return jsonResponse({ reviews: reviews.map(summarize) }, 200, { 'Cache-Control': 'no-store' });
+          if (method === 'PUT') {
+            const review = reviews.find(({ token }) => token === body.token);
+            const comment = review?.comments?.find(({ id }) => id === body.commentId);
+            if (!comment) return jsonResponse({ error: 'Comment no longer available.' }, 404);
+            comment.resolved = true;
+            await saveDb(env, db);
+            return jsonResponse({ resolved: true });
+          }
           if (method === 'POST') {
             if (reviews.length >= 3) return jsonResponse({ error: 'Revoke an existing link before creating another.' }, 409);
             const review = {

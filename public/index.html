@@ -508,6 +508,11 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <dt>Last release</dt><dd id="studioHostingRelease"></dd>
           <dt>Visibility</dt><dd id="studioHostingVisibility"></dd>
         </dl>
+        <div id="domainDiagnostics" hidden>
+          <p id="domainInstructions"></p>
+          <button type="button" class="btn btn-outline btn-xs" id="checkCustomDomain">Check DNS and HTTPS</button>
+          <p id="domainCheckResult" role="status"></p>
+        </div>
         <p id="studioHostingStatus" role="status"></p>
         <button type="button" class="btn btn-outline btn-xs" id="studioHostingCheck" hidden>Check live release</button>
       </details>
@@ -558,7 +563,15 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           </form>
         </div>
 
-        <div class="workspace-split">
+        <div class="phone-workspace-controls" aria-label="Workspace view">
+          <div role="group" aria-label="Workspace panes">
+            <button type="button" class="btn btn-outline btn-xs" data-phone-pane="files" aria-pressed="false">Files</button>
+            <button type="button" class="btn btn-outline btn-xs" data-phone-pane="editor" aria-pressed="true">Editor</button>
+            <button type="button" class="btn btn-outline btn-xs" data-phone-pane="preview" aria-pressed="false">Preview</button>
+          </div>
+          <button type="button" class="btn btn-primary btn-xs" id="phoneSaveDraft" hidden>Save draft</button>
+        </div>
+        <div class="workspace-split" data-phone-pane="editor">
           <!-- Left: Code Editor -->
           <div class="editor-pane" id="editorPane">
             <div class="file-tabs-bar">
@@ -1698,6 +1711,8 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
 
       <section class="field" aria-labelledby="publishReviewHeading">
         <h3 id="publishReviewHeading">Review before publishing</h3>
+        <p id="publishPreflightStatus" role="status"></p>
+        <ul id="publishPreflightFindings"></ul>
         <dl id="publishReview" class="publish-review" aria-live="polite"></dl>
         <button type="button" class="btn btn-outline btn-xs" id="publishDiffBtn">Compare files</button>
         <button type="button" class="btn btn-outline btn-xs" id="publishVerifyBtn" hidden>Check live release again</button>

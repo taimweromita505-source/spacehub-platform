@@ -534,6 +534,7 @@ function updateLiveStagingPreview() {
 
 function updateStudioHeaderBadges(space) {
   renderStudioHosting(space);
+  document.getElementById('phoneSaveDraft').hidden = !space.isOwner;
   const reviewPanel = document.getElementById('draftReviewPanel');
   reviewPanel.hidden = !space.isPrimaryOwner;
   reviewPanel.open = false;
@@ -783,6 +784,7 @@ async function openSpaceStudio(username, slug) {
     const space = data.space;
     state.currentSpace = space;
 
+    selectPhonePane('editor');
     const sourceFiles = space.isOwner
       ? space.draftFiles || space.publishedFiles || {}
       : space.publishedFiles || {};
@@ -1743,12 +1745,89 @@ const restoreButton = document.getElementById('restoreReleaseBtn');
 const historySelect = document.getElementById('releaseHistorySelect');
 const historyPanel = document.getElementById('releaseHistoryPanel');
 let pendingVerification;
+
+const phoneButtons = [...document.querySelectorAll('.phone-workspace-controls [data-phone-pane]')];
+function selectPhonePane(pane) {
+  document.querySelector('.workspace-split').dataset.phonePane = pane;
+  phoneButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.phonePane === pane)));
+}
+phoneButtons.forEach((button) => button.addEventListener('click', () => selectPhonePane(button.dataset.phonePane)));
+document.getElementById('fileTabsList').addEventListener('click', (event) => {
+  if (event.target.closest('.file-tab')) selectPhonePane('editor');
+});
+document.getElementById('phoneSaveDraft').addEventListener('click', () => document.getElementById('saveDraftBtn').click());
+
+const domainResult = document.getElementById('domainCheckResult');
+document.getElementById('checkCustomDomain').addEventListener('click', async (event) => {
+  const domain = state.currentSpace?.customDomain;
+  if (!domain || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain)) return;
+  const report = (message) => {
+    if (state.currentSpace?.customDomain === domain) domainResult.textContent = message;
+  };
+  const button = event.currentTarget;
+  button.disabled = true;
+  report('Checking public DNS…');
+  try {
+    const query = new URL('https://cloudflare-dns.com/dns-query');
+    query.search = new URLSearchParams({ name: domain, type: 'CNAME' });
+    const response = await fetch(query, { headers: { Accept: 'application/dns-json' }, signal: AbortSignal.timeout(7000) });
+    if (!response.ok) throw Error('DNS lookup failed');
+    const dns = await response.json();
+    const target = dns.Answer?.find(({ type }) => type === 5)?.data?.replace(/\.$/, '').toLowerCase();
+    if (target !== 'spacehub.win') {
+      report(target ? 'CNAME points to ' + target + '. Check the expected target before retrying.' :
+        'No public CNAME found. Check the DNS record or whether your provider flattens it.');
+      return;
+    }
+    try {
+      await fetch('https://' + domain + '/', { mode: 'no-cors', credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(7000) });
+      report('DNS points to SpaceHub and HTTPS responded. Open your domain to confirm it serves this Space.');
+    } catch {
+      report('DNS points to SpaceHub. HTTPS could not be reached. Check certificate and hostname routing, then retry.');
+    }
+  } catch {
+    report('DNS lookup unavailable. Try again.');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function renderPublishPreflight(files) {
+  const findings = [];
+  const site = 'https://spacehub-preflight.invalid';
+  const paths = new Set(Object.keys(files).map((name) => new URL(name, site).pathname));
+  if (!paths.has('/index.html')) findings.push('Missing index.html.');
+  for (const [file, source] of Object.entries(files)) {
+    if (!/\.html?$/i.test(file) || typeof source !== 'string') continue;
+    const template = document.createElement('template');
+    template.innerHTML = source;
+    if (!template.content.querySelector('title')?.textContent.trim()) findings.push(file + ' is missing a page title.');
+    for (const element of template.content.querySelectorAll('a[href], img[src], script[src], link[rel="stylesheet"][href], source[src]')) {
+      const ref = (element.getAttribute('src') || element.getAttribute('href') || '').trim();
+      if (!ref || ref.startsWith('#')) continue;
+      let target;
+      try { target = new URL(ref, new URL(file, site)); } catch { continue; }
+      if (target.origin !== site) continue;
+      const path = target.pathname.endsWith('/') ? target.pathname + 'index.html' : target.pathname;
+      if (!paths.has(path)) findings.push(file + ' references missing ' + ref);
+    }
+  }
+  const unique = [...new Set(findings)];
+  document.getElementById('publishPreflightStatus').textContent = unique.length
+    ? 'Preflight found ' + unique.length + ' possible issue(s).' : 'Preflight found no missing titles or local files.';
+  const list = document.getElementById('publishPreflightFindings');
+  list.replaceChildren(...unique.slice(0, 20).map((issue) => {
+    const row = document.createElement('li');
+    row.textContent = issue;
+    return row;
+  }));
+}
 const draftReviewPanel = document.getElementById('draftReviewPanel');
 const draftReviewStatus = document.getElementById('draftReviewStatus');
 const draftReviewLinks = document.getElementById('draftReviewLinks');
 const createDraftReview = document.getElementById('createDraftReview');
 
-async function updateDraftReviews(method = 'GET', token) {
+async function updateDraftReviews(method = 'GET', token, commentId) {
   const space = state.currentSpace;
   if (!space?.isPrimaryOwner) return;
   const endpoint = releaseEndpoint(space).replace(/releases$/, 'draft-reviews');
@@ -1757,14 +1836,15 @@ async function updateDraftReviews(method = 'GET', token) {
   draftReviewStatus.textContent = '';
   try {
     if (method !== 'GET') {
-      await apiFetch(endpoint, { method, body: JSON.stringify({ token }) });
+      await apiFetch(endpoint, { method, body: JSON.stringify({ token, commentId }) });
     }
     const { reviews } = await apiFetch(endpoint);
     if (state.currentSpace !== space) return;
     draftReviewLinks.replaceChildren(...reviews.map((review) => {
       const row = document.createElement('li');
       const link = document.createElement('input');
-      link.value = review.url;
+      const feedbackUrl = review.url + '/feedback';
+      link.value = feedbackUrl;
       link.readOnly = true;
       link.setAttribute('aria-label', 'Draft review URL');
       const expiry = document.createElement('span');
@@ -1774,7 +1854,7 @@ async function updateDraftReviews(method = 'GET', token) {
       copy.textContent = 'Copy link';
       copy.onclick = async () => {
         try {
-          await navigator.clipboard.writeText(review.url);
+          await navigator.clipboard.writeText(feedbackUrl);
           draftReviewStatus.textContent = 'Review link copied.';
         } catch {
           link.select();
@@ -1786,10 +1866,23 @@ async function updateDraftReviews(method = 'GET', token) {
       revoke.textContent = 'Revoke';
       revoke.onclick = () => updateDraftReviews('DELETE', review.token);
       row.append(link, expiry, copy, revoke);
+      const comments = document.createElement('ul');
+      for (const comment of (review.comments || []).filter((entry) => !entry.resolved)) {
+        const item = document.createElement('li');
+        const message = document.createElement('span');
+        message.textContent = comment.message + ' ';
+        const resolve = document.createElement('button');
+        resolve.type = 'button';
+        resolve.textContent = 'Resolve';
+        resolve.onclick = () => updateDraftReviews('PUT', review.token, comment.id);
+        item.append(message, resolve);
+        comments.append(item);
+      }
+      if (comments.childElementCount) row.append(comments);
       return row;
     }));
     draftReviewStatus.textContent = method === 'POST' ? 'Review link created.' :
-      method === 'DELETE' ? 'Review link revoked.' : reviews.length ? '' : 'No active review links.';
+      method === 'DELETE' ? 'Review link revoked.' : method === 'PUT' ? 'Comment resolved.' : reviews.length ? '' : 'No active review links.';
   } catch (error) {
     if (state.currentSpace === space) draftReviewStatus.textContent = error.message;
   } finally {
@@ -1813,6 +1906,15 @@ function renderStudioHosting(space) {
   const panel = document.getElementById('studioHostingPanel');
   panel.hidden = !space.isOwner;
   if (panel.hidden) return;
+
+  const diagnostics = document.getElementById('domainDiagnostics');
+  diagnostics.hidden = !space.customDomain;
+  if (domainResult.dataset.domain !== space.customDomain) {
+    domainResult.textContent = '';
+    domainResult.dataset.domain = space.customDomain || '';
+  }
+  document.getElementById('domainInstructions').textContent = space.customDomain
+    ? 'Expected DNS record: CNAME ' + space.customDomain + ' → spacehub.win' : '';
 
   const host = space.externalHost;
   document.getElementById('studioHostingProvider').textContent = host?.providerLabel || 'No provider connected';
@@ -1943,6 +2045,7 @@ function renderPublishReview() {
   const connection = state.hostingConnections.find(({ id }) => id === options.connectionId);
   const provider = connection?.provider || options.provider;
   const draft = { ...space.draftFiles, ...state.workingFiles };
+  renderPublishPreflight(draft);
   const live = space.publishedFiles || {};
   const names = new Set([...Object.keys(draft), ...Object.keys(live)]);
   const changes = [...names].filter((name) => draft[name] !== live[name]).length;
