@@ -534,6 +534,9 @@ function updateLiveStagingPreview() {
 
 function updateStudioHeaderBadges(space) {
   renderStudioHosting(space);
+  const reviewPanel = document.getElementById('draftReviewPanel');
+  reviewPanel.hidden = !space.isPrimaryOwner;
+  reviewPanel.open = false;
   document.getElementById('studioEmoji').textContent = space.emoji || '🚀';
   document.getElementById('studioOwner').textContent = `@${space.ownerUsername}`;
   document.getElementById('studioTitle').textContent = space.title;
@@ -1679,6 +1682,68 @@ const restoreButton = document.getElementById('restoreReleaseBtn');
 const historySelect = document.getElementById('releaseHistorySelect');
 const historyPanel = document.getElementById('releaseHistoryPanel');
 let pendingVerification;
+const draftReviewPanel = document.getElementById('draftReviewPanel');
+const draftReviewStatus = document.getElementById('draftReviewStatus');
+const draftReviewLinks = document.getElementById('draftReviewLinks');
+const createDraftReview = document.getElementById('createDraftReview');
+
+async function updateDraftReviews(method = 'GET', token) {
+  const space = state.currentSpace;
+  if (!space?.isPrimaryOwner) return;
+  const endpoint = releaseEndpoint(space).replace(/releases$/, 'draft-reviews');
+  createDraftReview.disabled = true;
+  draftReviewLinks.inert = true;
+  draftReviewStatus.textContent = '';
+  try {
+    if (method !== 'GET') {
+      await apiFetch(endpoint, { method, body: JSON.stringify({ token }) });
+    }
+    const { reviews } = await apiFetch(endpoint);
+    if (state.currentSpace !== space) return;
+    draftReviewLinks.replaceChildren(...reviews.map((review) => {
+      const row = document.createElement('li');
+      const link = document.createElement('input');
+      link.value = review.url;
+      link.readOnly = true;
+      link.setAttribute('aria-label', 'Draft review URL');
+      const expiry = document.createElement('span');
+      expiry.textContent = 'Expires ' + new Date(review.expiresAt).toLocaleString();
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.textContent = 'Copy link';
+      copy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(review.url);
+          draftReviewStatus.textContent = 'Review link copied.';
+        } catch {
+          link.select();
+          draftReviewStatus.textContent = 'Copy the selected URL.';
+        }
+      };
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.textContent = 'Revoke';
+      revoke.onclick = () => updateDraftReviews('DELETE', review.token);
+      row.append(link, expiry, copy, revoke);
+      return row;
+    }));
+    draftReviewStatus.textContent = method === 'POST' ? 'Review link created.' :
+      method === 'DELETE' ? 'Review link revoked.' : reviews.length ? '' : 'No active review links.';
+  } catch (error) {
+    if (state.currentSpace === space) draftReviewStatus.textContent = error.message;
+  } finally {
+    createDraftReview.disabled = false;
+    draftReviewLinks.inert = false;
+  }
+}
+
+draftReviewPanel.addEventListener('toggle', () => {
+  if (draftReviewPanel.open) {
+    draftReviewLinks.replaceChildren();
+    updateDraftReviews();
+  }
+});
+createDraftReview.addEventListener('click', () => updateDraftReviews('POST'));
 const hostingCheck = document.getElementById('studioHostingCheck');
 const hostingStatus = document.getElementById('studioHostingStatus');
 let verifiedReleaseId;
