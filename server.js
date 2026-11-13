@@ -2190,7 +2190,7 @@ function buildBundledHtml(files, space = null) {
 
 app.get(['/live/:slug/manifest.webmanifest', '/s/:slug/manifest.webmanifest'], (req, res) => {
   const db = loadDb();
-  const space = db.spaces.find((s) => s.slug === req.params.slug.toLowerCase());
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
   if (!space) return res.status(404).json({ error: 'Space not found' });
   const origin = `${req.protocol}://${req.get('host')}`;
   res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
@@ -2199,7 +2199,7 @@ app.get(['/live/:slug/manifest.webmanifest', '/s/:slug/manifest.webmanifest'], (
 
 app.get(['/live/:slug/icon.svg', '/s/:slug/icon.svg'], (req, res) => {
   const db = loadDb();
-  const space = db.spaces.find((s) => s.slug === req.params.slug.toLowerCase());
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
   if (!space) return res.status(404).send('Not found');
   res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
   res.send(generateSpaceIconSvg(space.title));
@@ -2220,7 +2220,7 @@ app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) 
     ? db.spaces.find(
         (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
       )
-    : db.spaces.find((s) => s.slug === slug.toLowerCase());
+    : [...db.spaces].reverse().find((s) => s.slug === slug.toLowerCase());
 
   const isOwner = Boolean(user && space && space.ownerId === user.id);
 
