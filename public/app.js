@@ -735,6 +735,12 @@ async function openSpaceStudio(username, slug) {
     if (customDomainInput) customDomainInput.value = space.customDomain || '';
     const webhookUrlInput = document.getElementById('settingsWebhookUrlInput');
     if (webhookUrlInput) webhookUrlInput.value = space.submissionWebhookUrl || '';
+    const collaboratorsInput = document.getElementById('settingsCollaboratorsInput');
+    if (collaboratorsInput) {
+      collaboratorsInput.value = Array.isArray(space.collaborators)
+        ? space.collaborators.join(', ')
+        : '';
+    }
 
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
@@ -891,6 +897,30 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'space_ai') {
+    const slug = state.currentSpace.slug;
+    const aiCode = `\n// --- SpaceHub Built-in AI Assistant SDK (/live/${slug}/ai) ---\nasync function askSpaceAI(prompt, system = '') {\n  const res = await fetch('/live/${slug}/ai', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ prompt, system })\n  });\n  return (await res.json()).reply;\n}\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + aiCode;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    showToast('Added askSpaceAI(prompt) helper to script.js!');
+    return;
+  }
+
+  if (stack === 'live_room') {
+    const slug = state.currentSpace.slug;
+    const roomCode = `\n// --- SpaceHub Real-Time Multiplayer & Live Chat Room SDK (/live/${slug}/room) ---\nasync function sendRoomEvent(sender, text, payload = {}) {\n  const res = await fetch('/live/${slug}/room', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ sender, text, payload })\n  });\n  return (await res.json()).events || [];\n}\nasync function getRoomEvents() {\n  const res = await fetch('/live/${slug}/room');\n  return (await res.json()).events || [];\n}\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + roomCode;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    showToast('Added sendRoomEvent() & getRoomEvents() SDK to script.js!');
+    return;
+  }
+
   if (stack === 'creator_checkout') {
     const recipient = encodeURIComponent(state.user?.email || 'romitat924@gmail.com');
     const itemName = encodeURIComponent(`${state.currentSpace.title} — Creator Pass`);
@@ -974,6 +1004,115 @@ document.getElementById('codeEditorTextarea').addEventListener('input', (e) => {
 document.getElementById('refreshPreviewBtn').addEventListener('click', () => {
   updateLiveStagingPreview();
   showToast('Staging preview refreshed');
+});
+
+// In-Studio SEO, Mobile & Accessibility Auditor
+function runSpaceQualityAudit() {
+  if (!state.currentSpace) return;
+  const html = state.workingFiles['index.html'] || '';
+  const checks = [
+    {
+      label: 'Document <title> tag present',
+      passed: /<title>[^<]+<\/title>/i.test(html),
+      pts: 20,
+      hint: 'Helps search engines and mobile home-screen icons label your app.'
+    },
+    {
+      label: 'Responsive mobile <meta name="viewport"> tag',
+      passed: /name=["']viewport["']/i.test(html),
+      pts: 20,
+      hint: 'Ensures proper scaling on Android and iPhone screens.'
+    },
+    {
+      label: 'SEO <meta name="description"> tag',
+      passed: /name=["']description["']/i.test(html),
+      pts: 20,
+      hint: 'Improves search ranking snippets and social link previews.'
+    },
+    {
+      label: 'Semantic <main> or <h1> heading landmark',
+      passed: /<main[\s>]|<h1[\s>]/i.test(html),
+      pts: 20,
+      hint: 'Essential for screen readers and keyboard navigation.'
+    },
+    {
+      label: 'All <img> tags include accessible alt attributes',
+      passed: !/<img(?![^>]*\balt=)[^>]*>/i.test(html),
+      pts: 20,
+      hint: 'Every image should provide an alt attribute for accessibility.'
+    }
+  ];
+
+  const score = checks.reduce((sum, c) => sum + (c.passed ? c.pts : 0), 0);
+  const scoreBadge = document.getElementById('auditScoreBadge');
+  if (scoreBadge) {
+    scoreBadge.textContent = `${score} / 100`;
+    scoreBadge.style.color = score === 100 ? '#34d399' : score >= 60 ? '#fbbf24' : '#f87171';
+  }
+  const container = document.getElementById('auditChecklistContainer');
+  if (container) {
+    container.innerHTML = checks
+      .map(
+        (c) => `
+      <div class="pat-key-item">
+        <div>
+          <strong>${c.passed ? '✓' : '⚠'} ${escapeHtml(c.label)}</strong>
+          <div class="section-sub">${escapeHtml(c.hint)}</div>
+        </div>
+        <span class="badge-pill">${c.passed ? `+${c.pts} pts` : 'Missing'}</span>
+      </div>
+    `
+      )
+      .join('');
+  }
+  const fixBtn = document.getElementById('autoFixAuditBtn');
+  if (fixBtn) {
+    fixBtn.hidden = !(state.currentSpace.isOwner && score < 100);
+  }
+}
+
+document.getElementById('auditSpaceBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace) return;
+  runSpaceQualityAudit();
+  document.getElementById('spaceAuditDialog')?.showModal();
+});
+
+document.getElementById('autoFixAuditBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  let html = state.workingFiles['index.html'] || '<!DOCTYPE html>\n<html lang="en">\n<head>\n</head>\n<body>\n</body>\n</html>';
+  const safeTitle = escapeHtml(state.currentSpace.title || 'Space Web App');
+  const safeDesc = escapeHtml(state.currentSpace.description || `${safeTitle} — Built on SpaceHub`);
+
+  if (!/<head[\s>]/i.test(html)) {
+    html = `<head>\n  <meta charset="UTF-8" />\n</head>\n` + html;
+  }
+  if (!/name=["']viewport["']/i.test(html)) {
+    html = html.replace(/<head[^>]*>/i, (m) => `${m}\n  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />`);
+  }
+  if (!/name=["']description["']/i.test(html)) {
+    html = html.replace(/<head[^>]*>/i, (m) => `${m}\n  <meta name="description" content="${safeDesc}" />`);
+  }
+  if (!/<title>[^<]+<\/title>/i.test(html)) {
+    html = html.replace(/<head[^>]*>/i, (m) => `${m}\n  <title>${safeTitle}</title>`);
+  }
+  html = html.replace(/<img(?![^>]*\balt=)([^>]*)>/gi, '<img alt="App illustration"$1>');
+  if (!/<main[\s>]|<h1[\s>]/i.test(html)) {
+    if (html.includes('<body')) {
+      html = html.replace(/<body[^>]*>/i, (m) => `${m}\n  <h1 style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">${safeTitle}</h1>`);
+    } else {
+      html = `<h1>${safeTitle}</h1>\n` + html;
+    }
+  }
+
+  state.workingFiles['index.html'] = html;
+  state.isDirty = true;
+  if (state.activeFile === 'index.html') {
+    document.getElementById('codeEditorTextarea').value = html;
+  }
+  document.getElementById('dirtyIndicator').textContent = '● Auto-fixed SEO & Accessibility (Unsaved)';
+  updateLiveStagingPreview();
+  runSpaceQualityAudit();
+  showToast('Auto-fixed SEO, Mobile Viewport & Accessibility tags in index.html!');
 });
 
 // Responsive Viewport Switcher (Desktop / Tablet / Mobile Portrait / Mobile Landscape)
@@ -1586,6 +1725,7 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
   const secrets = document.getElementById('settingsSecretsInput')?.value || '';
   const customDomain = document.getElementById('settingsCustomDomainInput')?.value.trim() || '';
   const submissionWebhookUrl = document.getElementById('settingsWebhookUrlInput')?.value.trim() || '';
+  const collaborators = document.getElementById('settingsCollaboratorsInput')?.value.trim() || '';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
@@ -1602,6 +1742,7 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
         previewPasscode,
         customDomain,
         submissionWebhookUrl,
+        collaborators,
         secrets
       })
     });

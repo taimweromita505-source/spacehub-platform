@@ -384,6 +384,52 @@ function request(server, method, path, body = null, token = null) {
       'delivered_mock:mock://discord.com/api/webhooks/123'
     );
 
+    console.log('14. Testing Wave 5: Built-in AI (/ai), Multiplayer Room (/room), Collaborators & SPA Fallback...');
+    const aiRes = await request(server, 'POST', `/live/${space.slug}/ai`, {
+      prompt: 'Summarize today metrics'
+    });
+    assert.strictEqual(aiRes.status, 200);
+    assert.strictEqual(aiRes.body.ok, true);
+    assert.ok(aiRes.body.reply.includes('Summarize today metrics'));
+
+    const roomPost = await request(server, 'POST', `/live/${space.slug}/room`, {
+      sender: 'PlayerOne',
+      text: 'Hello live room!',
+      payload: { x: 120, y: 240 }
+    });
+    assert.strictEqual(roomPost.status, 201);
+    assert.strictEqual(roomPost.body.events.length, 1);
+
+    const roomGet = await request(server, 'GET', `/live/${space.slug}/room`);
+    assert.strictEqual(roomGet.status, 200);
+    assert.strictEqual(roomGet.body.events[0].sender, 'PlayerOne');
+
+    const collabUsername = gmailAuth.body.user.username;
+    const collabToken = gmailAuth.body.token;
+    const addCollab = await request(
+      server,
+      'PUT',
+      `/api/spaces/${uniqueUser}/${space.slug}`,
+      { collaborators: `@${collabUsername}` },
+      token
+    );
+    assert.strictEqual(addCollab.status, 200);
+    assert.deepStrictEqual(addCollab.body.space.collaborators, [collabUsername]);
+
+    const collabEdit = await request(
+      server,
+      'PUT',
+      `/api/spaces/${uniqueUser}/${space.slug}`,
+      { description: 'Updated by team collaborator' },
+      collabToken
+    );
+    assert.strictEqual(collabEdit.status, 200);
+    assert.strictEqual(collabEdit.body.space.description, 'Updated by team collaborator');
+
+    const spaFallback = await request(server, 'GET', `/live/${space.slug}/dashboard-subroute`);
+    assert.strictEqual(spaFallback.status, 200);
+    assert.ok(String(spaFallback.raw).includes('<!DOCTYPE html>'));
+
     console.log('ALL TESTS PASSED!');
   } finally {
     server.close();

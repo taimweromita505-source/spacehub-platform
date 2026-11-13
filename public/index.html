@@ -531,6 +531,8 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                   <option value="cloud_db">Space Cloud Storage Helper</option>
                   <option value="proxy_helper">Server-Side API Proxy Helper</option>
                   <option value="app_auth">Member Login / Auth Gate</option>
+                  <option value="space_ai">Built-in AI Assistant SDK</option>
+                  <option value="live_room">Live Chat / Multiplayer Room SDK</option>
                   <option value="creator_checkout">Creator Buy / Tip Button</option>
                 </select>
                 <label for="themePresetSelect" class="visually-hidden">Remix Visual Theme</label>
@@ -577,9 +579,14 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
               <div class="chrome-address" id="previewAddressBar">
                 staging://index.html
               </div>
-              <button type="button" class="btn btn-ghost btn-xs" id="refreshPreviewBtn">
-                Refresh
-              </button>
+              <div style="display: flex; align-items: center; gap: 0.35rem;">
+                <button type="button" class="btn btn-ghost btn-xs" id="auditSpaceBtn" title="Run SEO, Mobile &amp; Accessibility Audit">
+                  Audit
+                </button>
+                <button type="button" class="btn btn-ghost btn-xs" id="refreshPreviewBtn">
+                  Refresh
+                </button>
+              </div>
             </div>
             <div class="preview-stage" id="previewStage">
               <iframe
@@ -873,6 +880,20 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 spellcheck="false"
               />
             </div>
+          </div>
+
+          <div class="field">
+            <label for="settingsCollaboratorsInput">Team Collaborators (Optional)</label>
+            <span class="hint">Enter SpaceHub usernames separated by commas (e.g. <code>alex, sam_dev</code>) to grant staging edit &amp; AI builder access.</span>
+            <input
+              type="text"
+              id="settingsCollaboratorsInput"
+              name="collaborators"
+              placeholder="teammate1, teammate2"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+            />
           </div>
 
           <div class="settings-actions">
@@ -1653,6 +1674,30 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
         </button>
       </div>
     </form>
+  </dialog>
+
+  <!-- DIALOG 9: IN-STUDIO SEO, MOBILE & ACCESSIBILITY AUDITOR -->
+  <dialog id="spaceAuditDialog" closedby="any" aria-labelledby="spaceAuditDialogTitle">
+    <div style="padding: 1.5rem;">
+      <div class="dialog-header" style="padding: 0 0 1rem 0;">
+        <h2 id="spaceAuditDialogTitle">Space Readiness &amp; Quality Audit</h2>
+        <button type="button" class="btn-icon" data-close-dialog="spaceAuditDialog" aria-label="Close dialog">✕</button>
+      </div>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-elevated); margin-block-end: 1rem;">
+        <div>
+          <strong style="font-size: 1rem;">Overall Readiness Score</strong>
+          <div class="section-sub">Checks Mobile Viewport, SEO Meta Tags, Landmarks, Image Alt Text &amp; PWA Config</div>
+        </div>
+        <div id="auditScoreBadge" style="font-size: 1.5rem; font-weight: 800; color: var(--text);">100 / 100</div>
+      </div>
+      <div id="auditChecklistContainer" class="pat-keys-list" style="margin-block-end: 1.25rem;"></div>
+      <div class="dialog-footer" style="padding: 0;">
+        <button type="button" class="btn btn-ghost btn-sm" data-close-dialog="spaceAuditDialog">Close</button>
+        <button type="button" class="btn btn-primary btn-sm" id="autoFixAuditBtn">
+          1-Click Auto-Fix HTML &amp; SEO
+        </button>
+      </div>
+    </div>
   </dialog>
 
   <script src="/app.js"></script>

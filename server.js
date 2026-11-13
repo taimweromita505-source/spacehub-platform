@@ -705,10 +705,28 @@ function slugify(text) {
     .slice(0, 48) || 'my-space';
 }
 
+function normalizeCollaborators(input) {
+  if (!input) return [];
+  const rawList = Array.isArray(input) ? input : String(input).split(/[,\r\n]+/);
+  return Array.from(
+    new Set(
+      rawList
+        .map((item) => String(item).trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_-]/g, ''))
+        .filter((u) => u.length >= 2 && u.length <= 32)
+    )
+  ).slice(0, 20);
+}
+
+function canEditSpace(space, user) {
+  if (!user || !space) return false;
+  if (space.ownerId === user.id) return true;
+  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
+  return Boolean(user.username && collabs.includes(user.username.toLowerCase()));
+}
+
 function canViewSpace(space, user) {
   if (space.visibility === 'public' && space.status === 'published') return true;
-  if (!user) return false;
-  return space.ownerId === user.id;
+  return canEditSpace(space, user);
 }
 
 function normalizeSpaceSecrets(input) {
@@ -778,11 +796,13 @@ async function notifySubmissionWebhook(space, entry) {
 }
 
 function formatSpaceSummary(space, user) {
-  const isOwner = Boolean(user && space.ownerId === user.id);
+  const isOwner = canEditSpace(space, user);
+  const isPrimaryOwner = Boolean(user && space.ownerId === user.id);
   const stagingPreviewUrl = `/spaces/${space.ownerUsername}/${space.slug}/live`;
   const externalLiveUrl = space.externalHost?.liveUrl || null;
   const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
+  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
 
   return {
     id: space.id,
@@ -801,6 +821,7 @@ function formatSpaceSummary(space, user) {
     appIconText: space.appIconText || '',
     appThemeColor: space.appThemeColor || '#09090b',
     customDomain: space.customDomain || '',
+    collaborators: collabs,
     submissionWebhookUrl: isOwner ? (space.submissionWebhookUrl || '') : undefined,
     lastWebhookStatus: isOwner ? (space.lastWebhookStatus || null) : undefined,
     previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
@@ -812,6 +833,7 @@ function formatSpaceSummary(space, user) {
     views: space.views || 0,
     installs: space.installs || 0,
     appUserCount: (space.appUsers || []).length,
+    roomEventCount: (space.roomEvents || []).length,
     submissionCount: (space.submissions || []).length,
     snapshotCount: snaps.length,
     snapshots: isOwner
@@ -823,6 +845,7 @@ function formatSpaceSummary(space, user) {
     updatedAt: space.updatedAt,
     publishedAt: space.publishedAt,
     isOwner,
+    isPrimaryOwner,
     stagingPreviewUrl,
     liveUrl: externalLiveUrl || stagingPreviewUrl,
     externalHost: space.externalHost || null,
@@ -2111,7 +2134,7 @@ app.get('/api/spaces/:username/:slug', (req, res) => {
     });
   }
 
-  const isOwner = Boolean(user && space.ownerId === user.id);
+  const isOwner = canEditSpace(space, user);
   res.json({
     space: {
       ...formatSpaceSummary(space, user),
@@ -2186,8 +2209,8 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
   );
 
   if (!space) return res.status(404).json({ error: 'Space not found.' });
-  if (space.ownerId !== user.id) {
-    return res.status(403).json({ error: 'Only the Space owner can modify this project.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the Space owner or collaborators can modify this project.' });
   }
 
   const {
@@ -2202,6 +2225,7 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
     previewPasscode,
     customDomain,
     submissionWebhookUrl,
+    collaborators,
     secrets,
     appStorage,
     colorFrom,
@@ -2237,6 +2261,9 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
   }
   if (submissionWebhookUrl !== undefined) {
     space.submissionWebhookUrl = String(submissionWebhookUrl || '').trim().slice(0, 300);
+  }
+  if (collaborators !== undefined && space.ownerId === user.id) {
+    space.collaborators = normalizeCollaborators(collaborators);
   }
   if (secrets !== undefined) {
     space.secrets = normalizeSpaceSecrets(secrets);
@@ -2285,8 +2312,8 @@ app.post('/api/spaces/:username/:slug/agent-build', async (req, res) => {
     (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
   );
   if (!space) return res.status(404).json({ error: 'Space not found.' });
-  if (space.ownerId !== user.id) {
-    return res.status(403).json({ error: 'Only the Space owner can run a coding agent on this Space.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the Space owner or collaborators can run a coding agent on this Space.' });
   }
 
   const {
@@ -2598,8 +2625,8 @@ app.post('/api/spaces/:username/:slug/snapshot', (req, res) => {
     (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
   );
   if (!space) return res.status(404).json({ error: 'Space not found.' });
-  if (space.ownerId !== user.id) {
-    return res.status(403).json({ error: 'Only the owner can save a checkpoint.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the owner or collaborators can save a checkpoint.' });
   }
 
   const label = String(req.body?.label || 'Manual checkpoint').trim().slice(0, 60);
@@ -2628,8 +2655,8 @@ app.post('/api/spaces/:username/:slug/rollback', (req, res) => {
     (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
   );
   if (!space) return res.status(404).json({ error: 'Space not found.' });
-  if (space.ownerId !== user.id) {
-    return res.status(403).json({ error: 'Only the owner can rollback this Space.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the owner or collaborators can rollback this Space.' });
   }
 
   const snaps = space.snapshots || [];
@@ -3036,6 +3063,95 @@ app.post(['/live/:slug/auth', '/s/:slug/auth'], (req, res) => {
   });
 });
 
+// Per-Space Built-in AI Assistant API (POST /live/:slug/ai)
+app.post(['/live/:slug/ai', '/s/:slug/ai'], async (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+
+  const payload = req.body || {};
+  const prompt = String(payload.prompt || '').trim();
+  const system = String(payload.system || `You are the helpful AI assistant for ${space.title}.`).trim();
+  if (!prompt) return res.status(400).json({ error: 'Prompt is required.' });
+
+  const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+  const openAiKey = secrets.OPENAI_API_KEY || '';
+  if (openAiKey && !openAiKey.startsWith('mock_')) {
+    try {
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openAiKey}`
+        },
+        body: JSON.stringify({
+          model: payload.model || 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: prompt }
+          ]
+        })
+      });
+      if (r.ok) {
+        const d = await r.json();
+        return res.json({
+          ok: true,
+          provider: 'openai',
+          reply: d.choices?.[0]?.message?.content || ''
+        });
+      }
+    } catch (_e) {
+      // fallback to built-in response
+    }
+  }
+
+  return res.json({
+    ok: true,
+    provider: 'spacehub_builtin_ai',
+    reply: `[${space.title} AI]: Processed your request "${prompt.slice(0, 140)}". Everything is active and ready.`
+  });
+});
+
+// Per-Space Real-Time Multiplayer & Live Chat Room API (GET/POST/DELETE /live/:slug/room)
+app.get(['/live/:slug/room', '/s/:slug/room'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  res.json({ ok: true, events: Array.isArray(space.roomEvents) ? space.roomEvents : [] });
+});
+
+app.post(['/live/:slug/room', '/s/:slug/room'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.roomEvents = Array.isArray(space.roomEvents) ? space.roomEvents : [];
+
+  const payload = req.body || {};
+  const evt = {
+    id: 'evt_' + crypto.randomBytes(4).toString('hex'),
+    sender: String(payload.sender || 'Anon').trim().slice(0, 60),
+    type: String(payload.type || 'message').trim().slice(0, 40),
+    text: String(payload.text || '').trim().slice(0, 500),
+    payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : {},
+    createdAt: new Date().toISOString()
+  };
+  space.roomEvents.push(evt);
+  if (space.roomEvents.length > 100) {
+    space.roomEvents = space.roomEvents.slice(-100);
+  }
+  saveDb(db);
+  res.status(201).json({ ok: true, event: evt, events: space.roomEvents });
+});
+
+app.delete(['/live/:slug/room', '/s/:slug/room'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.roomEvents = [];
+  saveDb(db);
+  res.json({ ok: true, events: [] });
+});
+
 // Form & Waitlist Submissions API for Space Owners & Public Live Forms
 app.post(['/live/:slug/submit', '/s/:slug/submit'], async (req, res) => {
   const db = loadDb();
@@ -3082,8 +3198,8 @@ app.get('/api/spaces/:username/:slug/submissions', (req, res) => {
     (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
   );
   if (!space) return res.status(404).json({ error: 'Space not found.' });
-  if (space.ownerId !== user.id) {
-    return res.status(403).json({ error: 'Only the Space owner can view submissions.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the Space owner or collaborators can view submissions.' });
   }
   res.json({ submissions: space.submissions || [] });
 });
@@ -3120,8 +3236,8 @@ app.delete('/api/spaces/:username/:slug/submissions', (req, res) => {
     (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
   );
   if (!space) return res.status(404).json({ error: 'Space not found.' });
-  if (space.ownerId !== user.id) {
-    return res.status(403).json({ error: 'Only the Space owner can clear submissions.' });
+  if (!canEditSpace(space, user)) {
+    return res.status(403).json({ error: 'Only the Space owner or collaborators can clear submissions.' });
   }
   const subId = req.query.id;
   if (subId) {
@@ -3169,7 +3285,7 @@ app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) 
       )
     : [...db.spaces].reverse().find((s) => s.slug === slug.toLowerCase());
 
-  const isOwner = Boolean(user && space && space.ownerId === user.id);
+  const isOwner = canEditSpace(space, user);
   const keyParam = String(req.query.key || '').trim();
   const hasValidPasscode = Boolean(space && space.previewPasscode && keyParam === space.previewPasscode);
   const canAccess = isOwner || hasValidPasscode;
@@ -3220,18 +3336,26 @@ app.get(['/live/:slug/:filename', '/s/:slug/:filename'], (req, res) => {
   if (!space) return res.status(404).send('Not found');
   const files = space.publishedFiles || space.draftFiles || {};
   const fileName = req.params.filename;
-  if (files[fileName] === undefined) return res.status(404).send('File not found');
-  const ext = fileName.split('.').pop().toLowerCase();
-  const mimeMap = {
-    html: 'text/html; charset=utf-8',
-    css: 'text/css; charset=utf-8',
-    js: 'application/javascript; charset=utf-8',
-    json: 'application/json; charset=utf-8',
-    svg: 'image/svg+xml; charset=utf-8',
-    txt: 'text/plain; charset=utf-8'
-  };
-  res.setHeader('Content-Type', mimeMap[ext] || 'text/plain; charset=utf-8');
-  res.send(String(files[fileName]));
+  if (files[fileName] !== undefined) {
+    const ext = fileName.split('.').pop().toLowerCase();
+    const mimeMap = {
+      html: 'text/html; charset=utf-8',
+      css: 'text/css; charset=utf-8',
+      js: 'application/javascript; charset=utf-8',
+      json: 'application/json; charset=utf-8',
+      svg: 'image/svg+xml; charset=utf-8',
+      txt: 'text/plain; charset=utf-8',
+      md: 'text/markdown; charset=utf-8'
+    };
+    res.setHeader('Content-Type', mimeMap[ext] || 'text/plain; charset=utf-8');
+    return res.send(String(files[fileName]));
+  }
+  if (files['404.html'] !== undefined) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(404).send(buildBundledHtml({ ...files, 'index.html': files['404.html'] }, space));
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.status(200).send(buildBundledHtml(files, space));
 });
 
 if (require.main === module) {

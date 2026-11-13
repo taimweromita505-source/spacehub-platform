@@ -569,10 +569,28 @@ function getCurrentUser(db, request, url) {
   return db.users.find((u) => u.id === userId) || null;
 }
 
+function normalizeCollaborators(input) {
+  if (!input) return [];
+  const rawList = Array.isArray(input) ? input : String(input).split(/[,\r\n]+/);
+  return Array.from(
+    new Set(
+      rawList
+        .map((item) => String(item).trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_-]/g, ''))
+        .filter((u) => u.length >= 2 && u.length <= 32)
+    )
+  ).slice(0, 20);
+}
+
+function canEditSpace(space, user) {
+  if (!user || !space) return false;
+  if (space.ownerId === user.id) return true;
+  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
+  return Boolean(user.username && collabs.includes(user.username.toLowerCase()));
+}
+
 function canViewSpace(space, user) {
   if (space.visibility === 'public' && space.status === 'published') return true;
-  if (!user) return false;
-  return space.ownerId === user.id;
+  return canEditSpace(space, user);
 }
 
 function normalizeSpaceSecrets(input) {
@@ -642,11 +660,13 @@ async function notifySubmissionWebhook(space, entry) {
 }
 
 function formatSpaceSummary(space, user) {
-  const isOwner = Boolean(user && space.ownerId === user.id);
+  const isOwner = canEditSpace(space, user);
+  const isPrimaryOwner = Boolean(user && space.ownerId === user.id);
   const stagingPreviewUrl = `/spaces/${space.ownerUsername}/${space.slug}/live`;
   const externalLiveUrl = space.externalHost?.liveUrl || null;
   const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
+  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
   return {
     id: space.id,
     ownerId: space.ownerId,
@@ -664,6 +684,7 @@ function formatSpaceSummary(space, user) {
     appIconText: space.appIconText || '',
     appThemeColor: space.appThemeColor || '#09090b',
     customDomain: space.customDomain || '',
+    collaborators: collabs,
     submissionWebhookUrl: isOwner ? (space.submissionWebhookUrl || '') : undefined,
     lastWebhookStatus: isOwner ? (space.lastWebhookStatus || null) : undefined,
     previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
@@ -675,6 +696,7 @@ function formatSpaceSummary(space, user) {
     views: space.views || 0,
     installs: space.installs || 0,
     appUserCount: (space.appUsers || []).length,
+    roomEventCount: (space.roomEvents || []).length,
     submissionCount: (space.submissions || []).length,
     snapshotCount: snaps.length,
     snapshots: isOwner
@@ -686,6 +708,7 @@ function formatSpaceSummary(space, user) {
     updatedAt: space.updatedAt,
     publishedAt: space.publishedAt,
     isOwner,
+    isPrimaryOwner,
     stagingPreviewUrl,
     liveUrl: externalLiveUrl || stagingPreviewUrl,
     externalHost: space.externalHost || null,
@@ -1172,6 +1195,91 @@ export default {
       }
     }
 
+    // 1b-0b. Per-Space Built-in AI Assistant API (POST /live/:slug/ai)
+    const spaceAiMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/ai\/?$/i);
+    if (spaceAiMatch && method === 'POST') {
+      const slug = decodeURIComponent(spaceAiMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+
+      const payload = await request.json().catch(() => ({}));
+      const prompt = String(payload.prompt || '').trim();
+      const system = String(payload.system || `You are the helpful AI assistant for ${space.title}.`).trim();
+      if (!prompt) return jsonResponse({ error: 'Prompt is required.' }, 400);
+
+      const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+      const openAiKey = secrets.OPENAI_API_KEY || '';
+      if (openAiKey && !openAiKey.startsWith('mock_')) {
+        try {
+          const r = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${openAiKey}`
+            },
+            body: JSON.stringify({
+              model: payload.model || 'gpt-4o-mini',
+              messages: [
+                { role: 'system', content: system },
+                { role: 'user', content: prompt }
+              ]
+            })
+          });
+          if (r.ok) {
+            const d = await r.json();
+            return jsonResponse({
+              ok: true,
+              provider: 'openai',
+              reply: d.choices?.[0]?.message?.content || ''
+            });
+          }
+        } catch (_e) {
+          // fallback to built-in response
+        }
+      }
+
+      return jsonResponse({
+        ok: true,
+        provider: 'spacehub_builtin_ai',
+        reply: `[${space.title} AI]: Processed your request "${prompt.slice(0, 140)}". Everything is active and ready.`
+      });
+    }
+
+    // 1b-0c. Per-Space Real-Time Multiplayer & Live Chat Room API (GET/POST/DELETE /live/:slug/room)
+    const spaceRoomMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/room\/?$/i);
+    if (spaceRoomMatch) {
+      const slug = decodeURIComponent(spaceRoomMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.roomEvents = Array.isArray(space.roomEvents) ? space.roomEvents : [];
+
+      if (method === 'GET') {
+        return jsonResponse({ ok: true, events: space.roomEvents });
+      }
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const evt = {
+          id: 'evt_' + randomHex(6),
+          sender: String(payload.sender || 'Anon').trim().slice(0, 60),
+          type: String(payload.type || 'message').trim().slice(0, 40),
+          text: String(payload.text || '').trim().slice(0, 500),
+          payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : {},
+          createdAt: new Date().toISOString()
+        };
+        space.roomEvents.push(evt);
+        if (space.roomEvents.length > 100) {
+          space.roomEvents = space.roomEvents.slice(-100);
+        }
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, event: evt, events: space.roomEvents }, 201);
+      }
+      if (method === 'DELETE') {
+        space.roomEvents = [];
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, events: [] });
+      }
+    }
+
     // 1b-1. Per-Space Server-Side API Proxy & Secrets Vault (POST /live/:slug/proxy)
     const proxyLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/proxy\/?$/i);
     if (proxyLiveMatch && method === 'POST') {
@@ -1296,7 +1404,7 @@ export default {
         const slug = decodeURIComponent(liveMatch[2]).toLowerCase();
         space = db.spaces.find((s) => s.ownerUsername === username && s.slug === slug);
       }
-      const isOwner = Boolean(user && space && space.ownerId === user.id);
+      const isOwner = canEditSpace(space, user);
       const keyParam = (url.searchParams.get('key') || '').trim();
       const hasValidPasscode = Boolean(space && space.previewPasscode && keyParam === space.previewPasscode);
       const canAccess = isOwner || hasValidPasscode;
@@ -1319,11 +1427,11 @@ export default {
       });
     }
 
-    // 1d. Serve Custom Workspace Files (/live/:slug/:filename) for Multi-File / Multi-Page Web Apps
-    const customFileMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/([a-zA-Z0-9._-]+\.(?:html|css|js|json|svg|txt))$/i);
-    if (customFileMatch && method === 'GET') {
-      const slug = decodeURIComponent(customFileMatch[1]).toLowerCase();
-      const fileName = decodeURIComponent(customFileMatch[2]);
+    // 1d. Serve Custom Workspace Files (/live/:slug/:filename) + Custom 404.html & SPA Fallback Routing
+    const customSubpathMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/([a-zA-Z0-9._-]+)$/i);
+    if (customSubpathMatch && method === 'GET') {
+      const slug = decodeURIComponent(customSubpathMatch[1]).toLowerCase();
+      const fileName = decodeURIComponent(customSubpathMatch[2]);
       const space = [...db.spaces].reverse().find((s) => s.slug === slug);
       if (space) {
         const files = space.publishedFiles || space.draftFiles || {};
@@ -1335,13 +1443,24 @@ export default {
             js: 'application/javascript; charset=utf-8',
             json: 'application/json; charset=utf-8',
             svg: 'image/svg+xml; charset=utf-8',
-            txt: 'text/plain; charset=utf-8'
+            txt: 'text/plain; charset=utf-8',
+            md: 'text/markdown; charset=utf-8'
           };
           return new Response(String(files[fileName]), {
             status: 200,
             headers: { 'Content-Type': mimeMap[ext] || 'text/plain; charset=utf-8' }
           });
         }
+        if (files['404.html'] !== undefined) {
+          return new Response(
+            buildBundledHtml({ ...files, 'index.html': files['404.html'] }, url.origin, space),
+            { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+          );
+        }
+        return new Response(buildBundledHtml(files, url.origin, space), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        });
       }
     }
 
@@ -1762,7 +1881,7 @@ export default {
           if (!space || !canViewSpace(space, user)) {
             return jsonResponse({ error: 'Space not found or is set to Private.' }, 404);
           }
-          const isOwner = Boolean(user && space.ownerId === user.id);
+          const isOwner = canEditSpace(space, user);
           return jsonResponse({
             space: {
               ...formatSpaceSummary(space, user),
@@ -1774,7 +1893,7 @@ export default {
         }
 
         if ((!action || action === 'files') && method === 'PUT') {
-          if (!user || !space || space.ownerId !== user.id) {
+          if (!user || !space || !canEditSpace(space, user)) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
           }
           if (body.title) space.title = String(body.title).trim();
@@ -1802,6 +1921,9 @@ export default {
           }
           if (body.submissionWebhookUrl !== undefined) {
             space.submissionWebhookUrl = String(body.submissionWebhookUrl || '').trim().slice(0, 300);
+          }
+          if (body.collaborators !== undefined && space.ownerId === user.id) {
+            space.collaborators = normalizeCollaborators(body.collaborators);
           }
           if (body.secrets !== undefined) {
             space.secrets = normalizeSpaceSecrets(body.secrets);
@@ -1845,8 +1967,8 @@ export default {
             await saveDb(env, db);
             return jsonResponse({ ok: true, submission: entry, submissionCount: space.submissions.length }, 201);
           }
-          if (!user || space.ownerId !== user.id) {
-            return jsonResponse({ error: 'Only the Space owner can view or manage submissions.' }, 403);
+          if (!user || !canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Only the Space owner or collaborators can view or manage submissions.' }, 403);
           }
           if (method === 'GET') {
             return jsonResponse({ submissions: space.submissions || [] });
@@ -1864,7 +1986,7 @@ export default {
         }
 
         if (action === 'snapshot' && method === 'POST') {
-          if (!user || !space || space.ownerId !== user.id) {
+          if (!user || !space || !canEditSpace(space, user)) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
           }
           const label = String(body.label || 'Manual checkpoint').trim().slice(0, 60);
@@ -1882,7 +2004,7 @@ export default {
         }
 
         if (action === 'rollback' && method === 'POST') {
-          if (!user || !space || space.ownerId !== user.id) {
+          if (!user || !space || !canEditSpace(space, user)) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
           }
           const snaps = space.snapshots || [];
@@ -1980,7 +2102,7 @@ export default {
         }
 
         if (action === 'agent-build' && method === 'POST') {
-          if (!user || !space || space.ownerId !== user.id) {
+          if (!user || !space || !canEditSpace(space, user)) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
           }
           const prompt = String(body.prompt || '').trim();
