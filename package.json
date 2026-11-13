@@ -1,0 +1,14 @@
+{
+  "name": "spacehub-platform",
+  "version": "1.0.0",
+  "description": "Hugging Face Spaces-inspired web creation, preview, and hosting platform with draft workspace and privacy controls",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "@google/genai": "^3.3.0",
+    "express": "^4.21.2"
+  }
+}
