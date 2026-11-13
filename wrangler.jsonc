@@ -20,7 +20,8 @@
   "vars": {
     "PAYPAL_BUSINESS_EMAIL": "romitat924@gmail.com",
     "PAYPAL_MODE": "live",
-    "ADMIN_USERNAMES": ""
+    "ADMIN_USERNAMES": "",
+    "GOOGLE_CLIENT_ID": ""
   },
   "triggers": {
     "crons": ["0 */6 * * *"]

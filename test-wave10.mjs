@@ -37,6 +37,31 @@ globalThis.fetch = async (input, init = {}) => {
     emails.push(JSON.parse(init.body));
     return json({ id: 'email_1' });
   }
+  if (target.startsWith('https://oauth2.googleapis.com/tokeninfo')) {
+    const url = new URL(target);
+    const token = url.searchParams.get('id_token');
+    if (token === 'bad-token') return json({ error: 'invalid_token' }, 401);
+    if (token === 'wrong-aud') return json({ aud: 'wrong-client-id', iss: 'accounts.google.com', email: 'alice@gmail.com', email_verified: true });
+    if (token === 'unverified-email') return json({ aud: env.GOOGLE_CLIENT_ID, iss: 'accounts.google.com', email: 'unverified@gmail.com', email_verified: false });
+    if (token === 'valid-sam-token') {
+      return json({
+        aud: env.GOOGLE_CLIENT_ID,
+        iss: 'accounts.google.com',
+        email: 'sam@example.com',
+        email_verified: true,
+        name: 'Sam'
+      });
+    }
+    if (token === 'valid-google-token') {
+      return json({
+        aud: env.GOOGLE_CLIENT_ID,
+        iss: 'accounts.google.com',
+        email: 'alice@gmail.com',
+        email_verified: true,
+        name: 'Alice Verified'
+      });
+    }
+  }
   if (!target.startsWith('https://api-m.sandbox.paypal.com')) return realFetch(input, init);
   if (target.endsWith('/v1/oauth2/token')) return json({ access_token: 'mock-token' });
   if (target.endsWith('/v2/checkout/orders')) {
@@ -381,6 +406,41 @@ try {
   assert.strictEqual((await call('POST', '/api/auth/reset', { token: resetToken, newPassword: 'anotherpass1' })).status, 400);
   assert.strictEqual((await call('GET', '/api/auth/me', null, sam)).body.user, null, 'reset signs out old sessions');
   assert.strictEqual((await call('POST', '/api/auth/login', { username: 'sam', password: 'brandnewpass' })).status, 200);
+
+  // Google OAuth / Identity Services verification & /api/auth/config
+  const authConfigBefore = await call('GET', '/api/auth/config');
+  assert.strictEqual(authConfigBefore.status, 200);
+  assert.strictEqual(authConfigBefore.body.googleClientId, null);
+
+  // Now enable Google OAuth Client ID on environment
+  env.GOOGLE_CLIENT_ID = 'test-google-client-id.apps.googleusercontent.com';
+  const authConfig = await call('GET', '/api/auth/config');
+  assert.strictEqual(authConfig.status, 200);
+  assert.strictEqual(authConfig.body.googleClientId, env.GOOGLE_CLIENT_ID);
+
+  // Strict social security: typed emails without real crypto verification are rejected
+  const typedGoogle = await call('POST', '/api/auth/social', { provider: 'google', email: 'alice@gmail.com' });
+  assert.strictEqual(typedGoogle.status, 400);
+  assert.ok(typedGoogle.body.error.includes('Google Sign-In button'));
+
+  const typedApple = await call('POST', '/api/auth/social', { provider: 'apple', email: 'alice@icloud.com' });
+  assert.strictEqual(typedApple.status, 400);
+
+  const typedGithub = await call('POST', '/api/auth/social', { provider: 'github', email: 'alice@github.com' });
+  assert.strictEqual(typedGithub.status, 400);
+
+  // ID Token cryptographic checks
+  assert.strictEqual((await call('POST', '/api/auth/social', { provider: 'google', idToken: 'bad-token' })).status, 401);
+  assert.strictEqual((await call('POST', '/api/auth/social', { provider: 'google', idToken: 'wrong-aud' })).status, 401);
+  assert.strictEqual((await call('POST', '/api/auth/social', { provider: 'google', idToken: 'unverified-email' })).status, 401);
+
+  // Valid Google token logs in and marks socialVerified: true
+  const validGoogle = await call('POST', '/api/auth/social', { provider: 'google', idToken: 'valid-google-token' });
+  assert.strictEqual(validGoogle.status, 200);
+  assert.ok(validGoogle.body.token);
+  assert.strictEqual(validGoogle.body.user.email, 'alice@gmail.com');
+  assert.strictEqual(validGoogle.body.user.socialVerified, true);
+  assert.strictEqual(validGoogle.body.user.displayName, 'Alice Verified');
 
   console.log('WAVE 10 TESTS PASSED!');
 } finally {

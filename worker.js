@@ -2622,6 +2622,7 @@ const spaceHubWorker = {
                 displayName: user.displayName,
                 email: user.email || null,
                 socialProvider: user.socialProvider || null,
+                socialVerified: Boolean(user.socialVerified),
                 hostingPlan: user.hostingPlan || null
               }
             : null
@@ -2636,18 +2637,45 @@ const spaceHubWorker = {
         const accessToken = String(body.accessToken || '').trim();
         const idToken = String(body.idToken || '').trim();
 
-        // Optional real Google ID Token verification
-        if (provider === 'google' && idToken) {
+        // Strict mode (enabled once GOOGLE_CLIENT_ID is configured): only cryptographically verified
+        // identities are accepted — no typed-email sign-in that anyone could use to claim an account.
+        const strictSocial = Boolean(env.GOOGLE_CLIENT_ID);
+        let googleVerified = false;
+        let githubVerified = false;
+        if (strictSocial) {
+          if (provider === 'apple') {
+            return jsonResponse({ error: 'Apple sign-in is not available yet. Please use Google, GitHub, or a password.' }, 400);
+          }
+          if (provider === 'google' && !idToken) {
+            return jsonResponse({ error: 'Please use the Google Sign-In button.' }, 400);
+          }
+          if (provider === 'github' && !accessToken) {
+            return jsonResponse({ error: 'Paste a GitHub token so we can verify your account.' }, 400);
+          }
+        }
+
+        // Real Google ID token verification (audience, issuer and verified email are all checked)
+        if (provider === 'google' && idToken && env.GOOGLE_CLIENT_ID) {
           const gRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
           if (!gRes.ok) {
             return jsonResponse({ error: 'Invalid Google ID token.' }, 401);
           }
           const gInfo = await gRes.json();
-          email = String(gInfo.email || email).toLowerCase();
+          if (gInfo.aud !== env.GOOGLE_CLIENT_ID) {
+            return jsonResponse({ error: 'Google token was issued for a different application.' }, 401);
+          }
+          if (!['accounts.google.com', 'https://accounts.google.com'].includes(gInfo.iss)) {
+            return jsonResponse({ error: 'Invalid Google token issuer.' }, 401);
+          }
+          if (!gInfo.email || !(gInfo.email_verified === true || gInfo.email_verified === 'true')) {
+            return jsonResponse({ error: 'Your Google account email is not verified.' }, 401);
+          }
+          email = String(gInfo.email).toLowerCase();
           displayName = gInfo.name || displayName;
+          googleVerified = true;
         }
 
-        // Optional real GitHub Access Token verification
+        // Real GitHub Access Token verification (identity always comes from GitHub, never from typed fields)
         if (provider === 'github' && accessToken) {
           const ghRes = await fetch('https://api.github.com/user', {
             headers: {
@@ -2660,9 +2688,10 @@ const spaceHubWorker = {
             return jsonResponse({ error: 'Invalid GitHub token.' }, 401);
           }
           const ghUser = await ghRes.json();
-          preferredUsername = String(ghUser.login || preferredUsername).toLowerCase();
+          preferredUsername = String(ghUser.login || '').toLowerCase();
           displayName = ghUser.name || ghUser.login || displayName;
-          email = String(ghUser.email || email || `${preferredUsername}@users.noreply.github.com`).toLowerCase();
+          email = String(ghUser.email || `${preferredUsername}@users.noreply.github.com`).toLowerCase();
+          githubVerified = true;
         }
 
         if (!email && !preferredUsername) {
@@ -2683,9 +2712,7 @@ const spaceHubWorker = {
         }
 
         const baseHandle = slugify(preferredUsername || email.split('@')[0] || provider).slice(0, 20);
-        const socialVerifiedNow = Boolean(
-          (provider === 'google' && idToken) || (provider === 'github' && accessToken)
-        );
+        const socialVerifiedNow = googleVerified || githubVerified;
         let foundUser = db.users.find(
           (u) => (email && u.email && u.email.toLowerCase() === email) || (u.socialProvider === provider && u.username === baseHandle)
         );
@@ -2710,7 +2737,12 @@ const spaceHubWorker = {
           db.users.push(foundUser);
         } else {
           foundUser.socialProvider = foundUser.socialProvider || provider;
-          if (socialVerifiedNow) foundUser.socialVerified = true;
+          if (socialVerifiedNow) {
+            // First verified login on an account that was created from an unverified typed email:
+            // kill any sessions that existed before, so a squatter cannot keep access.
+            if (!foundUser.socialVerified) revokeUserSessions(db, foundUser.id, null);
+            foundUser.socialVerified = true;
+          }
           if (email && !foundUser.email) foundUser.email = email;
           if (displayName) foundUser.displayName = displayName;
         }
@@ -2745,7 +2777,8 @@ const spaceHubWorker = {
               username: foundUser.username,
               displayName: foundUser.displayName,
               email: foundUser.email || null,
-              socialProvider: foundUser.socialProvider || provider
+              socialProvider: foundUser.socialProvider || provider,
+              socialVerified: Boolean(foundUser.socialVerified)
             }
           },
           200,
@@ -3132,6 +3165,10 @@ const spaceHubWorker = {
         return jsonResponse({
           plans: HOSTING_PLANS.map((p) => decoratePlanWithPayPalUrls(p, url.origin, paypalEmail))
         });
+      }
+
+      if (pathname === '/api/auth/config' && method === 'GET') {
+        return jsonResponse({ googleClientId: env.GOOGLE_CLIENT_ID || null });
       }
 
       if (pathname === '/api/paypal/config' && method === 'GET') {

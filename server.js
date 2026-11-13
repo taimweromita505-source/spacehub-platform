@@ -1870,7 +1870,8 @@ app.post('/api/auth/social', async (req, res) => {
       username: foundUser.username,
       displayName: foundUser.displayName,
       email: foundUser.email || null,
-      socialProvider: foundUser.socialProvider || provider
+      socialProvider: foundUser.socialProvider || provider,
+      socialVerified: Boolean(foundUser.socialVerified)
     }
   });
 });
@@ -1899,7 +1900,8 @@ app.post('/api/auth/login', (req, res) => {
       username: user.username,
       displayName: user.displayName,
       email: user.email || null,
-      socialProvider: user.socialProvider || null
+      socialProvider: user.socialProvider || null,
+      socialVerified: Boolean(user.socialVerified)
     }
   });
 });
@@ -1927,7 +1929,8 @@ app.get('/api/auth/me', (req, res) => {
       username: user.username,
       displayName: user.displayName,
       email: user.email || null,
-      socialProvider: user.socialProvider || null
+      socialProvider: user.socialProvider || null,
+      socialVerified: Boolean(user.socialVerified)
     }
   });
 });
@@ -2057,6 +2060,11 @@ function decoratePlanWithPayPalUrls(plan, origin, paypalEmail) {
     }
   };
 }
+
+// Real Google Sign-In is only wired on the Cloudflare edge Worker (worker.js).
+app.get('/api/auth/config', (_req, res) => {
+  res.json({ googleClientId: null });
+});
 
 // PayPal REST API checkout is only wired on the Cloudflare edge Worker (worker.js).
 app.get('/api/paypal/config', (_req, res) => {

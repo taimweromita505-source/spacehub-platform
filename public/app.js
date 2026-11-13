@@ -2679,6 +2679,119 @@ document.getElementById('openSignUpBtn').addEventListener('click', () => {
 });
 
 // Social Account Sign-In (Google / Gmail, GitHub, Apple)
+let googleClientId = null;
+
+async function initGoogleAuth() {
+  try {
+    const cfg = await apiFetch('/api/auth/config');
+    if (cfg && cfg.googleClientId) {
+      googleClientId = cfg.googleClientId;
+      setupGoogleIdentityServices();
+    }
+  } catch (_e) {
+    // Non-blocking fallback
+  }
+}
+
+function setupGoogleIdentityServices() {
+  if (!googleClientId) return;
+
+  function tryRender() {
+    if (typeof google === 'undefined' || !google.accounts || !google.accounts.id) {
+      setTimeout(tryRender, 150);
+      return;
+    }
+
+    try {
+      google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: handleGoogleCredentialResponse,
+        auto_select: false,
+        cancel_on_tap_outside: true
+      });
+
+      // Render official Google button in sign-in dialog
+      const btnSignIn = document.getElementById('gsiButtonSignIn');
+      if (btnSignIn) {
+        btnSignIn.style.display = 'flex';
+        google.accounts.id.renderButton(btnSignIn, {
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'rectangular',
+          width: 320
+        });
+      }
+
+      // Render official Google button in sign-up dialog
+      const btnSignUp = document.getElementById('gsiButtonSignUp');
+      if (btnSignUp) {
+        btnSignUp.style.display = 'flex';
+        google.accounts.id.renderButton(btnSignUp, {
+          theme: 'outline',
+          size: 'large',
+          text: 'signup_with',
+          shape: 'rectangular',
+          width: 320
+        });
+      }
+
+      // Render official Google button in social-auth dialog
+      const btnSocial = document.getElementById('gsiButtonSocial');
+      if (btnSocial) {
+        btnSocial.style.display = 'flex';
+        google.accounts.id.renderButton(btnSocial, {
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'rectangular',
+          width: 320
+        });
+      }
+
+      // Hide fallback unverified Google button since verified GIS is active
+      document.querySelectorAll('.social-auth-btn[data-social-provider="google"]').forEach((el) => {
+        el.style.display = 'none';
+      });
+
+      // One Tap prompt for visitors who are not signed in
+      if (!state.user) {
+        google.accounts.id.prompt();
+      }
+    } catch (err) {
+      console.warn('Google Identity Services setup:', err);
+    }
+  }
+
+  tryRender();
+}
+
+async function handleGoogleCredentialResponse(response) {
+  if (!response || !response.credential) return;
+  try {
+    const data = await apiFetch('/api/auth/social', {
+      method: 'POST',
+      body: JSON.stringify({
+        provider: 'google',
+        idToken: response.credential
+      })
+    });
+    state.user = data.user;
+    state.token = data.token;
+    localStorage.setItem('spacehub_token', data.token);
+    updateAuthUI();
+    document.getElementById('signInDialog')?.close();
+    document.getElementById('signUpDialog')?.close();
+    document.getElementById('socialAuthDialog')?.close();
+    loadSpacesList();
+    loadAgentKeys();
+    loadHostingConnections();
+    showToast(`Signed in with verified Google account @${data.user.username}!`);
+  } catch (err) {
+    showToast(err.message || 'Google sign-in failed');
+  }
+}
+
 document.querySelectorAll('.social-auth-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const provider = btn.getAttribute('data-social-provider') || 'google';
@@ -2693,44 +2806,62 @@ document.querySelectorAll('.social-auth-btn').forEach((btn) => {
     const ghTokenField = document.getElementById('socialGithubTokenField');
     const submitBtn = document.getElementById('socialAuthSubmitBtn');
     const errBox = document.getElementById('socialAuthServerError');
+    const gsiSocial = document.getElementById('gsiButtonSocial');
+    const manualFields = document.getElementById('socialManualFields');
 
     if (errBox) errBox.hidden = true;
     if (provInput) provInput.value = provider;
 
-    if (provider === 'github') {
-      if (titleEl) titleEl.textContent = 'Continue with GitHub';
+    if (provider === 'google' && googleClientId) {
+      if (titleEl) titleEl.textContent = 'Sign In with Google';
       if (leadEl) {
-        leadEl.textContent =
-          'Enter your GitHub username or email (or paste a GitHub token to auto-connect GitHub Pages hosting).';
+        leadEl.textContent = 'Sign in securely with your verified Google / Gmail account.';
       }
-      if (emailLabel) emailLabel.innerHTML = 'GitHub Username or Email <span aria-hidden="true">*</span>';
-      if (emailInput) emailInput.placeholder = 'octocat or octocat@github.com';
-      if (ghTokenField) ghTokenField.hidden = false;
-      if (submitBtn) submitBtn.textContent = 'Continue with GitHub';
-    } else if (provider === 'apple') {
-      if (titleEl) titleEl.textContent = 'Continue with Apple';
-      if (leadEl) {
-        leadEl.textContent =
-          'Enter your Apple ID email (e.g. @icloud.com or @me.com) to sign in or create your linked SpaceHub account.';
-      }
-      if (emailLabel) emailLabel.innerHTML = 'Apple ID Email <span aria-hidden="true">*</span>';
-      if (emailInput) emailInput.placeholder = 'you@icloud.com';
-      if (ghTokenField) ghTokenField.hidden = true;
-      if (submitBtn) submitBtn.textContent = 'Continue with Apple';
+      if (gsiSocial) gsiSocial.style.display = 'flex';
+      if (manualFields) manualFields.style.display = 'none';
+      if (submitBtn) submitBtn.style.display = 'none';
     } else {
-      if (titleEl) titleEl.textContent = 'Continue with Google (Gmail)';
-      if (leadEl) {
-        leadEl.textContent =
-          'Enter your Gmail address to sign in or automatically create your linked SpaceHub account.';
+      if (gsiSocial) gsiSocial.style.display = 'none';
+      if (manualFields) manualFields.style.display = 'block';
+      if (submitBtn) submitBtn.style.display = 'inline-flex';
+
+      if (provider === 'github') {
+        if (titleEl) titleEl.textContent = 'Continue with GitHub';
+        if (leadEl) {
+          leadEl.textContent =
+            'Enter your GitHub username or email (or paste a GitHub token to auto-connect GitHub Pages hosting).';
+        }
+        if (emailLabel) emailLabel.innerHTML = 'GitHub Username or Email <span aria-hidden="true">*</span>';
+        if (emailInput) emailInput.placeholder = 'octocat or octocat@github.com';
+        if (ghTokenField) ghTokenField.hidden = false;
+        if (submitBtn) submitBtn.textContent = 'Continue with GitHub';
+      } else if (provider === 'apple') {
+        if (titleEl) titleEl.textContent = 'Continue with Apple';
+        if (leadEl) {
+          leadEl.textContent =
+            'Enter your Apple ID email (e.g. @icloud.com or @me.com) to sign in or create your linked SpaceHub account.';
+        }
+        if (emailLabel) emailLabel.innerHTML = 'Apple ID Email <span aria-hidden="true">*</span>';
+        if (emailInput) emailInput.placeholder = 'you@icloud.com';
+        if (ghTokenField) ghTokenField.hidden = true;
+        if (submitBtn) submitBtn.textContent = 'Continue with Apple';
+      } else {
+        if (titleEl) titleEl.textContent = 'Continue with Google (Gmail)';
+        if (leadEl) {
+          leadEl.textContent =
+            'Enter your Gmail address to sign in or automatically create your linked SpaceHub account.';
+        }
+        if (emailLabel) emailLabel.innerHTML = 'Gmail Address <span aria-hidden="true">*</span>';
+        if (emailInput) emailInput.placeholder = 'you@gmail.com';
+        if (ghTokenField) ghTokenField.hidden = true;
+        if (submitBtn) submitBtn.textContent = 'Continue with Google';
       }
-      if (emailLabel) emailLabel.innerHTML = 'Gmail Address <span aria-hidden="true">*</span>';
-      if (emailInput) emailInput.placeholder = 'you@gmail.com';
-      if (ghTokenField) ghTokenField.hidden = true;
-      if (submitBtn) submitBtn.textContent = 'Continue with Google';
     }
 
     document.getElementById('socialAuthDialog')?.showModal();
-    emailInput?.focus();
+    if (provider !== 'google' || !googleClientId) {
+      emailInput?.focus();
+    }
   });
 });
 
@@ -3296,6 +3427,7 @@ document.getElementById('copyInstallLinkBtn')?.addEventListener('click', async (
     state.user = null;
   }
   updateAuthUI();
+  initGoogleAuth();
   await loadSpacesList();
 
   const params = new URLSearchParams(window.location.search);

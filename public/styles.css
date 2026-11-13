@@ -1312,6 +1312,18 @@ dialog::backdrop {
   padding-block: 0.55rem;
 }
 
+.gsi-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-block-end: 0.5rem;
+  min-height: 40px;
+  width: 100%;
+}
+.gsi-container > div {
+  margin: 0 auto;
+}
+
 .auth-divider {
   display: flex;
   align-items: center;
