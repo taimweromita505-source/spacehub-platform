@@ -676,6 +676,30 @@ document.getElementById('saveDraftBtn').addEventListener('click', async () => {
   }
 });
 
+// Share Space Live Link
+document.getElementById('shareSpaceBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace) return;
+  const shareUrl = `${window.location.origin}/live/${state.currentSpace.slug}`;
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: `${state.currentSpace.title} — Hosted on SpaceHub`,
+        text: state.currentSpace.description || 'Check out this web app on SpaceHub',
+        url: shareUrl
+      });
+      return;
+    } catch (_e) {
+      // fallback to clipboard
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(shareUrl);
+    showToast(`Copied share link: ${shareUrl}`);
+  } catch (_e) {
+    showToast(`Share URL: ${shareUrl}`);
+  }
+});
+
 // Export Ready-to-Host Static Bundle
 document.getElementById('exportBundleBtn')?.addEventListener('click', async () => {
   if (!state.currentSpace) return;

@@ -395,7 +395,7 @@ function formatSpaceSummary(space, user) {
   };
 }
 
-function buildBundledHtml(files) {
+function buildBundledHtml(files, origin = '') {
   let html = files['index.html'] || '<!DOCTYPE html><html><body><h1>Empty Space</h1></body></html>';
   const css = files['style.css'] || '';
   const js = files['script.js'] || '';
@@ -411,6 +411,14 @@ function buildBundledHtml(files) {
       html = html.replace(/<script[^>]*src=["']script\.js["'][^>]*><\/script>/i, `<script>\n${js}\n</script>`);
     } else {
       html = html + `\n<script>\n${js}\n</script>`;
+    }
+  }
+  if (origin) {
+    const badgeHtml = `<a href="${origin}" target="_blank" rel="noopener" style="position:fixed;bottom:12px;right:12px;z-index:99999;background:rgba(9,9,11,0.88);color:#fafafa;border:1px solid #27272a;padding:6px 11px;border-radius:999px;font-family:system-ui,sans-serif;font-size:12px;font-weight:600;text-decoration:none;box-shadow:0 4px 14px rgba(0,0,0,0.35);backdrop-filter:blur(4px)">◆ Hosted on SpaceHub · $1/mo</a>`;
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', `${badgeHtml}\n</body>`);
+    } else {
+      html += badgeHtml;
     }
   }
   return html;
@@ -562,18 +570,42 @@ export default {
     const pathname = url.pathname;
     const method = request.method.toUpperCase();
 
+    if (pathname === '/robots.txt' && method === 'GET') {
+      return new Response(
+        `User-agent: *\nAllow: /\nSitemap: ${url.origin}/sitemap.xml\n`,
+        { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+      );
+    }
+
     // Fast path for static files
     if (
       !pathname.startsWith('/api/') &&
       !pathname.startsWith('/spaces/') &&
       !pathname.startsWith('/live/') &&
-      !pathname.startsWith('/s/')
+      !pathname.startsWith('/s/') &&
+      pathname !== '/sitemap.xml'
     ) {
       return env.ASSETS.fetch(request);
     }
 
     const db = await loadDb(env);
     const user = getCurrentUser(db, request, url);
+
+    if (pathname === '/sitemap.xml' && method === 'GET') {
+      const publicSpaces = db.spaces.filter((s) => s.visibility === 'public' && s.status === 'published');
+      const urls = [
+        `<url><loc>${url.origin}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+        ...publicSpaces.map(
+          (s) =>
+            `<url><loc>${url.origin}/live/${encodeURIComponent(s.slug)}</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>`
+        )
+      ].join('\n  ');
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  ${urls}\n</urlset>`;
+      return new Response(xml, {
+        status: 200,
+        headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+      });
+    }
 
     // 1. Short Clean Live URL Route (/live/:slug or /s/:slug) & Full Route (/spaces/:username/:slug/live)
     const shortLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/?$/i);
@@ -597,7 +629,7 @@ export default {
         );
       }
       const targetFiles = mode === 'draft' && isOwner ? space.draftFiles : space.publishedFiles || space.draftFiles;
-      return new Response(buildBundledHtml(targetFiles), {
+      return new Response(buildBundledHtml(targetFiles, url.origin), {
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       });

@@ -4,7 +4,49 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
-  <title>SpaceHub — Web Application Staging &amp; Deployment Platform</title>
+  <title>SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)</title>
+  <meta name="description" content="Stage and test your website or web app in a private workspace with your own AI coding agents. Launch to global edge hosting for $1/month or $12/year, or connect your own host." />
+  <meta name="keywords" content="web app staging, website preview platform, AI coding agent workspace, $1 web hosting, Cloudflare edge hosting, Hugging Face Spaces alternative" />
+  <link rel="canonical" href="https://spacehub-platform.taimweromita505.workers.dev/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)" />
+  <meta property="og:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year." />
+  <meta property="og:url" content="https://spacehub-platform.taimweromita505.workers.dev/" />
+  <meta property="og:site_name" content="SpaceHub" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="SpaceHub — Stage, Test &amp; Host Web Applications ($1/mo)" />
+  <meta name="twitter:description" content="Build and check your website in a private staging workspace with your own coding agents. Host for $1/month or $12/year." />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "SpaceHub",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Web",
+    "url": "https://spacehub-platform.taimweromita505.workers.dev/",
+    "description": "Web application staging workspace, BYO coding agent builder, and $1/month cloud hosting platform.",
+    "offers": [
+      {
+        "@type": "Offer",
+        "name": "Free Staging Workspace",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      {
+        "@type": "Offer",
+        "name": "Monthly Account Hosting",
+        "price": "1.00",
+        "priceCurrency": "USD"
+      },
+      {
+        "@type": "Offer",
+        "name": "Annual Account Hosting",
+        "price": "12.00",
+        "priceCurrency": "USD"
+      }
+    ]
+  }
+  </script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -358,6 +400,9 @@ curl -X POST https://spacehub-platform.taimweromita505.workers.dev/api/agent/v1/
           </button>
           <button type="button" class="btn btn-outline btn-sm" id="exportBundleBtn">
             Export
+          </button>
+          <button type="button" class="btn btn-outline btn-sm" id="shareSpaceBtn">
+            Share
           </button>
           <a href="#" target="_blank" rel="noopener" class="btn btn-outline btn-sm" id="openStandaloneLink">
             Preview ↗
