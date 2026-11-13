@@ -28,6 +28,33 @@ if (fs.existsSync(ENV_PATH)) {
 
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Custom Domain Edge Routing Middleware (serves Space when Host or X-Custom-Host matches space.customDomain)
+app.use((req, res, next) => {
+  if (req.method !== 'GET' || req.path !== '/') return next();
+  const rawHost = req.headers['x-custom-host'] || req.hostname || '';
+  const cleanHost = normalizeCustomDomain(rawHost);
+  const isPlatform =
+    !cleanHost ||
+    cleanHost === 'spacehub.win' ||
+    cleanHost === 'www.spacehub.win' ||
+    cleanHost === 'localhost' ||
+    cleanHost === '127.0.0.1';
+  if (isPlatform) return next();
+
+  const db = loadDb();
+  const space = [...db.spaces]
+    .reverse()
+    .find((s) => s.customDomain && s.customDomain.toLowerCase() === cleanHost);
+  if (space && space.visibility === 'public') {
+    space.views = (space.views || 0) + 1;
+    saveDb(db);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(buildBundledHtml(space.publishedFiles || space.draftFiles, space));
+  }
+  return next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -714,11 +741,48 @@ function replaceSecretPlaceholders(str, secrets = {}) {
   );
 }
 
+function normalizeCustomDomain(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/[^a-z0-9.-]/g, '')
+    .slice(0, 120);
+}
+
+async function notifySubmissionWebhook(space, entry) {
+  const hookUrl = String(space.submissionWebhookUrl || '').trim();
+  if (!hookUrl) return;
+  const textMsg = `📬 New submission in ${space.title} (${space.slug}): ${entry.name || 'Visitor'} <${entry.email || 'no-email'}> — ${entry.message || ''}`;
+  if (hookUrl.startsWith('mock://')) {
+    space.lastWebhookStatus = `delivered_mock:${hookUrl}`;
+    return;
+  }
+  if (!/^https?:\/\//i.test(hookUrl)) return;
+  try {
+    const r = await fetch(hookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: textMsg,
+        text: textMsg,
+        space: space.slug,
+        submission: entry
+      })
+    });
+    space.lastWebhookStatus = `http_${r.status}`;
+  } catch (err) {
+    space.lastWebhookStatus = `error:${err.message || 'failed'}`;
+  }
+}
+
 function formatSpaceSummary(space, user) {
   const isOwner = Boolean(user && space.ownerId === user.id);
   const stagingPreviewUrl = `/spaces/${space.ownerUsername}/${space.slug}/live`;
   const externalLiveUrl = space.externalHost?.liveUrl || null;
   const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+  const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
 
   return {
     id: space.id,
@@ -736,6 +800,9 @@ function formatSpaceSummary(space, user) {
     appOrientation: space.appOrientation || 'any',
     appIconText: space.appIconText || '',
     appThemeColor: space.appThemeColor || '#09090b',
+    customDomain: space.customDomain || '',
+    submissionWebhookUrl: isOwner ? (space.submissionWebhookUrl || '') : undefined,
+    lastWebhookStatus: isOwner ? (space.lastWebhookStatus || null) : undefined,
     previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
     hasPreviewPasscode: Boolean(space.previewPasscode),
     secrets: isOwner ? secretsObj : undefined,
@@ -744,8 +811,12 @@ function formatSpaceSummary(space, user) {
     likes: space.likes || 0,
     views: space.views || 0,
     installs: space.installs || 0,
+    appUserCount: (space.appUsers || []).length,
     submissionCount: (space.submissions || []).length,
-    snapshotCount: (space.snapshots || []).length,
+    snapshotCount: snaps.length,
+    snapshots: isOwner
+      ? snaps.map((s) => ({ id: s.id, label: s.label, createdAt: s.createdAt }))
+      : undefined,
     likedByMe: Boolean(user && (space.likedBy || []).includes(user.id)),
     hasUnpublishedChanges: Boolean(space.hasUnpublishedChanges),
     createdAt: space.createdAt,
@@ -2129,6 +2200,8 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
     appIconText,
     appThemeColor,
     previewPasscode,
+    customDomain,
+    submissionWebhookUrl,
     secrets,
     appStorage,
     colorFrom,
@@ -2158,6 +2231,12 @@ app.put('/api/spaces/:username/:slug', (req, res) => {
   }
   if (typeof previewPasscode === 'string') {
     space.previewPasscode = previewPasscode.trim().slice(0, 32);
+  }
+  if (customDomain !== undefined) {
+    space.customDomain = normalizeCustomDomain(customDomain);
+  }
+  if (submissionWebhookUrl !== undefined) {
+    space.submissionWebhookUrl = String(submissionWebhookUrl || '').trim().slice(0, 300);
   }
   if (secrets !== undefined) {
     space.secrets = normalizeSpaceSecrets(secrets);
@@ -2508,6 +2587,36 @@ app.post('/api/spaces/:username/:slug/like', (req, res) => {
   res.json({ likes: space.likes, likedByMe: space.likedBy.includes(user.id) });
 });
 
+// Save Named Checkpoint Snapshot
+app.post('/api/spaces/:username/:slug/snapshot', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  if (!user) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (space.ownerId !== user.id) {
+    return res.status(403).json({ error: 'Only the owner can save a checkpoint.' });
+  }
+
+  const label = String(req.body?.label || 'Manual checkpoint').trim().slice(0, 60);
+  pushSpaceSnapshot(space, label);
+  saveDb(db);
+
+  res.status(201).json({
+    message: `Saved checkpoint: "${label}"`,
+    space: {
+      ...formatSpaceSummary(space, user),
+      draftFiles: space.draftFiles,
+      publishedFiles: space.publishedFiles,
+      agentHistory: space.agentHistory || []
+    }
+  });
+});
+
 // Rollback Space to Previous Snapshot
 app.post('/api/spaces/:username/:slug/rollback', (req, res) => {
   const db = loadDb();
@@ -2527,9 +2636,13 @@ app.post('/api/spaces/:username/:slug/rollback', (req, res) => {
   if (!snaps.length) {
     return res.status(400).json({ error: 'No previous snapshot available to restore.' });
   }
-  const snap = req.body?.snapshotId
-    ? snaps.find((s) => s.id === req.body.snapshotId) || snaps[0]
-    : snaps.shift();
+  let snap;
+  if (req.body?.snapshotId) {
+    const idx = snaps.findIndex((s) => s.id === req.body.snapshotId);
+    snap = idx > -1 ? snaps.splice(idx, 1)[0] : snaps.shift();
+  } else {
+    snap = snaps.shift();
+  }
 
   space.draftFiles = JSON.parse(JSON.stringify(snap.files));
   space.hasUnpublishedChanges = true;
@@ -2862,8 +2975,69 @@ app.post(['/live/:slug/proxy', '/s/:slug/proxy'], async (req, res) => {
   }
 });
 
+// Per-Space Built-in User Authentication API (/live/:slug/auth and /live/:slug/auth/me)
+app.get(['/live/:slug/auth/me', '/s/:slug/auth/me'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const appUsers = Array.isArray(space.appUsers) ? space.appUsers : [];
+  const appSessions = space.appSessions && typeof space.appSessions === 'object' ? space.appSessions : {};
+  const authHdr = req.headers.authorization || '';
+  const tok = authHdr.startsWith('Bearer ')
+    ? authHdr.slice(7).trim()
+    : String(req.query.token || '').trim();
+  const uid = tok ? appSessions[tok] : null;
+  const appUser = uid ? appUsers.find((u) => u.id === uid) : null;
+  if (!appUser) return res.status(401).json({ ok: false, user: null });
+  res.json({
+    ok: true,
+    user: { id: appUser.id, email: appUser.email, name: appUser.name, createdAt: appUser.createdAt }
+  });
+});
+
+app.post(['/live/:slug/auth', '/s/:slug/auth'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.appUsers = Array.isArray(space.appUsers) ? space.appUsers : [];
+  space.appSessions = space.appSessions && typeof space.appSessions === 'object' ? space.appSessions : {};
+
+  const payload = req.body || {};
+  const email = String(payload.email || '').trim().toLowerCase();
+  const password = String(payload.password || '');
+  const name = String(payload.name || email.split('@')[0] || 'Member').trim().slice(0, 80);
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required.' });
+  }
+
+  let appUser = space.appUsers.find((u) => u.email === email);
+  if (!appUser && payload.action !== 'login') {
+    appUser = {
+      id: 'au_' + crypto.randomBytes(4).toString('hex'),
+      email,
+      name,
+      passwordHash: hashPassword(password),
+      createdAt: new Date().toISOString()
+    };
+    space.appUsers.push(appUser);
+  } else if (!appUser) {
+    return res.status(404).json({ error: 'Account not found.' });
+  } else if (!verifyPassword(password, appUser.passwordHash)) {
+    return res.status(401).json({ error: 'Invalid email or password.' });
+  }
+
+  const tok = 'sat_' + crypto.randomBytes(16).toString('hex');
+  space.appSessions[tok] = appUser.id;
+  saveDb(db);
+  res.json({
+    ok: true,
+    token: tok,
+    user: { id: appUser.id, email: appUser.email, name: appUser.name, createdAt: appUser.createdAt }
+  });
+});
+
 // Form & Waitlist Submissions API for Space Owners & Public Live Forms
-app.post(['/live/:slug/submit', '/s/:slug/submit'], (req, res) => {
+app.post(['/live/:slug/submit', '/s/:slug/submit'], async (req, res) => {
   const db = loadDb();
   const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
   if (!space) return res.status(404).json({ error: 'Space not found.' });
@@ -2881,6 +3055,7 @@ app.post(['/live/:slug/submit', '/s/:slug/submit'], (req, res) => {
   space.submissions = Array.isArray(space.submissions) ? space.submissions : [];
   space.submissions.unshift(entry);
   if (space.submissions.length > 200) space.submissions = space.submissions.slice(0, 200);
+  await notifySubmissionWebhook(space, entry);
   saveDb(db);
 
   const accept = String(req.headers.accept || '').toLowerCase();

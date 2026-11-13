@@ -605,11 +605,48 @@ function replaceSecretPlaceholders(str, secrets = {}) {
   );
 }
 
+function normalizeCustomDomain(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/[^a-z0-9.-]/g, '')
+    .slice(0, 120);
+}
+
+async function notifySubmissionWebhook(space, entry) {
+  const hookUrl = String(space.submissionWebhookUrl || '').trim();
+  if (!hookUrl) return;
+  const textMsg = `📬 New submission in ${space.title} (${space.slug}): ${entry.name || 'Visitor'} <${entry.email || 'no-email'}> — ${entry.message || ''}`;
+  if (hookUrl.startsWith('mock://')) {
+    space.lastWebhookStatus = `delivered_mock:${hookUrl}`;
+    return;
+  }
+  if (!/^https?:\/\//i.test(hookUrl)) return;
+  try {
+    const r = await fetch(hookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: textMsg,
+        text: textMsg,
+        space: space.slug,
+        submission: entry
+      })
+    });
+    space.lastWebhookStatus = `http_${r.status}`;
+  } catch (err) {
+    space.lastWebhookStatus = `error:${err.message || 'failed'}`;
+  }
+}
+
 function formatSpaceSummary(space, user) {
   const isOwner = Boolean(user && space.ownerId === user.id);
   const stagingPreviewUrl = `/spaces/${space.ownerUsername}/${space.slug}/live`;
   const externalLiveUrl = space.externalHost?.liveUrl || null;
   const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
+  const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
   return {
     id: space.id,
     ownerId: space.ownerId,
@@ -626,6 +663,9 @@ function formatSpaceSummary(space, user) {
     appOrientation: space.appOrientation || 'any',
     appIconText: space.appIconText || '',
     appThemeColor: space.appThemeColor || '#09090b',
+    customDomain: space.customDomain || '',
+    submissionWebhookUrl: isOwner ? (space.submissionWebhookUrl || '') : undefined,
+    lastWebhookStatus: isOwner ? (space.lastWebhookStatus || null) : undefined,
     previewPasscode: isOwner ? (space.previewPasscode || '') : undefined,
     hasPreviewPasscode: Boolean(space.previewPasscode),
     secrets: isOwner ? secretsObj : undefined,
@@ -634,8 +674,12 @@ function formatSpaceSummary(space, user) {
     likes: space.likes || 0,
     views: space.views || 0,
     installs: space.installs || 0,
+    appUserCount: (space.appUsers || []).length,
     submissionCount: (space.submissions || []).length,
-    snapshotCount: (space.snapshots || []).length,
+    snapshotCount: snaps.length,
+    snapshots: isOwner
+      ? snaps.map((s) => ({ id: s.id, label: s.label, createdAt: s.createdAt }))
+      : undefined,
     likedByMe: Boolean(user && (space.likedBy || []).includes(user.id)),
     hasUnpublishedChanges: Boolean(space.hasUnpublishedChanges),
     createdAt: space.createdAt,
@@ -944,6 +988,33 @@ export default {
       );
     }
 
+    const customHostHeader = normalizeCustomDomain(
+      request.headers.get('x-custom-host') || url.hostname
+    );
+    const isPlatformHost =
+      !customHostHeader ||
+      customHostHeader === 'spacehub.win' ||
+      customHostHeader === 'www.spacehub.win' ||
+      customHostHeader === 'localhost' ||
+      customHostHeader === '127.0.0.1' ||
+      customHostHeader.endsWith('.workers.dev');
+
+    if (!isPlatformHost && pathname === '/' && method === 'GET') {
+      const dbForHost = await loadDb(env);
+      const domainSpace = [...dbForHost.spaces]
+        .reverse()
+        .find((s) => s.customDomain && s.customDomain.toLowerCase() === customHostHeader);
+      if (domainSpace && domainSpace.visibility === 'public') {
+        domainSpace.views = (domainSpace.views || 0) + 1;
+        await saveDb(env, dbForHost);
+        const targetFiles = domainSpace.publishedFiles || domainSpace.draftFiles;
+        return new Response(buildBundledHtml(targetFiles, url.origin, domainSpace), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
+    }
+
     // Fast path for static files
     if (
       !pathname.startsWith('/api/') &&
@@ -1037,6 +1108,67 @@ export default {
         else space.appStorage = {};
         await saveDb(env, db);
         return jsonResponse({ ok: true, data: space.appStorage });
+      }
+    }
+
+    // 1b-0. Per-Space Built-in User Authentication API (/live/:slug/auth and /live/:slug/auth/me)
+    const spaceAuthMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/auth(?:\/(me))?\/?$/i);
+    if (spaceAuthMatch) {
+      const slug = decodeURIComponent(spaceAuthMatch[1]).toLowerCase();
+      const subAction = (spaceAuthMatch[2] || '').toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.appUsers = Array.isArray(space.appUsers) ? space.appUsers : [];
+      space.appSessions = space.appSessions && typeof space.appSessions === 'object' ? space.appSessions : {};
+
+      if (subAction === 'me' && method === 'GET') {
+        const authHdr = request.headers.get('authorization') || '';
+        const tok = authHdr.startsWith('Bearer ')
+          ? authHdr.slice(7).trim()
+          : (url.searchParams.get('token') || '').trim();
+        const uid = tok ? space.appSessions[tok] : null;
+        const appUser = uid ? space.appUsers.find((u) => u.id === uid) : null;
+        if (!appUser) return jsonResponse({ ok: false, user: null }, 401);
+        return jsonResponse({
+          ok: true,
+          user: { id: appUser.id, email: appUser.email, name: appUser.name, createdAt: appUser.createdAt }
+        });
+      }
+
+      if (!subAction && method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const email = String(payload.email || '').trim().toLowerCase();
+        const password = String(payload.password || '');
+        const name = String(payload.name || email.split('@')[0] || 'Member').trim().slice(0, 80);
+        if (!email || !password) {
+          return jsonResponse({ error: 'Email and password are required.' }, 400);
+        }
+        let appUser = space.appUsers.find((u) => u.email === email);
+        if (!appUser && payload.action !== 'login') {
+          const { salt, hash } = await hashPasswordEdge(password);
+          appUser = {
+            id: 'au_' + randomHex(6),
+            email,
+            name,
+            salt,
+            passwordHash: hash,
+            createdAt: new Date().toISOString()
+          };
+          space.appUsers.push(appUser);
+        } else if (!appUser) {
+          return jsonResponse({ error: 'Account not found.' }, 404);
+        } else {
+          const valid = await verifyPasswordEdge(password, appUser.salt, appUser.passwordHash);
+          if (!valid) return jsonResponse({ error: 'Invalid email or password.' }, 401);
+        }
+        const tok = 'sat_' + randomHex(16);
+        space.appSessions[tok] = appUser.id;
+        await saveDb(env, db);
+        return jsonResponse({
+          ok: true,
+          token: tok,
+          user: { id: appUser.id, email: appUser.email, name: appUser.name, createdAt: appUser.createdAt }
+        });
       }
     }
 
@@ -1137,6 +1269,7 @@ export default {
       if (space.submissions.length > 200) {
         space.submissions = space.submissions.slice(0, 200);
       }
+      await notifySubmissionWebhook(space, entry);
       await saveDb(env, db);
 
       const accept = (request.headers.get('accept') || '').toLowerCase();
@@ -1664,6 +1797,12 @@ export default {
           if (typeof body.previewPasscode === 'string') {
             space.previewPasscode = body.previewPasscode.trim().slice(0, 32);
           }
+          if (body.customDomain !== undefined) {
+            space.customDomain = normalizeCustomDomain(body.customDomain);
+          }
+          if (body.submissionWebhookUrl !== undefined) {
+            space.submissionWebhookUrl = String(body.submissionWebhookUrl || '').trim().slice(0, 300);
+          }
           if (body.secrets !== undefined) {
             space.secrets = normalizeSpaceSecrets(body.secrets);
           }
@@ -1724,6 +1863,24 @@ export default {
           }
         }
 
+        if (action === 'snapshot' && method === 'POST') {
+          if (!user || !space || space.ownerId !== user.id) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          const label = String(body.label || 'Manual checkpoint').trim().slice(0, 60);
+          pushSpaceSnapshot(space, label);
+          await saveDb(env, db);
+          return jsonResponse({
+            message: `Saved checkpoint: "${label}"`,
+            space: {
+              ...formatSpaceSummary(space, user),
+              draftFiles: space.draftFiles,
+              publishedFiles: space.publishedFiles,
+              agentHistory: space.agentHistory || []
+            }
+          }, 201);
+        }
+
         if (action === 'rollback' && method === 'POST') {
           if (!user || !space || space.ownerId !== user.id) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
@@ -1732,9 +1889,13 @@ export default {
           if (!snaps.length) {
             return jsonResponse({ error: 'No previous snapshot available to restore.' }, 400);
           }
-          const snap = body.snapshotId
-            ? snaps.find((s) => s.id === body.snapshotId) || snaps[0]
-            : snaps.shift();
+          let snap;
+          if (body.snapshotId) {
+            const idx = snaps.findIndex((s) => s.id === body.snapshotId);
+            snap = idx > -1 ? snaps.splice(idx, 1)[0] : snaps.shift();
+          } else {
+            snap = snaps.shift();
+          }
           space.draftFiles = JSON.parse(JSON.stringify(snap.files));
           space.hasUnpublishedChanges = true;
           space.updatedAt = new Date().toISOString();

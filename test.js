@@ -324,6 +324,66 @@ function request(server, method, path, body = null, token = null) {
       'Test with sk_secret_vault_999'
     );
 
+    console.log('13. Testing Wave 4: Space Member Auth, Named Checkpoints, Custom Domain & Submission Webhooks...');
+    const memberReg = await request(server, 'POST', `/live/${space.slug}/auth`, {
+      email: 'member1@example.com',
+      password: 'Password123!',
+      name: 'Member One'
+    });
+    assert.strictEqual(memberReg.status, 200);
+    assert.ok(memberReg.body.token, 'Should issue Space member auth token');
+
+    const memberMe = await request(
+      server,
+      'GET',
+      `/live/${space.slug}/auth/me`,
+      null,
+      memberReg.body.token
+    );
+    assert.strictEqual(memberMe.status, 200);
+    assert.strictEqual(memberMe.body.user.email, 'member1@example.com');
+
+    const snapSave = await request(
+      server,
+      'POST',
+      `/api/spaces/${uniqueUser}/${space.slug}/snapshot`,
+      { label: 'v1 Checkpoint Ready' },
+      token
+    );
+    assert.strictEqual(snapSave.status, 201);
+    assert.strictEqual(snapSave.body.space.snapshots[0].label, 'v1 Checkpoint Ready');
+
+    await request(
+      server,
+      'PUT',
+      `/api/spaces/${uniqueUser}/${space.slug}`,
+      {
+        customDomain: 'app.mybrand.com',
+        submissionWebhookUrl: 'mock://discord.com/api/webhooks/123'
+      },
+      token
+    );
+
+    const hookSubmit = await request(server, 'POST', `/live/${space.slug}/submit`, {
+      name: 'Webhook Lead',
+      email: 'lead@mybrand.com',
+      message: 'Testing Discord webhook alert'
+    });
+    assert.strictEqual(hookSubmit.status, 201);
+
+    const updatedSpace = await request(
+      server,
+      'GET',
+      `/api/spaces/${uniqueUser}/${space.slug}`,
+      null,
+      token
+    );
+    assert.strictEqual(updatedSpace.body.space.customDomain, 'app.mybrand.com');
+    assert.strictEqual(
+      updatedSpace.body.space.lastWebhookStatus,
+      'delivered_mock:mock://discord.com/api/webhooks/123'
+    );
+
     console.log('ALL TESTS PASSED!');
   } finally {
     server.close();

@@ -569,10 +569,27 @@ function updateStudioHeaderBadges(space) {
   }
 
   const rollbackBtn = document.getElementById('rollbackDraftBtn');
+  const snapSelect = document.getElementById('snapshotRestoreSelect');
+  const saveSnapBtn = document.getElementById('saveSnapshotBtn');
+  if (saveSnapBtn) {
+    saveSnapBtn.hidden = !space.isOwner;
+  }
+  const snapsList = Array.isArray(space.snapshots) ? space.snapshots : [];
+  const snapCount = space.snapshotCount || snapsList.length;
   if (rollbackBtn) {
-    const snapCount = space.snapshotCount || (space.snapshots ? space.snapshots.length : 0);
     rollbackBtn.hidden = !(space.isOwner && snapCount > 0);
     rollbackBtn.textContent = `Undo (${snapCount})`;
+  }
+  if (snapSelect) {
+    snapSelect.hidden = !(space.isOwner && snapsList.length > 0);
+    snapSelect.innerHTML =
+      `<option value="">History (${snapsList.length})...</option>` +
+      snapsList
+        .map(
+          (s) =>
+            `<option value="${escapeHtml(s.id)}">Restore: ${escapeHtml(s.label || s.id)}</option>`
+        )
+        .join('');
   }
 
   const hostBadge = document.getElementById('studioHostBadge');
@@ -714,6 +731,10 @@ async function openSpaceStudio(username, slug) {
         .map(([k, v]) => `${k}=${v}`)
         .join('\n');
     }
+    const customDomainInput = document.getElementById('settingsCustomDomainInput');
+    if (customDomainInput) customDomainInput.value = space.customDomain || '';
+    const webhookUrlInput = document.getElementById('settingsWebhookUrlInput');
+    if (webhookUrlInput) webhookUrlInput.value = space.submissionWebhookUrl || '';
 
     updateLiveStagingPreview();
     switchMainSection('spaceStudioView');
@@ -858,6 +879,18 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'app_auth') {
+    const slug = state.currentSpace.slug;
+    const authCode = `\n// --- SpaceHub Built-in Member Login & Auth SDK (/live/${slug}/auth) ---\nasync function spaceMemberAuth(email, password, name = '') {\n  const res = await fetch('/live/${slug}/auth', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ email, password, name })\n  });\n  const data = await res.json();\n  if (data.token) localStorage.setItem('space_member_token', data.token);\n  return data;\n}\nasync function getCurrentSpaceMember() {\n  const tok = localStorage.getItem('space_member_token') || '';\n  if (!tok) return null;\n  const res = await fetch('/live/${slug}/auth/me', {\n    headers: { Authorization: 'Bearer ' + tok }\n  });\n  if (!res.ok) return null;\n  return (await res.json()).user;\n}\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + authCode;
+    state.activeFile = 'script.js';
+    state.isDirty = true;
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    showToast('Added spaceMemberAuth() & getCurrentSpaceMember() SDK to script.js!');
+    return;
+  }
+
   if (stack === 'creator_checkout') {
     const recipient = encodeURIComponent(state.user?.email || 'romitat924@gmail.com');
     const itemName = encodeURIComponent(`${state.currentSpace.title} — Creator Pass`);
@@ -898,6 +931,33 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
   }
   updateLiveStagingPreview();
   showToast(`Injected ${stack.toUpperCase()} into index.html!`);
+});
+
+// 1-Click AI Visual Theme & Design Remixer
+document.getElementById('themePresetSelect')?.addEventListener('change', (e) => {
+  const preset = e.target.value;
+  e.target.value = '';
+  if (!preset || !state.currentSpace || !state.currentSpace.isOwner) return;
+
+  const themes = {
+    vercel_dark: `/* --- SpaceHub Theme Preset: Vercel Monochrome Dark --- */\n:root { --accent: #fafafa !important; }\nbody { background: #09090b !important; color: #fafafa !important; font-family: system-ui, -apple-system, sans-serif !important; }\n.card, .waitlist-card, .control-box, .metrics-box, .link-card { background: #121215 !important; border: 1px solid #27272a !important; color: #fafafa !important; }\nbutton, .btn-primary { background: #fafafa !important; color: #09090b !important; }`,
+    linear_glass: `/* --- SpaceHub Theme Preset: Linear Indigo Glass --- */\n:root { --accent: #818cf8 !important; }\nbody { background: radial-gradient(circle at top, #1e1b4b, #09090b 70%) !important; color: #f8fafc !important; }\n.card, .waitlist-card, .control-box, .metrics-box, .link-card { background: rgba(24, 24, 36, 0.78) !important; border: 1px solid rgba(129, 140, 248, 0.28) !important; backdrop-filter: blur(12px) !important; }\nbutton, .btn-primary { background: #6366f1 !important; color: #ffffff !important; }`,
+    daylight_light: `/* --- SpaceHub Theme Preset: Clean Daylight Light --- */\n:root { --accent: #18181b !important; }\nbody { background: #f8fafc !important; color: #0f172a !important; }\n.card, .waitlist-card, .control-box, .metrics-box, .link-card { background: #ffffff !important; border: 1px solid #e2e8f0 !important; color: #0f172a !important; box-shadow: 0 4px 16px rgba(15,23,42,0.05) !important; }\np, .tagline { color: #475569 !important; }\nbutton, .btn-primary { background: #0f172a !important; color: #ffffff !important; }`,
+    emerald_cyber: `/* --- SpaceHub Theme Preset: Emerald Cyber Matrix --- */\n:root { --accent: #10b981 !important; }\nbody { background: #02100b !important; color: #ecfdf5 !important; }\n.card, .waitlist-card, .control-box, .metrics-box, .link-card { background: #062016 !important; border: 1px solid rgba(16, 185, 129, 0.35) !important; }\nbutton, .btn-primary { background: #10b981 !important; color: #022c22 !important; }`,
+    warm_editorial: `/* --- SpaceHub Theme Preset: Warm Sunset Editorial --- */\n:root { --accent: #f97316 !important; }\nbody { background: #1c1917 !important; color: #fafaf9 !important; }\n.card, .waitlist-card, .control-box, .metrics-box, .link-card { background: #292524 !important; border: 1px solid #44403c !important; }\nbutton, .btn-primary { background: #f97316 !important; color: #0c0a09 !important; }`
+  };
+
+  const cssBlock = themes[preset];
+  if (!cssBlock) return;
+  let currentCss = state.workingFiles['style.css'] || '';
+  currentCss = currentCss.replace(/\/\* --- SpaceHub Theme Preset:[\s\S]*$/, '').trim();
+  state.workingFiles['style.css'] = `${currentCss}\n\n${cssBlock}\n`;
+  state.isDirty = true;
+  if (state.activeFile === 'style.css') {
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['style.css'];
+  }
+  updateLiveStagingPreview();
+  showToast(`Applied ${preset.replace('_', ' ').toUpperCase()} theme preset to style.css!`);
 });
 
 // Live typing updates staging preview
@@ -1044,6 +1104,50 @@ document.getElementById('saveDraftBtn').addEventListener('click', async () => {
     document.getElementById('dirtyIndicator').textContent = '✓ Staging draft saved';
     updateStudioHeaderBadges(data.space);
     showToast('Staging draft saved! Connect or buy hosting when ready to launch.');
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+// Save Named Checkpoint Snapshot
+document.getElementById('saveSnapshotBtn')?.addEventListener('click', async () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const label = window.prompt('Checkpoint name (e.g. "v1 Ready", "Before Theme Update"):', 'Manual checkpoint');
+  if (!label) return;
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/snapshot`, {
+      method: 'POST',
+      body: JSON.stringify({ label })
+    });
+    state.currentSpace = data.space;
+    updateStudioHeaderBadges(data.space);
+    showToast(data.message);
+  } catch (err) {
+    showToast(err.message);
+  }
+});
+
+// Restore Specific Snapshot from History Dropdown
+document.getElementById('snapshotRestoreSelect')?.addEventListener('change', async (e) => {
+  const snapshotId = e.target.value;
+  e.target.value = '';
+  if (!snapshotId || !state.currentSpace || !state.currentSpace.isOwner) return;
+  try {
+    const { ownerUsername, slug } = state.currentSpace;
+    const data = await apiFetch(`/api/spaces/${ownerUsername}/${slug}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({ snapshotId })
+    });
+    state.currentSpace = data.space;
+    state.workingFiles = JSON.parse(JSON.stringify(data.space.draftFiles));
+    state.isDirty = false;
+    document.getElementById('codeEditorTextarea').value =
+      state.workingFiles[state.activeFile] || '';
+    document.getElementById('dirtyIndicator').textContent = '✓ Restored selected checkpoint';
+    updateStudioHeaderBadges(data.space);
+    updateLiveStagingPreview();
+    showToast(data.message);
   } catch (err) {
     showToast(err.message);
   }
@@ -1480,6 +1584,8 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
   const appThemeColor = document.getElementById('settingsThemeColorSelect')?.value || '#09090b';
   const previewPasscode = document.getElementById('settingsPasscodeInput')?.value.trim() || '';
   const secrets = document.getElementById('settingsSecretsInput')?.value || '';
+  const customDomain = document.getElementById('settingsCustomDomainInput')?.value.trim() || '';
+  const submissionWebhookUrl = document.getElementById('settingsWebhookUrlInput')?.value.trim() || '';
 
   try {
     const { ownerUsername, slug } = state.currentSpace;
@@ -1494,6 +1600,8 @@ document.getElementById('spaceSettingsForm').addEventListener('submit', async (e
         appIconText,
         appThemeColor,
         previewPasscode,
+        customDomain,
+        submissionWebhookUrl,
         secrets
       })
     });

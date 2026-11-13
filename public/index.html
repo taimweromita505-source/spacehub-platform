@@ -530,9 +530,26 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                   <option value="lucide">Lucide Vector Icons</option>
                   <option value="cloud_db">Space Cloud Storage Helper</option>
                   <option value="proxy_helper">Server-Side API Proxy Helper</option>
+                  <option value="app_auth">Member Login / Auth Gate</option>
                   <option value="creator_checkout">Creator Buy / Tip Button</option>
                 </select>
+                <label for="themePresetSelect" class="visually-hidden">Remix Visual Theme</label>
+                <select id="themePresetSelect" class="select-control" style="padding: 0.25rem 0.5rem; font-size: 0.72rem; width: auto;">
+                  <option value="">Theme Remixer</option>
+                  <option value="vercel_dark">Vercel Monochrome Dark</option>
+                  <option value="linear_glass">Linear Indigo Glass</option>
+                  <option value="daylight_light">Clean Daylight Light</option>
+                  <option value="emerald_cyber">Emerald Cyber Matrix</option>
+                  <option value="warm_editorial">Warm Sunset Editorial</option>
+                </select>
                 <span class="unsaved-indicator" id="dirtyIndicator">Saved</span>
+                <button type="button" class="btn btn-ghost btn-xs" id="saveSnapshotBtn" title="Save a named version checkpoint">
+                  + Checkpoint
+                </button>
+                <label for="snapshotRestoreSelect" class="visually-hidden">Restore Snapshot</label>
+                <select id="snapshotRestoreSelect" class="select-control" style="padding: 0.25rem 0.45rem; font-size: 0.72rem; width: auto;" hidden>
+                  <option value="">History...</option>
+                </select>
                 <button type="button" class="btn btn-ghost btn-xs" id="rollbackDraftBtn" hidden>
                   Undo Build
                 </button>
@@ -827,6 +844,35 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
               spellcheck="false"
               style="font-family: var(--font-mono); font-size: 0.8rem;"
             ></textarea>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+            <div class="field">
+              <label for="settingsCustomDomainInput">Custom Domain (Optional)</label>
+              <span class="hint">Point a <code>CNAME</code> record to <code>spacehub.win</code> to serve this Space on your domain.</span>
+              <input
+                type="text"
+                id="settingsCustomDomainInput"
+                name="customDomain"
+                placeholder="app.yourdomain.com"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+              />
+            </div>
+            <div class="field">
+              <label for="settingsWebhookUrlInput">Form Notification Webhook URL (Optional)</label>
+              <span class="hint">Discord, Slack, Zapier, or custom webhook triggered on every <code>/live/:slug/submit</code> lead.</span>
+              <input
+                type="url"
+                id="settingsWebhookUrlInput"
+                name="submissionWebhookUrl"
+                placeholder="https://discord.com/api/webhooks/..."
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+              />
+            </div>
           </div>
 
           <div class="settings-actions">
