@@ -2673,6 +2673,22 @@ function buildBundledHtml(files, space = null) {
     }
   }
 
+  Object.entries(files || {}).forEach(([fname, content]) => {
+    if (['index.html', 'style.css', 'script.js', 'README.md'].includes(fname)) return;
+    const escaped = fname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (fname.endsWith('.css')) {
+      const linkRe = new RegExp(`<link[^>]*href=["']\\.?\\/?${escaped}["'][^>]*>`, 'i');
+      if (linkRe.test(html)) {
+        html = html.replace(linkRe, `<style>\n${content}\n</style>`);
+      }
+    } else if (fname.endsWith('.js')) {
+      const scriptRe = new RegExp(`<script[^>]*src=["']\\.?\\/?${escaped}["'][^>]*><\\/script>`, 'i');
+      if (scriptRe.test(html)) {
+        html = html.replace(scriptRe, `<script>\n${content}\n</script>`);
+      }
+    }
+  });
+
   const appPlatform = space?.appPlatform || 'both';
   const supportsAndroid = appPlatform === 'both' || appPlatform === 'android';
   const supportsIphone = appPlatform === 'both' || appPlatform === 'iphone';
@@ -2703,6 +2719,43 @@ function buildBundledHtml(files, space = null) {
 
   return html;
 }
+
+// Per-Space Cloud JSON Storage API (GET/POST/PUT/DELETE /live/:slug/storage)
+app.get(['/live/:slug/storage', '/s/:slug/storage'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const store = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+  const key = req.query.key;
+  res.json({ ok: true, data: key ? store[key] ?? null : store });
+});
+
+app.post(['/live/:slug/storage', '/s/:slug/storage'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.appStorage = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+  if (req.body && typeof req.body === 'object') {
+    const nextState = { ...space.appStorage, ...req.body };
+    if (JSON.stringify(nextState).length > 102400) {
+      return res.status(413).json({ error: 'Space storage limit (100 KB) exceeded.' });
+    }
+    space.appStorage = nextState;
+    saveDb(db);
+  }
+  res.json({ ok: true, data: space.appStorage });
+});
+
+app.delete(['/live/:slug/storage', '/s/:slug/storage'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.appStorage = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+  if (req.query.key) delete space.appStorage[req.query.key];
+  else space.appStorage = {};
+  saveDb(db);
+  res.json({ ok: true, data: space.appStorage });
+});
 
 // Form & Waitlist Submissions API for Space Owners & Public Live Forms
 app.post(['/live/:slug/submit', '/s/:slug/submit'], (req, res) => {
@@ -2879,6 +2932,26 @@ app.get(['/live/:slug', '/s/:slug', '/spaces/:username/:slug/live'], (req, res) 
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(buildBundledHtml(targetFiles, space));
+});
+
+app.get(['/live/:slug/:filename', '/s/:slug/:filename'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).send('Not found');
+  const files = space.publishedFiles || space.draftFiles || {};
+  const fileName = req.params.filename;
+  if (files[fileName] === undefined) return res.status(404).send('File not found');
+  const ext = fileName.split('.').pop().toLowerCase();
+  const mimeMap = {
+    html: 'text/html; charset=utf-8',
+    css: 'text/css; charset=utf-8',
+    js: 'application/javascript; charset=utf-8',
+    json: 'application/json; charset=utf-8',
+    svg: 'image/svg+xml; charset=utf-8',
+    txt: 'text/plain; charset=utf-8'
+  };
+  res.setHeader('Content-Type', mimeMap[ext] || 'text/plain; charset=utf-8');
+  res.send(String(files[fileName]));
 });
 
 if (require.main === module) {

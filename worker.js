@@ -700,6 +700,22 @@ function buildBundledHtml(files, origin = '', space = null) {
       html = html + `\n<script>\n${js}\n</script>`;
     }
   }
+  // Inline any additional custom .css or .js files from the workspace
+  Object.entries(files || {}).forEach(([fname, content]) => {
+    if (['index.html', 'style.css', 'script.js', 'README.md'].includes(fname)) return;
+    const escaped = fname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (fname.endsWith('.css')) {
+      const linkRe = new RegExp(`<link[^>]*href=["']\\.?\\/?${escaped}["'][^>]*>`, 'i');
+      if (linkRe.test(html)) {
+        html = html.replace(linkRe, `<style>\n${content}\n</style>`);
+      }
+    } else if (fname.endsWith('.js')) {
+      const scriptRe = new RegExp(`<script[^>]*src=["']\\.?\\/?${escaped}["'][^>]*><\\/script>`, 'i');
+      if (scriptRe.test(html)) {
+        html = html.replace(scriptRe, `<script>\n${content}\n</script>`);
+      }
+    }
+  });
   const appPlatform = space?.appPlatform || 'both';
   const supportsAndroid = appPlatform === 'both' || appPlatform === 'android';
   const supportsIphone = appPlatform === 'both' || appPlatform === 'iphone';
@@ -955,7 +971,43 @@ export default {
       }
     }
 
-    // 1b. Form & Waitlist Submissions Endpoint (POST /live/:slug/submit or POST /s/:slug/submit)
+    // 1b. Per-Space Cloud JSON Storage API (GET/POST/PUT/DELETE /live/:slug/storage)
+    const storageLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/storage\/?$/i);
+    if (storageLiveMatch) {
+      const slug = decodeURIComponent(storageLiveMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.appStorage = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+
+      if (method === 'GET') {
+        const key = url.searchParams.get('key');
+        return jsonResponse({
+          ok: true,
+          data: key ? space.appStorage[key] ?? null : space.appStorage
+        });
+      }
+      if (method === 'POST' || method === 'PUT') {
+        const incoming = await request.json().catch(() => ({}));
+        if (incoming && typeof incoming === 'object') {
+          const nextState = { ...space.appStorage, ...incoming };
+          if (JSON.stringify(nextState).length > 102400) {
+            return jsonResponse({ error: 'Space storage limit (100 KB) exceeded.' }, 413);
+          }
+          space.appStorage = nextState;
+          await saveDb(env, db);
+        }
+        return jsonResponse({ ok: true, data: space.appStorage });
+      }
+      if (method === 'DELETE') {
+        const key = url.searchParams.get('key');
+        if (key) delete space.appStorage[key];
+        else space.appStorage = {};
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, data: space.appStorage });
+      }
+    }
+
+    // 1b-2. Form & Waitlist Submissions Endpoint (POST /live/:slug/submit or POST /s/:slug/submit)
     const submitLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/submit\/?$/i);
     if (submitLiveMatch && method === 'POST') {
       const slug = decodeURIComponent(submitLiveMatch[1]).toLowerCase();
@@ -1034,6 +1086,32 @@ export default {
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       });
+    }
+
+    // 1d. Serve Custom Workspace Files (/live/:slug/:filename) for Multi-File / Multi-Page Web Apps
+    const customFileMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/([a-zA-Z0-9._-]+\.(?:html|css|js|json|svg|txt))$/i);
+    if (customFileMatch && method === 'GET') {
+      const slug = decodeURIComponent(customFileMatch[1]).toLowerCase();
+      const fileName = decodeURIComponent(customFileMatch[2]);
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (space) {
+        const files = space.publishedFiles || space.draftFiles || {};
+        if (files[fileName] !== undefined) {
+          const ext = fileName.split('.').pop().toLowerCase();
+          const mimeMap = {
+            html: 'text/html; charset=utf-8',
+            css: 'text/css; charset=utf-8',
+            js: 'application/javascript; charset=utf-8',
+            json: 'application/json; charset=utf-8',
+            svg: 'image/svg+xml; charset=utf-8',
+            txt: 'text/plain; charset=utf-8'
+          };
+          return new Response(String(files[fileName]), {
+            status: 200,
+            headers: { 'Content-Type': mimeMap[ext] || 'text/plain; charset=utf-8' }
+          });
+        }
+      }
     }
 
     // 2. API Routes

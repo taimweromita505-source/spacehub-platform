@@ -215,6 +215,22 @@ function bundleClientPreview(files) {
       html = html + `\n<script>\n${js}\n</script>`;
     }
   }
+
+  Object.entries(files || {}).forEach(([fname, content]) => {
+    if (['index.html', 'style.css', 'script.js', 'README.md'].includes(fname)) return;
+    const escaped = fname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (fname.endsWith('.css')) {
+      const linkRe = new RegExp(`<link[^>]*href=["']\\.?\\/?${escaped}["'][^>]*>`, 'i');
+      if (linkRe.test(html)) {
+        html = html.replace(linkRe, `<style>\n${content}\n</style>`);
+      }
+    } else if (fname.endsWith('.js')) {
+      const scriptRe = new RegExp(`<script[^>]*src=["']\\.?\\/?${escaped}["'][^>]*><\\/script>`, 'i');
+      if (scriptRe.test(html)) {
+        html = html.replace(scriptRe, `<script>\n${content}\n</script>`);
+      }
+    }
+  });
   return html;
 }
 
@@ -551,6 +567,34 @@ function updateStudioHeaderBadges(space) {
   liveLink.href = space.liveUrl || space.stagingPreviewUrl;
 }
 
+function renderFileTabs() {
+  const container = document.getElementById('fileTabsList');
+  if (!container) return;
+  const defaultOrder = ['index.html', 'style.css', 'script.js', 'README.md'];
+  const extraFiles = Object.keys(state.workingFiles || {}).filter((f) => !defaultOrder.includes(f));
+  const allFiles = [...defaultOrder, ...extraFiles];
+
+  container.innerHTML = allFiles
+    .map(
+      (fname) =>
+        `<button type="button" class="file-tab ${fname === state.activeFile ? 'active' : ''}" data-file="${escapeHtml(
+          fname
+        )}">${escapeHtml(fname)}</button>`
+    )
+    .join('');
+
+  container.querySelectorAll('.file-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const file = btn.getAttribute('data-file');
+      state.activeFile = file;
+      container.querySelectorAll('.file-tab').forEach((b) => b.classList.toggle('active', b === btn));
+      document.getElementById('codeEditorTextarea').value = state.workingFiles[file] || '';
+      const addr = document.getElementById('previewAddressBar');
+      if (addr) addr.textContent = `staging://${file}`;
+    });
+  });
+}
+
 async function openSpaceStudio(username, slug) {
   try {
     const data = await apiFetch(`/api/spaces/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`);
@@ -565,10 +609,7 @@ async function openSpaceStudio(username, slug) {
     state.isDirty = false;
 
     updateStudioHeaderBadges(space);
-
-    document.querySelectorAll('.file-tab').forEach((btn) => {
-      btn.classList.toggle('active', btn.getAttribute('data-file') === state.activeFile);
-    });
+    renderFileTabs();
     document.getElementById('codeEditorTextarea').value = state.workingFiles[state.activeFile] || '';
     document.getElementById('dirtyIndicator').textContent = space.isOwner
       ? 'Staging Workspace Ready'
@@ -607,16 +648,85 @@ async function openSpaceStudio(username, slug) {
   }
 }
 
-// File tab switching inside editor
-document.querySelectorAll('.file-tab').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const file = btn.getAttribute('data-file');
-    state.activeFile = file;
-    document.querySelectorAll('.file-tab').forEach((b) => {
-      b.classList.toggle('active', b === btn);
-    });
-    document.getElementById('codeEditorTextarea').value = state.workingFiles[file] || '';
-  });
+// Add Custom File (+ File button)
+document.getElementById('addCustomFileBtn')?.addEventListener('click', () => {
+  if (!state.currentSpace || !state.currentSpace.isOwner) return;
+  const rawName = window.prompt('New file name (e.g. components.js, data.json, pricing.html, theme.css):');
+  if (!rawName) return;
+  const cleanName = rawName.trim().replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!cleanName || !/\.(html|css|js|json|svg|txt)$/i.test(cleanName)) {
+    showToast('Use a valid extension: .html, .css, .js, .json, .svg, or .txt');
+    return;
+  }
+  if (state.workingFiles[cleanName] === undefined) {
+    state.workingFiles[cleanName] = cleanName.endsWith('.json')
+      ? '{\n  "status": "ready"\n}'
+      : `// ${cleanName}\n`;
+    if (cleanName.endsWith('.js') && state.workingFiles['index.html'] && !state.workingFiles['index.html'].includes(cleanName)) {
+      state.workingFiles['index.html'] = state.workingFiles['index.html'].replace(
+        '</body>',
+        `  <script src="${cleanName}"></script>\n</body>`
+      );
+    } else if (cleanName.endsWith('.css') && state.workingFiles['index.html'] && !state.workingFiles['index.html'].includes(cleanName)) {
+      state.workingFiles['index.html'] = state.workingFiles['index.html'].replace(
+        '</head>',
+        `  <link rel="stylesheet" href="${cleanName}" />\n</head>`
+      );
+    }
+  }
+  state.activeFile = cleanName;
+  state.isDirty = true;
+  renderFileTabs();
+  document.getElementById('codeEditorTextarea').value = state.workingFiles[cleanName];
+  updateLiveStagingPreview();
+  showToast(`Created ${cleanName} in workspace!`);
+});
+
+// 1-Click Library & Stack Injector (+ Add Library / Stack)
+document.getElementById('injectStackSelect')?.addEventListener('change', (e) => {
+  const stack = e.target.value;
+  e.target.value = '';
+  if (!stack || !state.currentSpace || !state.currentSpace.isOwner) return;
+
+  const snippets = {
+    tailwind: `<script src="https://cdn.tailwindcss.com"></script>`,
+    react: `<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>\n  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>\n  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>`,
+    alpine: `<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>`,
+    chartjs: `<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>`,
+    threejs: `<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>`,
+    lucide: `<script src="https://unpkg.com/lucide@latest"></script>`
+  };
+
+  if (stack === 'cloud_db') {
+    const slug = state.currentSpace.slug;
+    const helperCode = `\n// --- SpaceHub Built-in Cloud JSON Storage Helper ---\nasync function loadCloudState() {\n  const res = await fetch('/live/${slug}/storage');\n  const json = await res.json();\n  return json.data || {};\n}\nasync function saveCloudState(patch) {\n  const res = await fetch('/live/${slug}/storage', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify(patch)\n  });\n  return (await res.json()).data;\n}\n`;
+    state.workingFiles['script.js'] = (state.workingFiles['script.js'] || '') + helperCode;
+    state.activeFile = 'script.js';
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['script.js'];
+    showToast('Added Cloud Storage SDK helper functions to script.js!');
+    return;
+  }
+
+  const tag = snippets[stack];
+  if (!tag) return;
+  let html = state.workingFiles['index.html'] || '';
+  if (html.includes(tag)) {
+    showToast('This library is already included in index.html.');
+    return;
+  }
+  if (html.includes('</head>')) {
+    html = html.replace('</head>', `  ${tag}\n</head>`);
+  } else {
+    html = `${tag}\n` + html;
+  }
+  state.workingFiles['index.html'] = html;
+  state.isDirty = true;
+  if (state.activeFile === 'index.html') {
+    document.getElementById('codeEditorTextarea').value = html;
+  }
+  updateLiveStagingPreview();
+  showToast(`Injected ${stack.toUpperCase()} into index.html!`);
 });
 
 // Live typing updates staging preview

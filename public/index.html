@@ -503,13 +503,29 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
           <!-- Left: Code Editor -->
           <div class="editor-pane" id="editorPane">
             <div class="file-tabs-bar">
-              <div class="file-tabs" id="fileTabsList">
-                <button type="button" class="file-tab active" data-file="index.html">index.html</button>
-                <button type="button" class="file-tab" data-file="style.css">style.css</button>
-                <button type="button" class="file-tab" data-file="script.js">script.js</button>
-                <button type="button" class="file-tab" data-file="README.md">README.md</button>
+              <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                <div class="file-tabs" id="fileTabsList">
+                  <button type="button" class="file-tab active" data-file="index.html">index.html</button>
+                  <button type="button" class="file-tab" data-file="style.css">style.css</button>
+                  <button type="button" class="file-tab" data-file="script.js">script.js</button>
+                  <button type="button" class="file-tab" data-file="README.md">README.md</button>
+                </div>
+                <button type="button" class="btn btn-ghost btn-xs" id="addCustomFileBtn" title="Add a new file (.js, .css, .html, .json)">
+                  + File
+                </button>
               </div>
               <div class="editor-toolbar">
+                <label for="injectStackSelect" class="visually-hidden">Add Library or Stack</label>
+                <select id="injectStackSelect" class="select-control" style="padding: 0.25rem 0.5rem; font-size: 0.72rem; width: auto;">
+                  <option value="">+ Add Library / Stack</option>
+                  <option value="tailwind">Tailwind CSS (CDN)</option>
+                  <option value="react">React 18 + Babel (JSX)</option>
+                  <option value="alpine">Alpine.js Reactive UI</option>
+                  <option value="chartjs">Chart.js Charts</option>
+                  <option value="threejs">Three.js 3D WebGL</option>
+                  <option value="lucide">Lucide Vector Icons</option>
+                  <option value="cloud_db">Space Cloud Storage Helper</option>
+                </select>
                 <span class="unsaved-indicator" id="dirtyIndicator">Saved</span>
                 <button type="button" class="btn btn-ghost btn-xs" id="rollbackDraftBtn" hidden>
                   Undo Build
@@ -547,7 +563,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
                 id="workspacePreviewFrame"
                 class="preview-iframe"
                 title="Live Staging Preview"
-                sandbox="allow-scripts allow-modals"
+                sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
               ></iframe>
             </div>
           </div>
@@ -567,7 +583,7 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
             id="publishedAppFrame"
             class="preview-iframe"
             title="Space Application Preview"
-            sandbox="allow-scripts allow-modals"
+            sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
           ></iframe>
         </div>
       </div>

@@ -280,6 +280,18 @@ function request(server, method, path, body = null, token = null) {
     assert.ok(gmailAuth.body.token, 'Should return session token for Gmail sign-in');
     assert.strictEqual(gmailAuth.body.user.socialProvider, 'google');
 
+    console.log('11. Testing Advanced Space Cloud JSON Storage API (/live/:slug/storage)...');
+    const storePost = await request(server, 'POST', `/live/${space.slug}/storage`, {
+      todos: [{ id: 1, title: 'Ship v2 app' }],
+      counter: 42
+    });
+    assert.strictEqual(storePost.status, 200);
+    assert.strictEqual(storePost.body.data.counter, 42);
+
+    const storeGet = await request(server, 'GET', `/live/${space.slug}/storage?key=counter`);
+    assert.strictEqual(storeGet.status, 200);
+    assert.strictEqual(storeGet.body.data, 42);
+
     console.log('ALL TESTS PASSED!');
   } finally {
     server.close();
