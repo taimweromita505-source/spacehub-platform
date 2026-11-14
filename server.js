@@ -2023,6 +2023,200 @@ function resolveSpaceRedirect(files, slug, fileName) {
   return null;
 }
 
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function evaluateSpaceCoupon(space, rawCode, subtotalUsd) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  if (!code) return { valid: false, error: 'Coupon code is required.' };
+  const coupons = Array.isArray(space.coupons) ? space.coupons : [];
+  const coupon = coupons.find((c) => String(c.code || '').toUpperCase() === code);
+  if (!coupon || coupon.active === false) {
+    return { valid: false, error: `Coupon code "${code}" is invalid or inactive.` };
+  }
+  if (coupon.expiresAt && Date.parse(coupon.expiresAt) < Date.now()) {
+    return { valid: false, error: `Coupon code "${code}" has expired.` };
+  }
+  if (coupon.maxUses && Number(coupon.usedCount || 0) >= Number(coupon.maxUses)) {
+    return { valid: false, error: `Coupon code "${code}" has reached its maximum redemption limit.` };
+  }
+  const minOrder = Number(coupon.minOrderUsd || 0);
+  if (subtotalUsd < minOrder) {
+    return { valid: false, error: `Coupon code "${code}" requires a minimum order of $${minOrder.toFixed(2)}.` };
+  }
+  let discountUsd = 0;
+  if (coupon.discountType === 'fixed') {
+    discountUsd = Math.min(subtotalUsd, Math.max(0, Number(coupon.discountValue) || 0));
+  } else {
+    const pct = Math.min(100, Math.max(0, Number(coupon.discountValue) || 0));
+    discountUsd = Math.round(subtotalUsd * (pct / 100) * 100) / 100;
+  }
+  const finalAmountUsd = Math.max(0, Math.round((subtotalUsd - discountUsd) * 100) / 100);
+  return {
+    valid: true,
+    coupon,
+    code: coupon.code,
+    discountType: coupon.discountType,
+    discountValue: coupon.discountValue,
+    subtotalUsd,
+    discountUsd,
+    finalAmountUsd
+  };
+}
+
+function auditAndOptimizeSpaceVitals(space, applyFixes = false) {
+  if (!space.draftFiles || typeof space.draftFiles !== 'object') {
+    space.draftFiles = { ...(space.publishedFiles || {}) };
+  }
+  let html = String(space.draftFiles['index.html'] || (space.publishedFiles && space.publishedFiles['index.html']) || '');
+  let css = String(space.draftFiles['style.css'] || (space.publishedFiles && space.publishedFiles['style.css']) || '');
+  const issues = [];
+  const fixesApplied = [];
+
+  const imgRegex = /<img\b[^>]*>/gi;
+  const imgMatches = [...html.matchAll(imgRegex)];
+  if (imgMatches.length > 0) {
+    const firstImg = imgMatches[0][0];
+    if (!/\bfetchpriority\s*=/i.test(firstImg)) {
+      issues.push({
+        metric: 'LCP',
+        severity: 'high',
+        title: 'Hero image missing fetchpriority="high"',
+        fix: 'Add fetchpriority="high" to the primary above-the-fold <img> element.'
+      });
+      if (applyFixes) {
+        const patchedFirst = firstImg.replace(/^<img\b/i, '<img fetchpriority="high"');
+        html = html.replace(firstImg, patchedFirst);
+        fixesApplied.push('Added fetchpriority="high" to primary hero <img>');
+      }
+    }
+  }
+
+  let missingDimCount = 0;
+  html = html.replace(/<img\b([^>]*)>/gi, (fullMatch, attrs) => {
+    const hasWidth = /\bwidth\s*=/i.test(attrs);
+    const hasHeight = /\bheight\s*=/i.test(attrs);
+    if (!hasWidth || !hasHeight) {
+      missingDimCount++;
+      if (applyFixes) {
+        const extra = `${!hasWidth ? ' width="800"' : ''}${!hasHeight ? ' height="450"' : ''}`;
+        return `<img${extra}${attrs}>`;
+      }
+    }
+    return fullMatch;
+  });
+  if (missingDimCount > 0) {
+    if (!applyFixes) {
+      issues.push({
+        metric: 'CLS',
+        severity: 'medium',
+        title: `${missingDimCount} <img> element(s) missing explicit width/height attributes`,
+        fix: 'Add explicit width and height attributes to prevent Cumulative Layout Shift.'
+      });
+    } else {
+      fixesApplied.push(`Added explicit width/height dimensions to ${missingDimCount} <img> element(s)`);
+    }
+  }
+
+  let blockingScripts = 0;
+  html = html.replace(/<script\b([^>]*\bsrc\s*=\s*["'][^"']+["'][^>]*)>/gi, (fullMatch, attrs) => {
+    const isDeferred = /\b(?:defer|async)\b/i.test(attrs) || /\btype\s*=\s*["']module["']/i.test(attrs);
+    if (!isDeferred) {
+      blockingScripts++;
+      if (applyFixes) {
+        return `<script defer${attrs}>`;
+      }
+    }
+    return fullMatch;
+  });
+  if (blockingScripts > 0) {
+    if (!applyFixes) {
+      issues.push({
+        metric: 'INP',
+        severity: 'medium',
+        title: `${blockingScripts} external <script> tag(s) block main-thread parsing`,
+        fix: 'Add defer attribute to external <script src="..."> tags.'
+      });
+    } else {
+      fixesApplied.push(`Added defer attribute to ${blockingScripts} render-blocking <script> tag(s)`);
+    }
+  }
+
+  if (!/content-visibility\s*:\s*auto/i.test(css)) {
+    if (!applyFixes) {
+      issues.push({
+        metric: 'LCP',
+        severity: 'low',
+        title: 'Below-the-fold sections lack content-visibility: auto',
+        fix: 'Add content-visibility: auto and contain-intrinsic-size to offscreen sections.'
+      });
+    } else {
+      css = `${css.trim()}\n\n/* Core Web Vitals Auto-Optimization */\nfooter, section:nth-of-type(n+2), .features, .pricing {\n  content-visibility: auto;\n  contain-intrinsic-size: auto 320px;\n}\n`;
+      fixesApplied.push('Added content-visibility: auto and contain-intrinsic-size to below-the-fold CSS rules');
+    }
+  }
+
+  if (applyFixes) {
+    space.draftFiles['index.html'] = html;
+    space.draftFiles['style.css'] = css;
+    if (space.publishedFiles && typeof space.publishedFiles === 'object') {
+      space.publishedFiles['index.html'] = html;
+      space.publishedFiles['style.css'] = css;
+    }
+  }
+
+  const penalty = issues.reduce((sum, iss) => sum + (iss.severity === 'high' ? 25 : iss.severity === 'medium' ? 15 : 10), 0);
+  const score = Math.max(0, 100 - penalty);
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D';
+  return {
+    score,
+    grade,
+    optimized: issues.length === 0,
+    issues,
+    fixesApplied
+  };
+}
+
+function generateBookingIcs(space, booking, origin = 'https://spacehub.win') {
+  const dateStr = String(booking.date || '2026-12-01').replace(/-/g, '');
+  const parts = String(booking.time || '09:00').split(':');
+  const startH = String(Number(parts[0]) || 9).padStart(2, '0');
+  const startM = String(Number(parts[1]) || 0).padStart(2, '0');
+  const durationMins = Number(booking.durationMins) || 30;
+  const totalStartMins = Number(startH) * 60 + Number(startM);
+  const totalEndMins = totalStartMins + durationMins;
+  const endH = String(Math.floor(totalEndMins / 60) % 24).padStart(2, '0');
+  const endM = String(totalEndMins % 60).padStart(2, '0');
+  const dtStart = `${dateStr}T${startH}${startM}00Z`;
+  const dtEnd = `${dateStr}T${endH}${endM}00Z`;
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const summary = `${space.title || space.slug}: ${booking.service || 'Appointment'} (${booking.customerName || 'Guest'})`;
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//SpaceHub//Built-in Booking Engine//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${booking.id}@spacehub.win`,
+    `DTSTAMP:${stamp}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${summary.replace(/[\r\n]/g, ' ')}`,
+    `DESCRIPTION:Confirmation ${booking.confirmationCode || booking.id} - ${String(booking.notes || '').replace(/[\r\n]/g, ' ')}`,
+    `URL:${origin}/live/${space.slug}`,
+    'STATUS:CONFIRMED',
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+}
+
 function buildSpaceOrder(db, space, payload, orderId, origin) {
   const rawItems = Array.isArray(payload.items) ? payload.items.slice(0, 20) : [];
   const items = rawItems.map((it) => ({
@@ -2031,7 +2225,20 @@ function buildSpaceOrder(db, space, payload, orderId, origin) {
     qty: Math.min(99, Math.max(1, Math.floor(Number(it && it.qty) || 1)))
   }));
   if (!items.length) return { error: 'At least one item is required.' };
-  const amountUsd = Math.round(items.reduce((s, i) => s + i.priceUsd * i.qty, 0) * 100) / 100;
+  const subtotalUsd = Math.round(items.reduce((s, i) => s + i.priceUsd * i.qty, 0) * 100) / 100;
+  let discountUsd = 0;
+  let appliedCouponCode = null;
+  const rawCoupon = String(payload.couponCode || payload.promoCode || '').trim();
+  if (rawCoupon) {
+    const check = evaluateSpaceCoupon(space, rawCoupon, subtotalUsd);
+    if (!check.valid) {
+      return { error: check.error };
+    }
+    discountUsd = check.discountUsd;
+    appliedCouponCode = check.code;
+    check.coupon.usedCount = (Number(check.coupon.usedCount) || 0) + 1;
+  }
+  const amountUsd = Math.max(0, Math.round((subtotalUsd - discountUsd) * 100) / 100);
   const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   const owner = (db.users || []).find((u) => u.id === space.ownerId);
   const recipient = String(secrets.PAYPAL_EMAIL || (owner && owner.email) || '').trim();
@@ -2049,6 +2256,9 @@ function buildSpaceOrder(db, space, payload, orderId, origin) {
     order: {
       id: orderId,
       items,
+      subtotalUsd,
+      discountUsd,
+      couponCode: appliedCouponCode,
       amountUsd,
       buyerEmail: String(payload.buyerEmail || '').trim().slice(0, 160),
       status: 'pending',
@@ -5829,6 +6039,259 @@ app.get(['/live/:slug/referrals', '/s/:slug/referrals'], (req, res) => {
   if (!space) return res.status(404).json({ error: 'Space not found.' });
   const leaderboard = [...(space.referrals || [])].sort((a, b) => (b.conversions || 0) - (a.conversions || 0));
   res.json({ ok: true, count: leaderboard.length, leaderboard });
+});
+
+// 1-Click Core Web Vitals & LCP Auto-Optimizer (/api/spaces/:username/:slug/vitals-optimize)
+app.get('/api/spaces/:username/:slug/vitals-optimize', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === req.params.username.toLowerCase() && s.slug === req.params.slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (!canEditSpace(space, user)) return res.status(403).json({ error: 'Forbidden.' });
+  const report = auditAndOptimizeSpaceVitals(space, false);
+  res.json({ ok: true, ...report });
+});
+
+app.post('/api/spaces/:username/:slug/vitals-optimize', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === req.params.username.toLowerCase() && s.slug === req.params.slug.toLowerCase()
+  );
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (!canEditSpace(space, user)) return res.status(403).json({ error: 'Forbidden.' });
+  pushSpaceSnapshot(space, 'Before 1-Click Core Web Vitals Auto-Optimization');
+  const initialAudit = auditAndOptimizeSpaceVitals(space, true);
+  const postAudit = auditAndOptimizeSpaceVitals(space, false);
+  space.hasUnpublishedChanges = true;
+  space.updatedAt = new Date().toISOString();
+  recordAuditLog(space, user, 'vitals_auto_optimized', {
+    fixesCount: initialAudit.fixesApplied.length,
+    fixesApplied: initialAudit.fixesApplied
+  });
+  saveDb(db);
+  res.json({
+    ok: true,
+    optimized: true,
+    score: postAudit.score,
+    grade: postAudit.grade,
+    fixesApplied: initialAudit.fixesApplied,
+    issues: postAudit.issues,
+    files: space.draftFiles
+  });
+});
+
+// Built-in Booking, Appointment & Calendar Engine
+app.get(['/live/:slug/bookings/:id/invite.ics', '/s/:slug/bookings/:id/invite.ics'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const booking = (space.bookings || []).find((b) => b.id === req.params.id || b.confirmationCode === req.params.id);
+  if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+  const origin = `${req.protocol}://${req.get('host')}`;
+  res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="booking-${booking.id}.ics"`);
+  res.send(generateBookingIcs(space, booking, origin));
+});
+
+app.get(['/live/:slug/bookings/slots', '/s/:slug/bookings/slots'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const date = String(req.query.date || new Date().toISOString().slice(0, 10)).trim();
+  const allSlots = [
+    '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
+    '12:00', '12:30', '13:00', '13:30', '14:00', '14:30',
+    '15:00', '15:30', '16:00', '16:30', '17:00'
+  ];
+  const bookedTimes = new Set(
+    (space.bookings || [])
+      .filter((b) => b.date === date && b.status !== 'cancelled')
+      .map((b) => b.time)
+  );
+  res.json({
+    ok: true,
+    date,
+    availableSlots: allSlots.filter((t) => !bookedTimes.has(t)),
+    bookedSlots: [...bookedTimes]
+  });
+});
+
+app.post(['/live/:slug/bookings', '/s/:slug/bookings'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  if (!Array.isArray(space.bookings)) space.bookings = [];
+  const payload = req.body || {};
+  const date = String(payload.date || '').trim();
+  const time = String(payload.time || '').trim();
+  const customerName = String(payload.customerName || payload.name || '').trim();
+  const customerEmail = String(payload.customerEmail || payload.email || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time) || !customerName) {
+    return res.status(400).json({ error: 'Valid date (YYYY-MM-DD), time (HH:MM), and customerName are required.' });
+  }
+  const conflict = space.bookings.find((b) => b.date === date && b.time === time && b.status !== 'cancelled');
+  if (conflict) {
+    return res.status(409).json({ error: `Time slot ${date} at ${time} is already booked.`, conflictSlot: { date, time } });
+  }
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const booking = {
+    id: 'bk_' + crypto.randomBytes(5).toString('hex'),
+    confirmationCode: 'CONF-' + crypto.randomBytes(3).toString('hex').toUpperCase(),
+    date,
+    time,
+    durationMins: Math.min(240, Math.max(15, Number(payload.durationMins) || 30)),
+    customerName,
+    customerEmail,
+    service: String(payload.service || 'General Consultation').trim().slice(0, 120),
+    notes: String(payload.notes || '').trim().slice(0, 500),
+    status: 'confirmed',
+    createdAt: new Date().toISOString()
+  };
+  booking.icsUrl = `${origin}/live/${space.slug}/bookings/${booking.id}/invite.ics`;
+  space.bookings.push(booking);
+  saveDb(db);
+  res.status(201).json({ ok: true, booking });
+});
+
+app.get(['/live/:slug/bookings', '/s/:slug/bookings'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  let list = [...(space.bookings || [])];
+  if (req.query.date) list = list.filter((b) => b.date === req.query.date);
+  if (req.query.status) list = list.filter((b) => b.status === req.query.status);
+  res.json({ ok: true, count: list.length, bookings: list });
+});
+
+app.delete(['/live/:slug/bookings/:id', '/s/:slug/bookings/:id'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const booking = (space.bookings || []).find((b) => b.id === req.params.id || b.confirmationCode === req.params.id);
+  if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+  booking.status = 'cancelled';
+  booking.updatedAt = new Date().toISOString();
+  saveDb(db);
+  res.json({ ok: true, booking });
+});
+
+// Built-in Promo Codes, Discounts & Coupon Engine
+app.all(['/live/:slug/coupons/validate', '/s/:slug/coupons/validate'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const payload = req.body || {};
+  const code = String(payload.code || req.query.code || '').trim();
+  const amountUsd = Math.max(0, Number(payload.amountUsd ?? req.query.amountUsd ?? 100) || 0);
+  const check = evaluateSpaceCoupon(space, code, amountUsd);
+  if (!check.valid) return res.status(400).json({ ok: false, valid: false, error: check.error });
+  res.json({
+    ok: true,
+    valid: true,
+    code: check.code,
+    discountType: check.discountType,
+    discountValue: check.discountValue,
+    subtotalUsd: check.subtotalUsd,
+    discountUsd: check.discountUsd,
+    finalAmountUsd: check.finalAmountUsd
+  });
+});
+
+app.post(['/live/:slug/coupons', '/s/:slug/coupons'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const user = getCurrentUser(req, db);
+  if (!canEditSpace(space, user)) return res.status(403).json({ error: 'Forbidden.' });
+  if (!Array.isArray(space.coupons)) space.coupons = [];
+  const payload = req.body || {};
+  const code = String(payload.code || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+  if (!code) return res.status(400).json({ error: 'Coupon code is required.' });
+  const coupon = {
+    id: 'cpn_' + crypto.randomBytes(4).toString('hex'),
+    code,
+    discountType: payload.discountType === 'fixed' ? 'fixed' : 'percent',
+    discountValue: Math.max(0.01, Number(payload.discountValue) || 10),
+    minOrderUsd: Math.max(0, Number(payload.minOrderUsd) || 0),
+    maxUses: payload.maxUses ? Math.max(1, Number(payload.maxUses)) : null,
+    usedCount: 0,
+    expiresAt: payload.expiresAt || null,
+    active: payload.active !== false,
+    createdAt: new Date().toISOString()
+  };
+  space.coupons.push(coupon);
+  saveDb(db);
+  res.status(201).json({ ok: true, coupon });
+});
+
+app.get(['/live/:slug/coupons', '/s/:slug/coupons'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  res.json({ ok: true, count: (space.coupons || []).length, coupons: space.coupons || [] });
+});
+
+// Per-Space Changelog & "What's New" Release Feed
+app.get(['/live/:slug/changelog.rss', '/s/:slug/changelog.rss'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).send('Not found');
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const entries = Array.isArray(space.changelog) ? space.changelog : [];
+  const itemsXml = entries
+    .map(
+      (entry) => `    <item>
+      <guid isPermaLink="false">${escapeHtml(entry.id || entry.version)}</guid>
+      <title>${escapeHtml(`[${entry.version}] ${entry.title}`)}</title>
+      <link>${origin}/live/${space.slug}/changelog</link>
+      <description>${escapeHtml(entry.summary || (entry.changes || []).join('; '))}</description>
+      <category>${escapeHtml(entry.category || 'feature')}</category>
+      <pubDate>${new Date(entry.publishedAt || Date.now()).toUTCString()}</pubDate>
+    </item>`
+    )
+    .join('\n');
+  res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n  <channel>\n    <title>${escapeHtml(`${space.title || space.slug} Changelog`)}</title>\n    <link>${origin}/live/${space.slug}</link>\n    <description>${escapeHtml(`Release notes for ${space.title || space.slug}`)}</description>\n${itemsXml}\n  </channel>\n</rss>`);
+});
+
+app.post(['/live/:slug/changelog', '/s/:slug/changelog'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const user = getCurrentUser(req, db);
+  if (!canEditSpace(space, user)) return res.status(403).json({ error: 'Forbidden.' });
+  if (!Array.isArray(space.changelog)) space.changelog = [];
+  const payload = req.body || {};
+  const version = String(payload.version || '').trim();
+  const title = String(payload.title || '').trim();
+  if (!version || !title) return res.status(400).json({ error: 'Both version and title are required.' });
+  const entry = {
+    id: 'chg_' + crypto.randomBytes(4).toString('hex'),
+    version,
+    title,
+    summary: String(payload.summary || '').trim(),
+    category: ['feature', 'fix', 'performance', 'security'].includes(payload.category) ? payload.category : 'feature',
+    changes: Array.isArray(payload.changes) ? payload.changes.map((c) => String(c).trim()).filter(Boolean) : [],
+    author: user.username,
+    publishedAt: new Date().toISOString()
+  };
+  space.changelog.unshift(entry);
+  saveDb(db);
+  res.status(201).json({ ok: true, entry });
+});
+
+app.get(['/live/:slug/changelog', '/s/:slug/changelog'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  let entries = [...(space.changelog || [])];
+  if (req.query.category) entries = entries.filter((e) => e.category === req.query.category);
+  if (req.query.version) entries = entries.filter((e) => e.version === req.query.version);
+  const origin = `${req.protocol}://${req.get('host')}`;
+  res.json({ ok: true, count: entries.length, rssUrl: `${origin}/live/${space.slug}/changelog.rss`, entries });
 });
 
 // Automatic SEO sitemap.xml, robots.txt & /live/:slug/health

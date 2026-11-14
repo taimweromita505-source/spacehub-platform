@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test.js && node test-paypal.mjs && node test-wave10.mjs && node test-wave11.mjs && node test-wave12.mjs && node test-wave13.mjs && node test-wave14.mjs && node test-wave15.mjs && node test-wave16.mjs && node test-wave17.mjs && node test-wave18.mjs && node test-wave19.mjs && node test-wave20.mjs && node test-wave21.mjs",
+    "test": "node test.js && node test-paypal.mjs && node test-wave10.mjs && node test-wave11.mjs && node test-wave12.mjs && node test-wave13.mjs && node test-wave14.mjs && node test-wave15.mjs && node test-wave16.mjs && node test-wave17.mjs && node test-wave18.mjs && node test-wave19.mjs && node test-wave20.mjs && node test-wave21.mjs && node test-wave22.mjs",
     "deploy": "wrangler deploy",
     "preview": "wrangler dev",
     "test:worker": "node test-worker.mjs"

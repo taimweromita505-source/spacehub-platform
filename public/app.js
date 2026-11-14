@@ -2878,7 +2878,11 @@ function getApiTesterEndpoints() {
     { label: 'POST /events', path: `${base}/events`, method: 'POST', body: '{"event":"button_clicked"}' },
     { label: 'GET /events', path: `${base}/events`, method: 'GET', body: '' },
     { label: 'POST /notify', path: `${base}/notify`, method: 'POST', body: '{"to":"you@example.com","subject":"Hi","message":"Test"}' },
-    { label: 'POST /orders', path: `${base}/orders`, method: 'POST', body: '{"items":[{"name":"Pro Plan","priceUsd":10,"qty":1}]}' },
+    { label: 'POST /orders', path: `${base}/orders`, method: 'POST', body: '{"items":[{"name":"Pro Plan","priceUsd":10,"qty":1}],"couponCode":"SAVE20"}' },
+    { label: 'GET /bookings/slots', path: `${base}/bookings/slots`, method: 'GET', body: '' },
+    { label: 'POST /bookings', path: `${base}/bookings`, method: 'POST', body: '{"date":"2026-12-15","time":"10:00","customerName":"Alex Rivera","service":"Demo Call"}' },
+    { label: 'POST /coupons/validate', path: `${base}/coupons/validate`, method: 'POST', body: '{"code":"SAVE20","amountUsd":50}' },
+    { label: 'GET /changelog', path: `${base}/changelog`, method: 'GET', body: '' },
     { label: 'GET /search?q=', path: `${base}/search?q=hello`, method: 'GET', body: '' },
     { label: 'GET /config.json', path: `${base}/config.json`, method: 'GET', body: '' },
     { label: 'GET /feed.json', path: `${base}/feed.json`, method: 'GET', body: '' },
@@ -2992,6 +2996,24 @@ function getAvailablePaletteCommands() {
         label: 'Run SEO, Mobile & Accessibility Audit',
         category: `Studio (${state.currentSpace.slug})`,
         run: () => document.getElementById('auditSpaceBtn')?.click()
+      },
+      {
+        label: '1-Click Core Web Vitals & LCP Auto-Optimizer',
+        category: `Studio (${state.currentSpace.slug})`,
+        run: async () => {
+          if (!state.currentSpace) return;
+          try {
+            const res = await api(`/api/spaces/${state.currentSpace.ownerUsername}/${state.currentSpace.slug}/vitals-optimize`, { method: 'POST' });
+            if (res && res.files) {
+              state.currentSpace.draftFiles = res.files;
+              renderStudioEditor();
+              refreshSpacePreview();
+            }
+            showToast(`Core Web Vitals Optimized (${res.score}/100 - ${res.fixesApplied?.length || 0} fixes applied)`, 'success');
+          } catch (err) {
+            showToast(err.message || 'Could not auto-optimize Core Web Vitals', 'error');
+          }
+        }
       },
       {
         label: 'Inspect Staging vs. Live Code Diff',

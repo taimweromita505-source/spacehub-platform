@@ -2966,6 +2966,204 @@ function resolveSpaceRedirect(files, slug, fileName) {
   return null;
 }
 
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function evaluateSpaceCoupon(space, rawCode, subtotalUsd) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  if (!code) return { valid: false, error: 'Coupon code is required.' };
+  const coupons = Array.isArray(space.coupons) ? space.coupons : [];
+  const coupon = coupons.find((c) => String(c.code || '').toUpperCase() === code);
+  if (!coupon || coupon.active === false) {
+    return { valid: false, error: `Coupon code "${code}" is invalid or inactive.` };
+  }
+  if (coupon.expiresAt && Date.parse(coupon.expiresAt) < Date.now()) {
+    return { valid: false, error: `Coupon code "${code}" has expired.` };
+  }
+  if (coupon.maxUses && Number(coupon.usedCount || 0) >= Number(coupon.maxUses)) {
+    return { valid: false, error: `Coupon code "${code}" has reached its maximum redemption limit.` };
+  }
+  const minOrder = Number(coupon.minOrderUsd || 0);
+  if (subtotalUsd < minOrder) {
+    return { valid: false, error: `Coupon code "${code}" requires a minimum order of $${minOrder.toFixed(2)}.` };
+  }
+  let discountUsd = 0;
+  if (coupon.discountType === 'fixed') {
+    discountUsd = Math.min(subtotalUsd, Math.max(0, Number(coupon.discountValue) || 0));
+  } else {
+    const pct = Math.min(100, Math.max(0, Number(coupon.discountValue) || 0));
+    discountUsd = Math.round(subtotalUsd * (pct / 100) * 100) / 100;
+  }
+  const finalAmountUsd = Math.max(0, Math.round((subtotalUsd - discountUsd) * 100) / 100);
+  return {
+    valid: true,
+    coupon,
+    code: coupon.code,
+    discountType: coupon.discountType,
+    discountValue: coupon.discountValue,
+    subtotalUsd,
+    discountUsd,
+    finalAmountUsd
+  };
+}
+
+function auditAndOptimizeSpaceVitals(space, applyFixes = false) {
+  if (!space.draftFiles || typeof space.draftFiles !== 'object') {
+    space.draftFiles = { ...(space.publishedFiles || {}) };
+  }
+  let html = String(space.draftFiles['index.html'] || (space.publishedFiles && space.publishedFiles['index.html']) || '');
+  let css = String(space.draftFiles['style.css'] || (space.publishedFiles && space.publishedFiles['style.css']) || '');
+  const issues = [];
+  const fixesApplied = [];
+
+  // 1. LCP: First <img> fetchpriority="high"
+  const imgRegex = /<img\b[^>]*>/gi;
+  const imgMatches = [...html.matchAll(imgRegex)];
+  if (imgMatches.length > 0) {
+    const firstImg = imgMatches[0][0];
+    if (!/\bfetchpriority\s*=/i.test(firstImg)) {
+      issues.push({
+        metric: 'LCP',
+        severity: 'high',
+        title: 'Hero image missing fetchpriority="high"',
+        fix: 'Add fetchpriority="high" to the primary above-the-fold <img> element.'
+      });
+      if (applyFixes) {
+        const patchedFirst = firstImg.replace(/^<img\b/i, '<img fetchpriority="high"');
+        html = html.replace(firstImg, patchedFirst);
+        fixesApplied.push('Added fetchpriority="high" to primary hero <img>');
+      }
+    }
+  }
+
+  // 2. CLS: <img> tags missing explicit width/height attributes
+  let missingDimCount = 0;
+  html = html.replace(/<img\b([^>]*)>/gi, (fullMatch, attrs) => {
+    const hasWidth = /\bwidth\s*=/i.test(attrs);
+    const hasHeight = /\bheight\s*=/i.test(attrs);
+    if (!hasWidth || !hasHeight) {
+      missingDimCount++;
+      if (applyFixes) {
+        const extra = `${!hasWidth ? ' width="800"' : ''}${!hasHeight ? ' height="450"' : ''}`;
+        return `<img${extra}${attrs}>`;
+      }
+    }
+    return fullMatch;
+  });
+  if (missingDimCount > 0) {
+    if (!applyFixes) {
+      issues.push({
+        metric: 'CLS',
+        severity: 'medium',
+        title: `${missingDimCount} <img> element(s) missing explicit width/height attributes`,
+        fix: 'Add explicit width and height attributes to prevent Cumulative Layout Shift.'
+      });
+    } else {
+      fixesApplied.push(`Added explicit width/height dimensions to ${missingDimCount} <img> element(s)`);
+    }
+  }
+
+  // 3. INP / Render-blocking <script src="..."> without defer or async
+  let blockingScripts = 0;
+  html = html.replace(/<script\b([^>]*\bsrc\s*=\s*["'][^"']+["'][^>]*)>/gi, (fullMatch, attrs) => {
+    const isDeferred = /\b(?:defer|async)\b/i.test(attrs) || /\btype\s*=\s*["']module["']/i.test(attrs);
+    if (!isDeferred) {
+      blockingScripts++;
+      if (applyFixes) {
+        return `<script defer${attrs}>`;
+      }
+    }
+    return fullMatch;
+  });
+  if (blockingScripts > 0) {
+    if (!applyFixes) {
+      issues.push({
+        metric: 'INP',
+        severity: 'medium',
+        title: `${blockingScripts} external <script> tag(s) block main-thread parsing`,
+        fix: 'Add defer attribute to external <script src="..."> tags.'
+      });
+    } else {
+      fixesApplied.push(`Added defer attribute to ${blockingScripts} render-blocking <script> tag(s)`);
+    }
+  }
+
+  // 4. Below-the-fold CSS content-visibility: auto
+  if (!/content-visibility\s*:\s*auto/i.test(css)) {
+    if (!applyFixes) {
+      issues.push({
+        metric: 'LCP',
+        severity: 'low',
+        title: 'Below-the-fold sections lack content-visibility: auto',
+        fix: 'Add content-visibility: auto and contain-intrinsic-size to offscreen sections.'
+      });
+    } else {
+      css = `${css.trim()}\n\n/* Core Web Vitals Auto-Optimization */\nfooter, section:nth-of-type(n+2), .features, .pricing {\n  content-visibility: auto;\n  contain-intrinsic-size: auto 320px;\n}\n`;
+      fixesApplied.push('Added content-visibility: auto and contain-intrinsic-size to below-the-fold CSS rules');
+    }
+  }
+
+  if (applyFixes) {
+    space.draftFiles['index.html'] = html;
+    space.draftFiles['style.css'] = css;
+    if (space.publishedFiles && typeof space.publishedFiles === 'object') {
+      space.publishedFiles['index.html'] = html;
+      space.publishedFiles['style.css'] = css;
+    }
+  }
+
+  const penalty = issues.reduce((sum, iss) => sum + (iss.severity === 'high' ? 25 : iss.severity === 'medium' ? 15 : 10), 0);
+  const score = Math.max(0, 100 - penalty);
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D';
+  return {
+    score,
+    grade,
+    optimized: issues.length === 0,
+    issues,
+    fixesApplied
+  };
+}
+
+function generateBookingIcs(space, booking, origin = 'https://spacehub.win') {
+  const dateStr = String(booking.date || '2026-12-01').replace(/-/g, '');
+  const parts = String(booking.time || '09:00').split(':');
+  const startH = String(Number(parts[0]) || 9).padStart(2, '0');
+  const startM = String(Number(parts[1]) || 0).padStart(2, '0');
+  const durationMins = Number(booking.durationMins) || 30;
+  const totalStartMins = Number(startH) * 60 + Number(startM);
+  const totalEndMins = totalStartMins + durationMins;
+  const endH = String(Math.floor(totalEndMins / 60) % 24).padStart(2, '0');
+  const endM = String(totalEndMins % 60).padStart(2, '0');
+  const dtStart = `${dateStr}T${startH}${startM}00Z`;
+  const dtEnd = `${dateStr}T${endH}${endM}00Z`;
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const summary = `${space.title || space.slug}: ${booking.service || 'Appointment'} (${booking.customerName || 'Guest'})`;
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//SpaceHub//Built-in Booking Engine//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${booking.id}@spacehub.win`,
+    `DTSTAMP:${stamp}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${summary.replace(/[\r\n]/g, ' ')}`,
+    `DESCRIPTION:Confirmation ${booking.confirmationCode || booking.id} - ${String(booking.notes || '').replace(/[\r\n]/g, ' ')}`,
+    `URL:${origin}/live/${space.slug}`,
+    'STATUS:CONFIRMED',
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+}
+
 function buildSpaceOrder(db, space, payload, orderId, origin) {
   const rawItems = Array.isArray(payload.items) ? payload.items.slice(0, 20) : [];
   const items = rawItems.map((it) => ({
@@ -2974,7 +3172,20 @@ function buildSpaceOrder(db, space, payload, orderId, origin) {
     qty: Math.min(99, Math.max(1, Math.floor(Number(it && it.qty) || 1)))
   }));
   if (!items.length) return { error: 'At least one item is required.' };
-  const amountUsd = Math.round(items.reduce((s, i) => s + i.priceUsd * i.qty, 0) * 100) / 100;
+  const subtotalUsd = Math.round(items.reduce((s, i) => s + i.priceUsd * i.qty, 0) * 100) / 100;
+  let discountUsd = 0;
+  let appliedCouponCode = null;
+  const rawCoupon = String(payload.couponCode || payload.promoCode || '').trim();
+  if (rawCoupon) {
+    const check = evaluateSpaceCoupon(space, rawCoupon, subtotalUsd);
+    if (!check.valid) {
+      return { error: check.error };
+    }
+    discountUsd = check.discountUsd;
+    appliedCouponCode = check.code;
+    check.coupon.usedCount = (Number(check.coupon.usedCount) || 0) + 1;
+  }
+  const amountUsd = Math.max(0, Math.round((subtotalUsd - discountUsd) * 100) / 100);
   const secrets = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   const owner = (db.users || []).find((u) => u.id === space.ownerId);
   const recipient = String(secrets.PAYPAL_EMAIL || (owner && owner.email) || '').trim();
@@ -2992,6 +3203,9 @@ function buildSpaceOrder(db, space, payload, orderId, origin) {
     order: {
       id: orderId,
       items,
+      subtotalUsd,
+      discountUsd,
+      couponCode: appliedCouponCode,
       amountUsd,
       buyerEmail: String(payload.buyerEmail || '').trim().slice(0, 160),
       status: 'pending',
@@ -5354,6 +5568,331 @@ const spaceHubWorker = {
           200,
           { 'Access-Control-Allow-Origin': '*' }
         );
+      }
+    }
+
+    // 1b-0j. Built-in Booking, Appointment & Calendar Engine (/live/:slug/bookings, /live/:slug/bookings/slots, /live/:slug/bookings/:id/invite.ics)
+    const bookingIcsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/bookings\/([^/]+)\/invite\.ics$/i);
+    if (bookingIcsMatch && method === 'GET') {
+      const slug = decodeURIComponent(bookingIcsMatch[1]).toLowerCase();
+      const bookingId = decodeURIComponent(bookingIcsMatch[2]).trim();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      const bookings = Array.isArray(space.bookings) ? space.bookings : [];
+      const booking = bookings.find((b) => b.id === bookingId || b.confirmationCode === bookingId);
+      if (!booking) return jsonResponse({ error: 'Booking not found.' }, 404);
+      const ics = generateBookingIcs(space, booking, url.origin);
+      return new Response(ics, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/calendar; charset=utf-8',
+          'Content-Disposition': `attachment; filename="booking-${booking.id}.ics"`,
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    const bookingSlotsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/bookings\/slots\/?$/i);
+    if (bookingSlotsMatch && method === 'GET') {
+      const slug = decodeURIComponent(bookingSlotsMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      const date = String(url.searchParams.get('date') || new Date().toISOString().slice(0, 10)).trim();
+      const allSlots = [
+        '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
+        '12:00', '12:30', '13:00', '13:30', '14:00', '14:30',
+        '15:00', '15:30', '16:00', '16:30', '17:00'
+      ];
+      const bookings = Array.isArray(space.bookings) ? space.bookings : [];
+      const bookedTimes = new Set(
+        bookings
+          .filter((b) => b.date === date && b.status !== 'cancelled')
+          .map((b) => b.time)
+      );
+      const availableSlots = allSlots.filter((t) => !bookedTimes.has(t));
+      return jsonResponse(
+        {
+          ok: true,
+          date,
+          availableSlots,
+          bookedSlots: [...bookedTimes]
+        },
+        200,
+        { 'Access-Control-Allow-Origin': '*' }
+      );
+    }
+
+    const bookingsLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/bookings(?:\/([^/]+))?\/?$/i);
+    if (bookingsLiveMatch) {
+      const slug = decodeURIComponent(bookingsLiveMatch[1]).toLowerCase();
+      const subId = bookingsLiveMatch[2] ? decodeURIComponent(bookingsLiveMatch[2]).trim() : '';
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      if (!Array.isArray(space.bookings)) space.bookings = [];
+
+      if (method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+          }
+        });
+      }
+
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const date = String(payload.date || '').trim();
+        const time = String(payload.time || '').trim();
+        const customerName = String(payload.customerName || payload.name || '').trim();
+        const customerEmail = String(payload.customerEmail || payload.email || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time) || !customerName) {
+          return jsonResponse({ error: 'Valid date (YYYY-MM-DD), time (HH:MM), and customerName are required.' }, 400);
+        }
+        const conflict = space.bookings.find(
+          (b) => b.date === date && b.time === time && b.status !== 'cancelled'
+        );
+        if (conflict) {
+          return jsonResponse(
+            { error: `Time slot ${date} at ${time} is already booked.`, conflictSlot: { date, time } },
+            409,
+            { 'Access-Control-Allow-Origin': '*' }
+          );
+        }
+        const booking = {
+          id: 'bk_' + randomHex(5),
+          confirmationCode: 'CONF-' + randomHex(3).toUpperCase(),
+          date,
+          time,
+          durationMins: Math.min(240, Math.max(15, Number(payload.durationMins) || 30)),
+          customerName,
+          customerEmail,
+          service: String(payload.service || 'General Consultation').trim().slice(0, 120),
+          notes: String(payload.notes || '').trim().slice(0, 500),
+          status: 'confirmed',
+          createdAt: new Date().toISOString()
+        };
+        booking.icsUrl = `${url.origin}/live/${space.slug}/bookings/${booking.id}/invite.ics`;
+        space.bookings.push(booking);
+        await dispatchSpaceEventBus(space, 'booking.created', { bookingId: booking.id, date, time, customerName });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, booking }, 201, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'GET') {
+        const filterDate = String(url.searchParams.get('date') || '').trim();
+        const filterStatus = String(url.searchParams.get('status') || '').trim();
+        let list = [...space.bookings];
+        if (subId) list = list.filter((b) => b.id === subId || b.confirmationCode === subId);
+        if (filterDate) list = list.filter((b) => b.date === filterDate);
+        if (filterStatus) list = list.filter((b) => b.status === filterStatus);
+        return jsonResponse({ ok: true, count: list.length, bookings: list }, 200, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'PATCH' || method === 'DELETE') {
+        const payload = method === 'PATCH' ? await request.json().catch(() => ({})) : {};
+        const targetId = subId || String(payload.id || url.searchParams.get('id') || '').trim();
+        const booking = space.bookings.find((b) => b.id === targetId || b.confirmationCode === targetId);
+        if (!booking) return jsonResponse({ error: 'Booking not found.' }, 404);
+        booking.status = method === 'DELETE' ? 'cancelled' : String(payload.status || 'cancelled').trim();
+        booking.updatedAt = new Date().toISOString();
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, booking }, 200, { 'Access-Control-Allow-Origin': '*' });
+      }
+    }
+
+    // 1b-0k. Built-in Promo Codes, Discounts & Coupon Engine (/live/:slug/coupons, /live/:slug/coupons/validate)
+    const couponValidateMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/coupons\/validate\/?$/i);
+    if (couponValidateMatch && (method === 'POST' || method === 'GET')) {
+      const slug = decodeURIComponent(couponValidateMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      const payload = method === 'POST' ? await request.json().catch(() => ({})) : {};
+      const code = String(payload.code || url.searchParams.get('code') || '').trim();
+      const amountUsd = Math.max(0, Number(payload.amountUsd ?? url.searchParams.get('amountUsd') ?? 100) || 0);
+      const check = evaluateSpaceCoupon(space, code, amountUsd);
+      if (!check.valid) {
+        return jsonResponse({ ok: false, valid: false, error: check.error }, 400, { 'Access-Control-Allow-Origin': '*' });
+      }
+      return jsonResponse(
+        {
+          ok: true,
+          valid: true,
+          code: check.code,
+          discountType: check.discountType,
+          discountValue: check.discountValue,
+          subtotalUsd: check.subtotalUsd,
+          discountUsd: check.discountUsd,
+          finalAmountUsd: check.finalAmountUsd
+        },
+        200,
+        { 'Access-Control-Allow-Origin': '*' }
+      );
+    }
+
+    const couponsLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/coupons\/?$/i);
+    if (couponsLiveMatch) {
+      const slug = decodeURIComponent(couponsLiveMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      if (!Array.isArray(space.coupons)) space.coupons = [];
+
+      if (method === 'POST') {
+        const user = getCurrentUser(db, request, url);
+        if (!canEditSpace(space, user)) {
+          return jsonResponse({ error: 'Only Space owners or editors can create coupons.' }, 403);
+        }
+        const payload = await request.json().catch(() => ({}));
+        const code = String(payload.code || '')
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9_-]/g, '');
+        const discountType = payload.discountType === 'fixed' ? 'fixed' : 'percent';
+        const discountValue = Math.max(0.01, Number(payload.discountValue) || 10);
+        if (!code) return jsonResponse({ error: 'Coupon code is required.' }, 400);
+
+        let coupon = space.coupons.find((c) => c.code === code);
+        if (coupon) {
+          coupon.discountType = discountType;
+          coupon.discountValue = discountValue;
+          coupon.minOrderUsd = Math.max(0, Number(payload.minOrderUsd) || 0);
+          coupon.maxUses = payload.maxUses ? Math.max(1, Number(payload.maxUses)) : null;
+          coupon.expiresAt = payload.expiresAt || null;
+          coupon.active = payload.active !== false;
+        } else {
+          coupon = {
+            id: 'cpn_' + randomHex(4),
+            code,
+            discountType,
+            discountValue,
+            minOrderUsd: Math.max(0, Number(payload.minOrderUsd) || 0),
+            maxUses: payload.maxUses ? Math.max(1, Number(payload.maxUses)) : null,
+            usedCount: 0,
+            expiresAt: payload.expiresAt || null,
+            active: payload.active !== false,
+            createdAt: new Date().toISOString()
+          };
+          space.coupons.push(coupon);
+        }
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, coupon }, 201, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'GET') {
+        return jsonResponse({ ok: true, count: space.coupons.length, coupons: space.coupons }, 200, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'DELETE') {
+        const user = getCurrentUser(db, request, url);
+        if (!canEditSpace(space, user)) return jsonResponse({ error: 'Forbidden.' }, 403);
+        const payload = await request.json().catch(() => ({}));
+        const target = String(payload.code || payload.id || url.searchParams.get('code') || '').trim().toUpperCase();
+        space.coupons = space.coupons.filter((c) => c.code !== target && c.id.toUpperCase() !== target);
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, coupons: space.coupons });
+      }
+    }
+
+    // 1b-0l. Per-Space Changelog & "What's New" Release Feed (/live/:slug/changelog & /live/:slug/changelog.rss)
+    const changelogRssMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/changelog\.rss$/i);
+    if (changelogRssMatch && method === 'GET') {
+      const slug = decodeURIComponent(changelogRssMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return new Response('Not found', { status: 404 });
+      const entries = Array.isArray(space.changelog) ? space.changelog : [];
+      const itemsXml = entries
+        .map(
+          (entry) => `    <item>
+      <guid isPermaLink="false">${escapeHtml(entry.id || entry.version)}</guid>
+      <title>${escapeHtml(`[${entry.version}] ${entry.title}`)}</title>
+      <link>${url.origin}/live/${space.slug}/changelog</link>
+      <description>${escapeHtml(entry.summary || (entry.changes || []).join('; '))}</description>
+      <category>${escapeHtml(entry.category || 'feature')}</category>
+      <pubDate>${new Date(entry.publishedAt || Date.now()).toUTCString()}</pubDate>
+    </item>`
+        )
+        .join('\n');
+      const rssXml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>${escapeHtml(`${space.title || space.slug} Changelog`)}</title>
+    <link>${url.origin}/live/${space.slug}</link>
+    <description>${escapeHtml(`Release notes and product updates for ${space.title || space.slug}`)}</description>
+${itemsXml}
+  </channel>
+</rss>`;
+      return new Response(rssXml, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/rss+xml; charset=utf-8',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    const changelogLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/changelog\/?$/i);
+    if (changelogLiveMatch) {
+      const slug = decodeURIComponent(changelogLiveMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      if (!Array.isArray(space.changelog)) space.changelog = [];
+
+      if (method === 'POST') {
+        const user = getCurrentUser(db, request, url);
+        if (!canEditSpace(space, user)) {
+          return jsonResponse({ error: 'Only Space owners or editors can publish changelog entries.' }, 403);
+        }
+        const payload = await request.json().catch(() => ({}));
+        const version = String(payload.version || '').trim();
+        const title = String(payload.title || '').trim();
+        if (!version || !title) {
+          return jsonResponse({ error: 'Both version (e.g. "v1.2.0") and title are required.' }, 400);
+        }
+        const entry = {
+          id: 'chg_' + randomHex(4),
+          version,
+          title,
+          summary: String(payload.summary || '').trim(),
+          category: ['feature', 'fix', 'performance', 'security'].includes(payload.category)
+            ? payload.category
+            : 'feature',
+          changes: Array.isArray(payload.changes) ? payload.changes.map((c) => String(c).trim()).filter(Boolean) : [],
+          author: user.username,
+          publishedAt: new Date().toISOString()
+        };
+        space.changelog.unshift(entry);
+        await dispatchSpaceEventBus(space, 'changelog.published', { version, title, category: entry.category });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, entry }, 201, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'GET') {
+        const category = String(url.searchParams.get('category') || '').trim();
+        const version = String(url.searchParams.get('version') || '').trim();
+        let entries = [...space.changelog];
+        if (category) entries = entries.filter((e) => e.category === category);
+        if (version) entries = entries.filter((e) => e.version === version);
+        return jsonResponse(
+          {
+            ok: true,
+            count: entries.length,
+            rssUrl: `${url.origin}/live/${space.slug}/changelog.rss`,
+            entries
+          },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'DELETE') {
+        const user = getCurrentUser(db, request, url);
+        if (!canEditSpace(space, user)) return jsonResponse({ error: 'Forbidden.' }, 403);
+        const payload = await request.json().catch(() => ({}));
+        const target = String(payload.id || payload.version || url.searchParams.get('id') || '').trim();
+        space.changelog = space.changelog.filter((e) => e.id !== target && e.version !== target);
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, entries: space.changelog });
       }
     }
 
@@ -8461,6 +9000,44 @@ const spaceHubWorker = {
                 updatedAt: space.canaryConfig.updatedAt
               },
               canaryViews: space.canaryViews || 0
+            });
+          }
+        }
+
+        // 1-Click Core Web Vitals & LCP Auto-Optimizer (/api/spaces/:username/:slug/vitals-optimize)
+        if (action === 'vitals-optimize') {
+          if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+          if (!canEditSpace(space, user)) {
+            return jsonResponse({ error: 'Forbidden.' }, 403);
+          }
+
+          if (method === 'GET') {
+            const report = auditAndOptimizeSpaceVitals(space, false);
+            return jsonResponse({
+              ok: true,
+              ...report
+            });
+          }
+
+          if (method === 'POST') {
+            pushSpaceSnapshot(space, 'Before 1-Click Core Web Vitals Auto-Optimization');
+            const initialAudit = auditAndOptimizeSpaceVitals(space, true);
+            const postAudit = auditAndOptimizeSpaceVitals(space, false);
+            space.hasUnpublishedChanges = true;
+            space.updatedAt = new Date().toISOString();
+            recordAuditLog(space, user, 'vitals_auto_optimized', {
+              fixesCount: initialAudit.fixesApplied.length,
+              fixesApplied: initialAudit.fixesApplied
+            });
+            await saveDb(env, db);
+            return jsonResponse({
+              ok: true,
+              optimized: true,
+              score: postAudit.score,
+              grade: postAudit.grade,
+              fixesApplied: initialAudit.fixesApplied,
+              issues: postAudit.issues,
+              files: space.draftFiles
             });
           }
         }
