@@ -1316,6 +1316,39 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'security_headers') {
+    state.workingFiles['headers.json'] = JSON.stringify({
+      "/*": {
+        "Access-Control-Allow-Origin": "*",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()"
+      }
+    }, null, 2);
+    state.activeFile = 'headers.json';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['headers.json'];
+    showToast('Created headers.json security & CORS config!');
+    return;
+  }
+
+  if (stack === 'presence_badge') {
+    const slug = state.selectedSpace?.slug || 'demo';
+    const snippet = `\n<!-- SpaceHub Live Visitor Presence Widget -->\n<div id="shPresencePill" style="position:fixed;bottom:1rem;right:1rem;z-index:9999;background:#18181b;border:1px solid #27272a;color:#fafafa;padding:0.4rem 0.75rem;border-radius:999px;font-size:0.78rem;font-family:system-ui,sans-serif;display:flex;align-items:center;gap:0.45rem;box-shadow:0 8px 24px rgba(0,0,0,0.4);">\n  <span style="width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;"></span>\n  <span id="shPresenceCount">1 online now</span>\n</div>\n<script>\n(function(){\n  const sid = localStorage.getItem('sh_pres_sid') || ('s_' + Math.random().toString(36).slice(2, 10));\n  localStorage.setItem('sh_pres_sid', sid);\n  async function beat() {\n    try {\n      const r = await fetch('/live/${slug}/presence', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ sessionId: sid, status: 'viewing' })\n      });\n      const d = await r.json();\n      const el = document.getElementById('shPresenceCount');\n      if (el && d.onlineCount) el.textContent = d.onlineCount + ' online now';\n    } catch (_e) {}\n  }\n  beat();\n  setInterval(beat, 30000);\n})();\n</script>\n`;
+    const curHtml = state.workingFiles['index.html'] || '';
+    state.workingFiles['index.html'] = curHtml.includes('</body>')
+      ? curHtml.replace('</body>', snippet + '</body>')
+      : curHtml + snippet;
+    state.activeFile = 'index.html';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['index.html'];
+    showToast('Injected Live Visitor Presence Counter into index.html!');
+    return;
+  }
+
   const tag = snippets[stack];
   if (!tag) return;
   let html = state.workingFiles['index.html'] || '';

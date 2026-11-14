@@ -1726,6 +1726,171 @@ function validateFormSubmission(fields, schema = null) {
   return { valid: errors.length === 0, errors };
 }
 
+function rowsToCsv(rows = []) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const colSet = new Set();
+  for (const r of rows) {
+    if (r && typeof r === 'object') {
+      Object.keys(r).forEach((k) => colSet.add(k));
+    }
+  }
+  const cols = Array.from(colSet);
+  if (cols.length === 0) return '';
+  const esc = (val) => {
+    if (val === undefined || val === null) return '';
+    const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+  const lines = [cols.map(esc).join(',')];
+  for (const r of rows) {
+    lines.push(cols.map((c) => esc(r ? r[c] : '')).join(','));
+  }
+  return lines.join('\n');
+}
+
+function parseCsvToRows(csvText = '') {
+  const text = String(csvText || '').trim();
+  if (!text) return [];
+  const lines = [];
+  let curLine = [];
+  let curVal = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          curVal += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        curVal += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      curLine.push(curVal);
+      curVal = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      curLine.push(curVal);
+      lines.push(curLine);
+      curLine = [];
+      curVal = '';
+    } else {
+      curVal += ch;
+    }
+  }
+  if (curVal !== '' || curLine.length > 0) {
+    curLine.push(curVal);
+    lines.push(curLine);
+  }
+  if (lines.length < 2) return [];
+  const headers = lines[0].map((h) => h.trim()).filter(Boolean);
+  const out = [];
+  for (let r = 1; r < lines.length; r++) {
+    const rowVals = lines[r];
+    if (rowVals.length === 1 && rowVals[0].trim() === '') continue;
+    const obj = {};
+    headers.forEach((h, idx) => {
+      const raw = rowVals[idx] !== undefined ? rowVals[idx].trim() : '';
+      if (raw !== '' && !isNaN(Number(raw)) && !/^0\d+/.test(raw)) {
+        obj[h] = Number(raw);
+      } else if (raw === 'true') {
+        obj[h] = true;
+      } else if (raw === 'false') {
+        obj[h] = false;
+      } else {
+        obj[h] = raw;
+      }
+    });
+    out.push(obj);
+  }
+  return out;
+}
+
+function resolveSpaceCustomHeaders(files = {}, space = {}, routePath = '/*') {
+  const out = {};
+  let config = space.customHeaders && typeof space.customHeaders === 'object' ? space.customHeaders : null;
+  if (!config && files && files['headers.json']) {
+    try {
+      config = JSON.parse(files['headers.json']);
+    } catch (_e) {}
+  }
+  if (!config || typeof config !== 'object') return out;
+  const blocked = new Set(['content-length', 'transfer-encoding', 'host', 'connection']);
+  const applyMap = (mapObj) => {
+    if (!mapObj || typeof mapObj !== 'object') return;
+    for (const [hk, hv] of Object.entries(mapObj)) {
+      if (typeof hv === 'string' && !blocked.has(hk.toLowerCase())) {
+        out[hk] = hv;
+      }
+    }
+  };
+  // Flat headers object or route-keyed object
+  const isRouteKeyed = Object.keys(config).some((k) => k.startsWith('/'));
+  if (isRouteKeyed) {
+    applyMap(config['/*']);
+    if (routePath && config[routePath]) applyMap(config[routePath]);
+  } else {
+    applyMap(config);
+  }
+  return out;
+}
+
+function computeSnapshotDiff(filesA = {}, filesB = {}) {
+  const allKeys = Array.from(new Set([...Object.keys(filesA || {}), ...Object.keys(filesB || {})])).sort();
+  const diffs = [];
+  let totalAdded = 0;
+  let totalRemoved = 0;
+
+  for (const file of allKeys) {
+    const aText = filesA && filesA[file] !== undefined ? String(filesA[file]) : null;
+    const bText = filesB && filesB[file] !== undefined ? String(filesB[file]) : null;
+    if (aText === bText) continue;
+
+    const aLines = aText !== null ? aText.split(/\r?\n/) : [];
+    const bLines = bText !== null ? bText.split(/\r?\n/) : [];
+    const aSet = new Set(aLines);
+    const bSet = new Set(bLines);
+    const addedLines = bLines.filter((l) => !aSet.has(l));
+    const removedLines = aLines.filter((l) => !bSet.has(l));
+    totalAdded += addedLines.length;
+    totalRemoved += removedLines.length;
+
+    diffs.push({
+      file,
+      status: aText === null ? 'added' : bText === null ? 'deleted' : 'modified',
+      addedCount: addedLines.length,
+      removedCount: removedLines.length,
+      addedPreview: addedLines.slice(0, 10),
+      removedPreview: removedLines.slice(0, 10)
+    });
+  }
+  return {
+    filesChanged: diffs.length,
+    totalAdded,
+    totalRemoved,
+    diffs
+  };
+}
+
+function generatePresenceBadgeSvg(count = 1) {
+  const label = `${count} online now`;
+  const width = Math.max(128, 60 + label.length * 6.5);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(width)}" height="28" viewBox="0 0 ${Math.round(width)} 28">
+  <rect width="${Math.round(width)}" height="28" rx="14" fill="#18181b" stroke="#27272a" stroke-width="1"/>
+  <circle cx="15" cy="14" r="4.5" fill="#22c55e"/>
+  <text x="27" y="18" fill="#fafafa" font-family="system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="600">${label}</text>
+</svg>`;
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
@@ -2578,6 +2743,25 @@ const spaceHubWorker = {
         }
       }
     }
+
+    // Wave 15: Automated Scheduled Point-in-Time Space Backups & Space Cron Runner
+    for (const space of db.spaces || []) {
+      if (space.autoBackupEnabled !== false && space.draftFiles && typeof space.draftFiles === 'object') {
+        const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
+        const latestFilesJson = snaps[0]?.files ? JSON.stringify(snaps[0].files) : '';
+        const currentFilesJson = JSON.stringify(space.draftFiles);
+        if (currentFilesJson !== latestFilesJson) {
+          pushSpaceSnapshot(space, `Auto-Backup (${new Date(nowMs).toISOString().slice(0, 16).replace('T', ' ')})`);
+          recordAuditLog(space, null, 'scheduled_auto_backup_created');
+          changed = true;
+        }
+      }
+      if (space.cronSchedule && ['hourly', 'daily', 'weekly'].includes(space.cronSchedule)) {
+        await executeSpaceCron(space);
+        changed = true;
+      }
+    }
+
     if (changed) await saveDb(env, db);
   },
 
@@ -2917,6 +3101,85 @@ const spaceHubWorker = {
         space.roomEvents = [];
         await saveDb(env, db);
         return jsonResponse({ ok: true, events: [] });
+      }
+    }
+
+    // 1b-0c. Wave 15: Live Visitor Presence & Real-Time Cursor/Session Counter (/live/:slug/presence & /live/:slug/presence.svg)
+    const spacePresenceMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(presence|presence\.svg)\/?$/i);
+    if (spacePresenceMatch) {
+      const slug = decodeURIComponent(spacePresenceMatch[1]).toLowerCase();
+      const routeKind = spacePresenceMatch[2].toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.presenceSessions = space.presenceSessions && typeof space.presenceSessions === 'object' ? space.presenceSessions : {};
+      const nowMs = Date.now();
+      const ttlMs = 120000; // 2 minute active window
+      for (const [sid, sData] of Object.entries(space.presenceSessions)) {
+        if (!sData || nowMs - (sData.lastSeenMs || 0) > ttlMs) {
+          delete space.presenceSessions[sid];
+        }
+      }
+
+      if (routeKind === 'presence.svg' && method === 'GET') {
+        const activeCount = Math.max(1, Object.keys(space.presenceSessions).length);
+        return new Response(generatePresenceBadgeSvg(activeCount), {
+          status: 200,
+          headers: {
+            'Content-Type': 'image/svg+xml; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      }
+
+      if (method === 'GET') {
+        const sessions = Object.values(space.presenceSessions);
+        return jsonResponse(
+          { ok: true, onlineCount: sessions.length, sessions },
+          200,
+          { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }
+        );
+      }
+
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const sessionId = String(payload.sessionId || `sess_${randomHex(5)}`).trim().slice(0, 64);
+        const entry = {
+          sessionId,
+          username: String(payload.username || 'Visitor').trim().slice(0, 48),
+          color: String(payload.color || '#6366f1').trim().slice(0, 20),
+          cursor: payload.cursor && typeof payload.cursor === 'object'
+            ? { x: Number(payload.cursor.x) || 0, y: Number(payload.cursor.y) || 0 }
+            : null,
+          status: String(payload.status || 'active').trim().slice(0, 32),
+          lastSeenMs: nowMs,
+          updatedAt: new Date(nowMs).toISOString()
+        };
+        space.presenceSessions[sessionId] = entry;
+        const keys = Object.keys(space.presenceSessions);
+        if (keys.length > 100) {
+          delete space.presenceSessions[keys[0]];
+        }
+        await saveDb(env, db);
+        const sessions = Object.values(space.presenceSessions);
+        return jsonResponse(
+          { ok: true, sessionId, onlineCount: sessions.length, sessions },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'DELETE') {
+        const sid = url.searchParams.get('sessionId');
+        if (sid) delete space.presenceSessions[sid];
+        else space.presenceSessions = {};
+        await saveDb(env, db);
+        const sessions = Object.values(space.presenceSessions);
+        return jsonResponse(
+          { ok: true, onlineCount: sessions.length, sessions },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
       }
     }
 
@@ -3471,11 +3734,12 @@ const spaceHubWorker = {
       }
     }
 
-    // 1b-7. Wave 8: Structured Table DB API (/live/:slug/db/:table) & RSS/JSON Feeds (/rss.xml, /feed.json)
-    const tableDbMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/db\/([a-zA-Z0-9_-]+)\/?$/i);
+    // 1b-7. Wave 8 & Wave 15: Structured Table DB API (/live/:slug/db/:table & /live/:slug/db/:table/csv) & RSS/JSON Feeds (/rss.xml, /feed.json)
+    const tableDbMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/db\/([a-zA-Z0-9_-]+)(?:\/(csv))?\/?$/i);
     if (tableDbMatch) {
       const slug = decodeURIComponent(tableDbMatch[1]).toLowerCase();
       const tableName = decodeURIComponent(tableDbMatch[2]).toLowerCase();
+      const isCsvPath = Boolean(tableDbMatch[3]);
       const space = [...db.spaces].reverse().find((s) => s.slug === slug);
       if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
       space.dbTables = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
@@ -3484,7 +3748,7 @@ const spaceHubWorker = {
 
       if (method === 'GET') {
         const rowId = url.searchParams.get('id');
-        if (rowId) {
+        if (rowId && !isCsvPath) {
           const found = rows.find((r) => String(r.id) === String(rowId)) || null;
           return jsonResponse({ ok: true, table: tableName, row: found }, 200, { 'Access-Control-Allow-Origin': '*' });
         }
@@ -3494,11 +3758,31 @@ const spaceHubWorker = {
           const [fk, fv] = where.split(':');
           filtered = filtered.filter((r) => String(r[fk] ?? '').toLowerCase() === String(fv).toLowerCase());
         }
+        const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+        if (q) {
+          filtered = filtered.filter((r) => JSON.stringify(r).toLowerCase().includes(q));
+        }
         const sort = url.searchParams.get('sort') || '';
         if (sort) {
           const [sk, sdir] = sort.split(':');
           const mult = String(sdir).toLowerCase() === 'desc' ? -1 : 1;
           filtered.sort((a, b) => (a[sk] > b[sk] ? mult : a[sk] < b[sk] ? -mult : 0));
+        }
+        const offsetParam = parseInt(url.searchParams.get('offset') || '0', 10);
+        if (offsetParam > 0) filtered = filtered.slice(offsetParam);
+        const limitParam = parseInt(url.searchParams.get('limit') || '0', 10);
+        if (limitParam > 0) filtered = filtered.slice(0, limitParam);
+
+        if (isCsvPath || (url.searchParams.get('format') || '').toLowerCase() === 'csv') {
+          const csvData = rowsToCsv(filtered);
+          return new Response(csvData, {
+            status: 200,
+            headers: {
+              'Content-Type': 'text/csv; charset=utf-8',
+              'Content-Disposition': `attachment; filename="${encodeURIComponent(space.slug)}_${encodeURIComponent(tableName)}.csv"`,
+              'Access-Control-Allow-Origin': '*'
+            }
+          });
         }
         return jsonResponse(
           { ok: true, table: tableName, count: filtered.length, rows: filtered },
@@ -3508,6 +3792,53 @@ const spaceHubWorker = {
       }
 
       if (method === 'POST') {
+        const contentType = (request.headers.get('content-type') || '').toLowerCase();
+        if (isCsvPath || contentType.includes('text/csv')) {
+          const rawBody = await request.text().catch(() => '');
+          let csvText = rawBody;
+          if (contentType.includes('application/json')) {
+            try {
+              const parsedJson = JSON.parse(rawBody);
+              if (Array.isArray(parsedJson.rows)) {
+                const now = new Date().toISOString();
+                const imported = parsedJson.rows.map((item) => ({
+                  ...item,
+                  id: String(item.id || `row_${randomHex(4)}`),
+                  createdAt: item.createdAt || now,
+                  updatedAt: now
+                }));
+                rows.push(...imported);
+                if (rows.length > 500) space.dbTables[tableName] = rows.slice(-500);
+                recordAuditLog(space, user, 'db_bulk_imported', { table: tableName, importedCount: imported.length });
+                await saveDb(env, db);
+                return jsonResponse(
+                  { ok: true, table: tableName, importedCount: imported.length, count: space.dbTables[tableName].length, rows: imported },
+                  201,
+                  { 'Access-Control-Allow-Origin': '*' }
+                );
+              }
+              csvText = String(parsedJson.csv || '');
+            } catch (_e) {}
+          }
+          const parsedRows = parseCsvToRows(csvText);
+          const now = new Date().toISOString();
+          const imported = parsedRows.map((item) => ({
+            ...item,
+            id: String(item.id || `row_${randomHex(4)}`),
+            createdAt: item.createdAt || now,
+            updatedAt: now
+          }));
+          rows.push(...imported);
+          if (rows.length > 500) space.dbTables[tableName] = rows.slice(-500);
+          recordAuditLog(space, user, 'db_csv_imported', { table: tableName, importedCount: imported.length });
+          await saveDb(env, db);
+          return jsonResponse(
+            { ok: true, table: tableName, importedCount: imported.length, count: space.dbTables[tableName].length, rows: imported },
+            201,
+            { 'Access-Control-Allow-Origin': '*' }
+          );
+        }
+
         const payload = await request.json().catch(() => ({}));
         const now = new Date().toISOString();
         const newRow = {
@@ -3697,10 +4028,14 @@ const spaceHubWorker = {
       }
       const targetFiles =
         hasAb && variant === 'b' ? { ...baseFiles, 'index.html': baseFiles['index.b.html'] } : baseFiles;
-      const liveHeaders = { 'Content-Type': 'text/html; charset=utf-8' };
+      const customHdrs = resolveSpaceCustomHeaders(baseFiles, space, '/*');
+      const liveHeaders = {
+        ...customHdrs,
+        'Content-Type': 'text/html; charset=utf-8'
+      };
       if (mode !== 'draft' && space.releaseId) {
         liveHeaders['X-SpaceHub-Release'] = space.releaseId;
-        liveHeaders['Cache-Control'] = 'no-store';
+        if (!liveHeaders['Cache-Control']) liveHeaders['Cache-Control'] = 'no-store';
       }
       if (hasAb && mode !== 'draft') {
         liveHeaders['Set-Cookie'] = `sh_ab_${space.slug}=${variant}; Path=/; Max-Age=2592000; SameSite=Lax`;
@@ -3733,6 +4068,7 @@ const spaceHubWorker = {
             headers: { Location: redirectRule.location }
           });
         }
+        const customFileHdrs = resolveSpaceCustomHeaders(files, space, `/${fileName}`);
         if (files[fileName] !== undefined) {
           const ext = fileName.split('.').pop().toLowerCase();
           const mimeMap = {
@@ -3746,18 +4082,21 @@ const spaceHubWorker = {
           };
           return new Response(String(files[fileName]), {
             status: 200,
-            headers: { 'Content-Type': mimeMap[ext] || 'text/plain; charset=utf-8' }
+            headers: {
+              ...customFileHdrs,
+              'Content-Type': mimeMap[ext] || 'text/plain; charset=utf-8'
+            }
           });
         }
         if (files['404.html'] !== undefined) {
           return new Response(
             buildBundledHtml({ ...files, 'index.html': files['404.html'] }, url.origin, space),
-            { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+            { status: 404, headers: { ...customFileHdrs, 'Content-Type': 'text/html; charset=utf-8' } }
           );
         }
         return new Response(buildBundledHtml(files, url.origin, space), {
           status: 200,
-          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+          headers: { ...customFileHdrs, 'Content-Type': 'text/html; charset=utf-8' }
         });
       }
     }
@@ -5090,7 +5429,24 @@ const spaceHubWorker = {
             return jsonResponse({ error: 'Only the Space owner or collaborators can view or manage submissions.' }, 403);
           }
           if (method === 'GET') {
-            return jsonResponse({ submissions: space.submissions || [] });
+            const subs = space.submissions || [];
+            if ((url.searchParams.get('format') || '').toLowerCase() === 'csv') {
+              const csvRows = subs.map((s) => ({
+                id: s.id,
+                name: s.name || '',
+                email: s.email || '',
+                message: s.message || '',
+                createdAt: s.createdAt || ''
+              }));
+              return new Response(rowsToCsv(csvRows), {
+                status: 200,
+                headers: {
+                  'Content-Type': 'text/csv; charset=utf-8',
+                  'Content-Disposition': `attachment; filename="${encodeURIComponent(space.slug)}_submissions.csv"`
+                }
+              });
+            }
+            return jsonResponse({ submissions: subs });
           }
           if (method === 'DELETE') {
             const subId = url.searchParams.get('id');
@@ -5203,6 +5559,33 @@ const spaceHubWorker = {
               agentHistory: space.agentHistory || []
             }
           }, 201);
+        }
+
+        if (action === 'snapshots-diff' && method === 'GET') {
+          if (!user || !space || !canViewSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
+          const fromId = (url.searchParams.get('from') || '').trim();
+          const toId = (url.searchParams.get('to') || 'current').trim();
+          const resolveSnapFiles = (idStr, fallbackSnap) => {
+            if (idStr === 'current') return space.draftFiles || space.publishedFiles || {};
+            if (idStr === 'published') return space.publishedFiles || {};
+            if (idStr) {
+              const found = snaps.find((s) => s.id === idStr);
+              if (found && found.files) return found.files;
+            }
+            return fallbackSnap && fallbackSnap.files ? fallbackSnap.files : (space.draftFiles || {});
+          };
+          const fromFiles = resolveSnapFiles(fromId, snaps[0] || null);
+          const toFiles = resolveSnapFiles(toId, null);
+          const diffResult = computeSnapshotDiff(fromFiles, toFiles);
+          return jsonResponse({
+            ok: true,
+            from: fromId || (snaps[0]?.id || 'none'),
+            to: toId,
+            ...diffResult
+          });
         }
 
         if (action === 'rollback' && method === 'POST') {

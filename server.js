@@ -912,6 +912,170 @@ function validateFormSubmission(fields, schema = null) {
   return { valid: errors.length === 0, errors };
 }
 
+function rowsToCsv(rows = []) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const colSet = new Set();
+  for (const r of rows) {
+    if (r && typeof r === 'object') {
+      Object.keys(r).forEach((k) => colSet.add(k));
+    }
+  }
+  const cols = Array.from(colSet);
+  if (cols.length === 0) return '';
+  const esc = (val) => {
+    if (val === undefined || val === null) return '';
+    const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+  const lines = [cols.map(esc).join(',')];
+  for (const r of rows) {
+    lines.push(cols.map((c) => esc(r ? r[c] : '')).join(','));
+  }
+  return lines.join('\n');
+}
+
+function parseCsvToRows(csvText = '') {
+  const text = String(csvText || '').trim();
+  if (!text) return [];
+  const lines = [];
+  let curLine = [];
+  let curVal = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          curVal += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        curVal += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      curLine.push(curVal);
+      curVal = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      curLine.push(curVal);
+      lines.push(curLine);
+      curLine = [];
+      curVal = '';
+    } else {
+      curVal += ch;
+    }
+  }
+  if (curVal !== '' || curLine.length > 0) {
+    curLine.push(curVal);
+    lines.push(curLine);
+  }
+  if (lines.length < 2) return [];
+  const headers = lines[0].map((h) => h.trim()).filter(Boolean);
+  const out = [];
+  for (let r = 1; r < lines.length; r++) {
+    const rowVals = lines[r];
+    if (rowVals.length === 1 && rowVals[0].trim() === '') continue;
+    const obj = {};
+    headers.forEach((h, idx) => {
+      const raw = rowVals[idx] !== undefined ? rowVals[idx].trim() : '';
+      if (raw !== '' && !isNaN(Number(raw)) && !/^0\d+/.test(raw)) {
+        obj[h] = Number(raw);
+      } else if (raw === 'true') {
+        obj[h] = true;
+      } else if (raw === 'false') {
+        obj[h] = false;
+      } else {
+        obj[h] = raw;
+      }
+    });
+    out.push(obj);
+  }
+  return out;
+}
+
+function resolveSpaceCustomHeaders(files = {}, space = {}, routePath = '/*') {
+  const out = {};
+  let config = space.customHeaders && typeof space.customHeaders === 'object' ? space.customHeaders : null;
+  if (!config && files && files['headers.json']) {
+    try {
+      config = JSON.parse(files['headers.json']);
+    } catch (_e) {}
+  }
+  if (!config || typeof config !== 'object') return out;
+  const blocked = new Set(['content-length', 'transfer-encoding', 'host', 'connection']);
+  const applyMap = (mapObj) => {
+    if (!mapObj || typeof mapObj !== 'object') return;
+    for (const [hk, hv] of Object.entries(mapObj)) {
+      if (typeof hv === 'string' && !blocked.has(hk.toLowerCase())) {
+        out[hk] = hv;
+      }
+    }
+  };
+  const isRouteKeyed = Object.keys(config).some((k) => k.startsWith('/'));
+  if (isRouteKeyed) {
+    applyMap(config['/*']);
+    if (routePath && config[routePath]) applyMap(config[routePath]);
+  } else {
+    applyMap(config);
+  }
+  return out;
+}
+
+function computeSnapshotDiff(filesA = {}, filesB = {}) {
+  const allKeys = Array.from(new Set([...Object.keys(filesA || {}), ...Object.keys(filesB || {})])).sort();
+  const diffs = [];
+  let totalAdded = 0;
+  let totalRemoved = 0;
+
+  for (const file of allKeys) {
+    const aText = filesA && filesA[file] !== undefined ? String(filesA[file]) : null;
+    const bText = filesB && filesB[file] !== undefined ? String(filesB[file]) : null;
+    if (aText === bText) continue;
+
+    const aLines = aText !== null ? aText.split(/\r?\n/) : [];
+    const bLines = bText !== null ? bText.split(/\r?\n/) : [];
+    const aSet = new Set(aLines);
+    const bSet = new Set(bLines);
+    const addedLines = bLines.filter((l) => !aSet.has(l));
+    const removedLines = aLines.filter((l) => !bSet.has(l));
+    totalAdded += addedLines.length;
+    totalRemoved += removedLines.length;
+
+    diffs.push({
+      file,
+      status: aText === null ? 'added' : bText === null ? 'deleted' : 'modified',
+      addedCount: addedLines.length,
+      removedCount: removedLines.length,
+      addedPreview: addedLines.slice(0, 10),
+      removedPreview: removedLines.slice(0, 10)
+    });
+  }
+  return {
+    filesChanged: diffs.length,
+    totalAdded,
+    totalRemoved,
+    diffs
+  };
+}
+
+function generatePresenceBadgeSvg(count = 1) {
+  const label = `${count} online now`;
+  const width = Math.max(128, 60 + label.length * 6.5);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(width)}" height="28" viewBox="0 0 ${Math.round(width)} 28">
+  <rect width="${Math.round(width)}" height="28" rx="14" fill="#18181b" stroke="#27272a" stroke-width="1"/>
+  <circle cx="15" cy="14" r="4.5" fill="#22c55e"/>
+  <text x="27" y="18" fill="#fafafa" font-family="system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="600">${label}</text>
+</svg>`;
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
