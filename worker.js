@@ -1891,6 +1891,180 @@ function generatePresenceBadgeSvg(count = 1) {
 </svg>`;
 }
 
+function generateSpaceEmbedScript(space, origin = 'https://spacehub.win') {
+  const slug = String(space.slug || 'app');
+  const title = String(space.title || slug).replace(/["<>]/g, '');
+  const liveUrl = `${origin}/live/${encodeURIComponent(slug)}`;
+  return `(function(){
+  var scripts = document.getElementsByTagName('script');
+  var currentScript = document.currentScript || scripts[scripts.length - 1];
+  var targetId = currentScript && currentScript.getAttribute('data-target');
+  var height = (currentScript && currentScript.getAttribute('data-height')) || '600px';
+  var iframe = document.createElement('iframe');
+  iframe.src = '${liveUrl}?embed=1';
+  iframe.title = '${title} — SpaceHub Embed';
+  iframe.style.width = '100%';
+  iframe.style.height = height;
+  iframe.style.border = '1px solid #27272a';
+  iframe.style.borderRadius = '12px';
+  iframe.style.background = '#09090b';
+  iframe.setAttribute('loading', 'lazy');
+  iframe.setAttribute('allow', 'clipboard-write; fullscreen');
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'spacehub:resize' && e.data.slug === '${slug}' && e.data.height) {
+      iframe.style.height = parseInt(e.data.height, 10) + 'px';
+    }
+  });
+  var container = targetId ? document.getElementById(targetId) : null;
+  if (container) {
+    container.appendChild(iframe);
+  } else if (currentScript && currentScript.parentNode) {
+    currentScript.parentNode.insertBefore(iframe, currentScript.nextSibling);
+  }
+})();`;
+}
+
+function generateSpaceQrSvg(space, origin = 'https://spacehub.win', fg = '#fafafa', bg = '#09090b') {
+  const slug = String(space.slug || 'app');
+  const targetUrl = `${origin}/live/${slug}`;
+  const size = 21;
+  const grid = Array.from({ length: size }, () => Array(size).fill(false));
+  const drawFinder = (r0, c0) => {
+    for (let r = 0; r < 7; r++) {
+      for (let c = 0; c < 7; c++) {
+        const isBorder = r === 0 || r === 6 || c === 0 || c === 6;
+        const isInner = r >= 2 && r <= 4 && c >= 2 && c <= 4;
+        grid[r0 + r][c0 + c] = isBorder || isInner;
+      }
+    }
+  };
+  drawFinder(0, 0);
+  drawFinder(0, size - 7);
+  drawFinder(size - 7, 0);
+  for (let i = 8; i < size - 8; i++) {
+    grid[6][i] = i % 2 === 0;
+    grid[i][6] = i % 2 === 0;
+  }
+  let hash = 2166136261;
+  for (let i = 0; i < targetUrl.length; i++) {
+    hash ^= targetUrl.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const inTopLeft = r < 8 && c < 8;
+      const inTopRight = r < 8 && c >= size - 8;
+      const inBotLeft = r >= size - 8 && c < 8;
+      if (inTopLeft || inTopRight || inBotLeft || r === 6 || c === 6) continue;
+      hash ^= (r * 31 + c * 17) & 0xff;
+      hash = Math.imul(hash, 16777619) >>> 0;
+      grid[r][c] = (hash & 1) === 1;
+    }
+  }
+  const cell = 10;
+  const pad = 20;
+  const dim = size * cell + pad * 2;
+  let rects = '';
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      if (grid[r][c]) {
+        rects += `<rect x="${pad + c * cell}" y="${pad + r * cell}" width="${cell}" height="${cell}" rx="1.5" fill="${fg}"/>`;
+      }
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${dim}" height="${dim + 28}" viewBox="0 0 ${dim} ${dim + 28}" data-url="${targetUrl}">
+  <rect width="${dim}" height="${dim + 28}" rx="16" fill="${bg}" stroke="#27272a" stroke-width="2"/>
+  ${rects}
+  <text x="${dim / 2}" y="${dim + 16}" text-anchor="middle" fill="${fg}" font-family="monospace, sans-serif" font-size="11" opacity="0.8">spacehub.win/s/${slug}</text>
+</svg>`;
+}
+
+function analyzeSpaceSeoAndA11y(html = '', space = {}) {
+  const src = String(html || '');
+  const checks = [];
+  let score = 0;
+
+  const hasDoctype = /<!DOCTYPE\s+html>/i.test(src);
+  checks.push({ id: 'doctype', category: 'best-practices', passed: hasDoctype, points: 10, label: 'HTML5 <!DOCTYPE html> declaration', fix: 'Add <!DOCTYPE html> at the top of index.html' });
+  if (hasDoctype) score += 10;
+
+  const hasLang = /<html[^>]+lang=["'][a-zA-Z-]+["']/i.test(src);
+  checks.push({ id: 'html_lang', category: 'accessibility', passed: hasLang, points: 15, label: '<html lang="..."> attribute for screen readers', fix: 'Add lang="en" to the <html> tag' });
+  if (hasLang) score += 15;
+
+  const hasCharset = /<meta[^>]+charset=["']?utf-8["']?/i.test(src);
+  checks.push({ id: 'meta_charset', category: 'best-practices', passed: hasCharset, points: 10, label: 'UTF-8 character encoding <meta charset="UTF-8">', fix: 'Insert <meta charset="UTF-8" /> inside <head>' });
+  if (hasCharset) score += 10;
+
+  const hasViewport = /<meta[^>]+name=["']viewport["']/i.test(src);
+  checks.push({ id: 'meta_viewport', category: 'seo', passed: hasViewport, points: 15, label: 'Responsive mobile <meta name="viewport"> tag', fix: 'Insert <meta name="viewport" content="width=device-width, initial-scale=1.0" /> inside <head>' });
+  if (hasViewport) score += 15;
+
+  const hasTitle = /<title>[^<]+<\/title>/i.test(src);
+  checks.push({ id: 'title_tag', category: 'seo', passed: hasTitle, points: 15, label: 'Non-empty <title> element', fix: `Insert <title>${space.title || 'SpaceHub App'}</title> inside <head>` });
+  if (hasTitle) score += 15;
+
+  const hasDesc = /<meta[^>]+name=["']description["'][^>]+content=["'][^"']+["']/i.test(src) || /<meta[^>]+content=["'][^"']+["'][^>]+name=["']description["']/i.test(src);
+  checks.push({ id: 'meta_description', category: 'seo', passed: hasDesc, points: 15, label: 'SEO <meta name="description"> summary', fix: `Insert <meta name="description" content="${(space.description || space.title || 'Built on SpaceHub').replace(/"/g, '')}" />` });
+  if (hasDesc) score += 15;
+
+  const hasH1 = /<h1[\s>][\s\S]*?<\/h1>/i.test(src);
+  checks.push({ id: 'heading_h1', category: 'seo', passed: hasH1, points: 10, label: 'Primary <h1> heading present', fix: 'Include a main <h1> heading inside <body>' });
+  if (hasH1) score += 10;
+
+  const imgTags = src.match(/<img\b[^>]*>/gi) || [];
+  const imgsMissingAlt = imgTags.filter((tag) => !/\balt\s*=\s*["'][^"']*["']/i.test(tag));
+  const passedImgAlt = imgsMissingAlt.length === 0;
+  checks.push({ id: 'img_alt', category: 'accessibility', passed: passedImgAlt, points: 10, label: 'All <img> elements include alt attributes', fix: `Add descriptive alt="..." attributes to ${imgsMissingAlt.length} <img> tag(s)` });
+  if (passedImgAlt) score += 10;
+
+  const issues = checks.filter((c) => !c.passed);
+  return {
+    score,
+    grade: score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D',
+    passedCount: checks.length - issues.length,
+    totalChecks: checks.length,
+    checks,
+    issues
+  };
+}
+
+function autoFixSpaceSeoHtml(html = '', space = {}) {
+  let out = String(html || '');
+  const titleText = String(space.title || 'SpaceHub App').replace(/[<>&"]/g, '');
+  const descText = String(space.description || `${titleText} — interactive web application on SpaceHub`).replace(/[<>&"]/g, '');
+
+  if (!/<!DOCTYPE\s+html>/i.test(out)) {
+    out = `<!DOCTYPE html>\n` + out;
+  }
+  if (/<html(?![^>]*\blang=)/i.test(out)) {
+    out = out.replace(/<html/i, '<html lang="en"');
+  } else if (!/<html/i.test(out)) {
+    out = `<!DOCTYPE html>\n<html lang="en">\n<head>\n</head>\n<body>\n${out}\n</body>\n</html>`;
+  }
+  if (!/<head[\s>]/i.test(out)) {
+    out = out.replace(/<html[^>]*>/i, (m) => `${m}\n<head>\n</head>`);
+  }
+  const headInjections = [];
+  if (!/<meta[^>]+charset=/i.test(out)) {
+    headInjections.push('  <meta charset="UTF-8" />');
+  }
+  if (!/<meta[^>]+name=["']viewport["']/i.test(out)) {
+    headInjections.push('  <meta name="viewport" content="width=device-width, initial-scale=1.0" />');
+  }
+  if (!/<title>[^<]+<\/title>/i.test(out)) {
+    headInjections.push(`  <title>${titleText}</title>`);
+  }
+  if (!/<meta[^>]+name=["']description["']/i.test(out)) {
+    headInjections.push(`  <meta name="description" content="${descText}" />`);
+  }
+  if (headInjections.length > 0) {
+    out = out.replace(/<head[^>]*>/i, (m) => `${m}\n${headInjections.join('\n')}`);
+  }
+  out = out.replace(/<img\b(?![^>]*\balt=)([^>]*)>/gi, '<img alt="App illustration"$1>');
+  return out;
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
@@ -2884,7 +3058,7 @@ const spaceHubWorker = {
     }
 
     // 1. Per-Space Installable PWA Assets (/live/:slug/manifest.webmanifest, /live/:slug/icon.svg, /live/:slug/sw.js, /live/:slug/og.svg)
-    const spacePwaMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(manifest\.webmanifest|icon\.svg|sw\.js|og\.svg)$/i);
+    const spacePwaMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(manifest\.webmanifest|icon\.svg|sw\.js|og\.svg|embed\.js|qr\.svg)$/i);
     if (spacePwaMatch && method === 'GET') {
       const slug = decodeURIComponent(spacePwaMatch[1]).toLowerCase();
       const asset = spacePwaMatch[2].toLowerCase();
@@ -2911,6 +3085,30 @@ const spaceHubWorker = {
           headers: {
             'Content-Type': 'image/svg+xml; charset=utf-8',
             'Cache-Control': 'public, max-age=3600, s-maxage=86400'
+          }
+        });
+      }
+      if (asset === 'embed.js') {
+        return new Response(generateSpaceEmbedScript(space, url.origin), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/javascript; charset=utf-8',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'public, max-age=3600'
+          }
+        });
+      }
+      if (asset === 'qr.svg') {
+        space.qrScans = (space.qrScans || 0) + 1;
+        await saveDb(env, db);
+        const fg = url.searchParams.get('fg') || '#fafafa';
+        const bg = url.searchParams.get('bg') || '#09090b';
+        return new Response(generateSpaceQrSvg(space, url.origin, fg, bg), {
+          status: 200,
+          headers: {
+            'Content-Type': 'image/svg+xml; charset=utf-8',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store'
           }
         });
       }
@@ -3177,6 +3375,92 @@ const spaceHubWorker = {
         const sessions = Object.values(space.presenceSessions);
         return jsonResponse(
           { ok: true, onlineCount: sessions.length, sessions },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+    }
+
+    // 1b-0d. Wave 16: Built-in Edge Key-Value TTL Cache API (/live/:slug/cache & /live/:slug/cache/:key)
+    const spaceCacheMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/cache(?:\/([a-zA-Z0-9._-]+))?\/?$/i);
+    if (spaceCacheMatch) {
+      const slug = decodeURIComponent(spaceCacheMatch[1]).toLowerCase();
+      const cacheKeyParam = spaceCacheMatch[2] ? decodeURIComponent(spaceCacheMatch[2]) : '';
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.edgeCache = space.edgeCache && typeof space.edgeCache === 'object' ? space.edgeCache : {};
+      const nowMs = Date.now();
+      for (const [ck, cEntry] of Object.entries(space.edgeCache)) {
+        if (!cEntry || (cEntry.expiresAtMs && nowMs >= cEntry.expiresAtMs)) {
+          delete space.edgeCache[ck];
+        }
+      }
+
+      if (method === 'GET') {
+        const targetKey = cacheKeyParam || url.searchParams.get('key') || '';
+        if (targetKey) {
+          const entry = space.edgeCache[targetKey];
+          if (!entry) {
+            return jsonResponse(
+              { ok: true, hit: false, key: targetKey, value: null },
+              200,
+              { 'Access-Control-Allow-Origin': '*', 'X-Cache-Status': 'MISS' }
+            );
+          }
+          const ttlRemaining = Math.max(0, Math.ceil((entry.expiresAtMs - nowMs) / 1000));
+          return jsonResponse(
+            { ok: true, hit: true, key: targetKey, value: entry.value, ttlRemaining, expiresAt: new Date(entry.expiresAtMs).toISOString() },
+            200,
+            { 'Access-Control-Allow-Origin': '*', 'X-Cache-Status': 'HIT' }
+          );
+        }
+        const entries = Object.entries(space.edgeCache).map(([k, v]) => ({
+          key: k,
+          ttlRemaining: Math.max(0, Math.ceil((v.expiresAtMs - nowMs) / 1000)),
+          expiresAt: new Date(v.expiresAtMs).toISOString()
+        }));
+        return jsonResponse(
+          { ok: true, count: entries.length, keys: entries },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'PUT' || method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const targetKey = String(cacheKeyParam || payload.key || url.searchParams.get('key') || '').trim().slice(0, 120);
+        if (!targetKey) return jsonResponse({ error: 'Cache key is required.' }, 400);
+        const ttlSec = Math.min(86400, Math.max(1, parseInt(url.searchParams.get('ttl') || payload.ttl || '300', 10) || 300));
+        const val = payload.value !== undefined ? payload.value : payload;
+        const expiresAtMs = nowMs + ttlSec * 1000;
+        space.edgeCache[targetKey] = {
+          value: val,
+          ttl: ttlSec,
+          createdAtMs: nowMs,
+          expiresAtMs
+        };
+        const allKeys = Object.keys(space.edgeCache);
+        if (allKeys.length > 200) {
+          delete space.edgeCache[allKeys[0]];
+        }
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, key: targetKey, value: val, ttl: ttlSec, expiresAt: new Date(expiresAtMs).toISOString() },
+          200,
+          { 'Access-Control-Allow-Origin': '*', 'X-Cache-Status': 'STORED' }
+        );
+      }
+
+      if (method === 'DELETE') {
+        const targetKey = cacheKeyParam || url.searchParams.get('key') || '';
+        if (targetKey) {
+          delete space.edgeCache[targetKey];
+        } else {
+          space.edgeCache = {};
+        }
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, cleared: targetKey || 'all', count: Object.keys(space.edgeCache).length },
           200,
           { 'Access-Control-Allow-Origin': '*' }
         );
@@ -5972,6 +6256,39 @@ const spaceHubWorker = {
           recordAuditLog(space, user, 'creator_alert_test_dispatched', { status });
           await saveDb(env, db);
           return jsonResponse({ ok: true, status, channel: alertConfig.channel || 'webhook' });
+        }
+
+        // Wave 16: Automated Lighthouse / SEO & Accessibility Audit & 1-Click Auto-Fix
+        if (action === 'seo-audit' && method === 'GET') {
+          if (!space || !canViewSpace(space, user)) return jsonResponse({ error: 'Not found.' }, 404);
+          const files = space.draftFiles || space.publishedFiles || {};
+          const html = files['index.html'] || '';
+          const report = analyzeSpaceSeoAndA11y(html, space);
+          return jsonResponse({ ok: true, slug: space.slug, ...report });
+        }
+
+        if (action === 'seo-audit' && method === 'POST') {
+          if (!user || !space || !canEditSpace(space, user)) return jsonResponse({ error: 'Unauthorized.' }, 403);
+          space.draftFiles = space.draftFiles && typeof space.draftFiles === 'object' ? space.draftFiles : {};
+          const currentHtml = space.draftFiles['index.html'] || '';
+          pushSpaceSnapshot(space, 'Before SEO & A11y Auto-Fix');
+          const fixedHtml = autoFixSpaceSeoHtml(currentHtml, space);
+          space.draftFiles['index.html'] = fixedHtml;
+          space.hasUnpublishedChanges = true;
+          space.updatedAt = new Date().toISOString();
+          const report = analyzeSpaceSeoAndA11y(fixedHtml, space);
+          recordAuditLog(space, user, 'seo_audit_autofixed', { score: report.score, grade: report.grade });
+          await saveDb(env, db);
+          return jsonResponse({
+            ok: true,
+            fixed: true,
+            ...report,
+            space: {
+              ...formatSpaceSummary(space, user),
+              draftFiles: space.draftFiles,
+              publishedFiles: space.publishedFiles
+            }
+          });
         }
 
         if (!action && method === 'DELETE') {

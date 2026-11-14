@@ -1076,6 +1076,180 @@ function generatePresenceBadgeSvg(count = 1) {
 </svg>`;
 }
 
+function generateSpaceEmbedScript(space, origin = 'https://spacehub.win') {
+  const slug = String(space.slug || 'app');
+  const title = String(space.title || slug).replace(/["<>]/g, '');
+  const liveUrl = `${origin}/live/${encodeURIComponent(slug)}`;
+  return `(function(){
+  var scripts = document.getElementsByTagName('script');
+  var currentScript = document.currentScript || scripts[scripts.length - 1];
+  var targetId = currentScript && currentScript.getAttribute('data-target');
+  var height = (currentScript && currentScript.getAttribute('data-height')) || '600px';
+  var iframe = document.createElement('iframe');
+  iframe.src = '${liveUrl}?embed=1';
+  iframe.title = '${title} — SpaceHub Embed';
+  iframe.style.width = '100%';
+  iframe.style.height = height;
+  iframe.style.border = '1px solid #27272a';
+  iframe.style.borderRadius = '12px';
+  iframe.style.background = '#09090b';
+  iframe.setAttribute('loading', 'lazy');
+  iframe.setAttribute('allow', 'clipboard-write; fullscreen');
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'spacehub:resize' && e.data.slug === '${slug}' && e.data.height) {
+      iframe.style.height = parseInt(e.data.height, 10) + 'px';
+    }
+  });
+  var container = targetId ? document.getElementById(targetId) : null;
+  if (container) {
+    container.appendChild(iframe);
+  } else if (currentScript && currentScript.parentNode) {
+    currentScript.parentNode.insertBefore(iframe, currentScript.nextSibling);
+  }
+})();`;
+}
+
+function generateSpaceQrSvg(space, origin = 'https://spacehub.win', fg = '#fafafa', bg = '#09090b') {
+  const slug = String(space.slug || 'app');
+  const targetUrl = `${origin}/live/${slug}`;
+  const size = 21;
+  const grid = Array.from({ length: size }, () => Array(size).fill(false));
+  const drawFinder = (r0, c0) => {
+    for (let r = 0; r < 7; r++) {
+      for (let c = 0; c < 7; c++) {
+        const isBorder = r === 0 || r === 6 || c === 0 || c === 6;
+        const isInner = r >= 2 && r <= 4 && c >= 2 && c <= 4;
+        grid[r0 + r][c0 + c] = isBorder || isInner;
+      }
+    }
+  };
+  drawFinder(0, 0);
+  drawFinder(0, size - 7);
+  drawFinder(size - 7, 0);
+  for (let i = 8; i < size - 8; i++) {
+    grid[6][i] = i % 2 === 0;
+    grid[i][6] = i % 2 === 0;
+  }
+  let hash = 2166136261;
+  for (let i = 0; i < targetUrl.length; i++) {
+    hash ^= targetUrl.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const inTopLeft = r < 8 && c < 8;
+      const inTopRight = r < 8 && c >= size - 8;
+      const inBotLeft = r >= size - 8 && c < 8;
+      if (inTopLeft || inTopRight || inBotLeft || r === 6 || c === 6) continue;
+      hash ^= (r * 31 + c * 17) & 0xff;
+      hash = Math.imul(hash, 16777619) >>> 0;
+      grid[r][c] = (hash & 1) === 1;
+    }
+  }
+  const cell = 10;
+  const pad = 20;
+  const dim = size * cell + pad * 2;
+  let rects = '';
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      if (grid[r][c]) {
+        rects += `<rect x="${pad + c * cell}" y="${pad + r * cell}" width="${cell}" height="${cell}" rx="1.5" fill="${fg}"/>`;
+      }
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${dim}" height="${dim + 28}" viewBox="0 0 ${dim} ${dim + 28}" data-url="${targetUrl}">
+  <rect width="${dim}" height="${dim + 28}" rx="16" fill="${bg}" stroke="#27272a" stroke-width="2"/>
+  ${rects}
+  <text x="${dim / 2}" y="${dim + 16}" text-anchor="middle" fill="${fg}" font-family="monospace, sans-serif" font-size="11" opacity="0.8">spacehub.win/s/${slug}</text>
+</svg>`;
+}
+
+function analyzeSpaceSeoAndA11y(html = '', space = {}) {
+  const src = String(html || '');
+  const checks = [];
+  let score = 0;
+
+  const hasDoctype = /<!DOCTYPE\s+html>/i.test(src);
+  checks.push({ id: 'doctype', category: 'best-practices', passed: hasDoctype, points: 10, label: 'HTML5 <!DOCTYPE html> declaration', fix: 'Add <!DOCTYPE html> at the top of index.html' });
+  if (hasDoctype) score += 10;
+
+  const hasLang = /<html[^>]+lang=["'][a-zA-Z-]+["']/i.test(src);
+  checks.push({ id: 'html_lang', category: 'accessibility', passed: hasLang, points: 15, label: '<html lang="..."> attribute for screen readers', fix: 'Add lang="en" to the <html> tag' });
+  if (hasLang) score += 15;
+
+  const hasCharset = /<meta[^>]+charset=["']?utf-8["']?/i.test(src);
+  checks.push({ id: 'meta_charset', category: 'best-practices', passed: hasCharset, points: 10, label: 'UTF-8 character encoding <meta charset="UTF-8">', fix: 'Insert <meta charset="UTF-8" /> inside <head>' });
+  if (hasCharset) score += 10;
+
+  const hasViewport = /<meta[^>]+name=["']viewport["']/i.test(src);
+  checks.push({ id: 'meta_viewport', category: 'seo', passed: hasViewport, points: 15, label: 'Responsive mobile <meta name="viewport"> tag', fix: 'Insert <meta name="viewport" content="width=device-width, initial-scale=1.0" /> inside <head>' });
+  if (hasViewport) score += 15;
+
+  const hasTitle = /<title>[^<]+<\/title>/i.test(src);
+  checks.push({ id: 'title_tag', category: 'seo', passed: hasTitle, points: 15, label: 'Non-empty <title> element', fix: `Insert <title>${space.title || 'SpaceHub App'}</title> inside <head>` });
+  if (hasTitle) score += 15;
+
+  const hasDesc = /<meta[^>]+name=["']description["'][^>]+content=["'][^"']+["']/i.test(src) || /<meta[^>]+content=["'][^"']+["'][^>]+name=["']description["']/i.test(src);
+  checks.push({ id: 'meta_description', category: 'seo', passed: hasDesc, points: 15, label: 'SEO <meta name="description"> summary', fix: `Insert <meta name="description" content="${(space.description || space.title || 'Built on SpaceHub').replace(/"/g, '')}" />` });
+  if (hasDesc) score += 15;
+
+  const hasH1 = /<h1[\s>][\s\S]*?<\/h1>/i.test(src);
+  checks.push({ id: 'heading_h1', category: 'seo', passed: hasH1, points: 10, label: 'Primary <h1> heading present', fix: 'Include a main <h1> heading inside <body>' });
+  if (hasH1) score += 10;
+
+  const imgTags = src.match(/<img\b[^>]*>/gi) || [];
+  const imgsMissingAlt = imgTags.filter((tag) => !/\balt\s*=\s*["'][^"']*["']/i.test(tag));
+  const passedImgAlt = imgsMissingAlt.length === 0;
+  checks.push({ id: 'img_alt', category: 'accessibility', passed: passedImgAlt, points: 10, label: 'All <img> elements include alt attributes', fix: `Add descriptive alt="..." attributes to ${imgsMissingAlt.length} <img> tag(s)` });
+  if (passedImgAlt) score += 10;
+
+  const issues = checks.filter((c) => !c.passed);
+  return {
+    score,
+    grade: score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D',
+    passedCount: checks.length - issues.length,
+    totalChecks: checks.length,
+    checks,
+    issues
+  };
+}
+
+function autoFixSpaceSeoHtml(html = '', space = {}) {
+  let out = String(html || '');
+  const titleText = String(space.title || 'SpaceHub App').replace(/[<>&"]/g, '');
+  const descText = String(space.description || `${titleText} — interactive web application on SpaceHub`).replace(/[<>&"]/g, '');
+
+  if (!/<!DOCTYPE\s+html>/i.test(out)) {
+    out = `<!DOCTYPE html>\n` + out;
+  }
+  if (/<html(?![^>]*\blang=)/i.test(out)) {
+    out = out.replace(/<html/i, '<html lang="en"');
+  } else if (!/<html/i.test(out)) {
+    out = `<!DOCTYPE html>\n<html lang="en">\n<head>\n</head>\n<body>\n${out}\n</body>\n</html>`;
+  }
+  if (!/<head[\s>]/i.test(out)) {
+    out = out.replace(/<html[^>]*>/i, (m) => `${m}\n<head>\n</head>`);
+  }
+  const headInjections = [];
+  if (!/<meta[^>]+charset=/i.test(out)) {
+    headInjections.push('  <meta charset="UTF-8" />');
+  }
+  if (!/<meta[^>]+name=["']viewport["']/i.test(out)) {
+    headInjections.push('  <meta name="viewport" content="width=device-width, initial-scale=1.0" />');
+  }
+  if (!/<title>[^<]+<\/title>/i.test(out)) {
+    headInjections.push(`  <title>${titleText}</title>`);
+  }
+  if (!/<meta[^>]+name=["']description["']/i.test(out)) {
+    headInjections.push(`  <meta name="description" content="${descText}" />`);
+  }
+  if (headInjections.length > 0) {
+    out = out.replace(/<head[^>]*>/i, (m) => `${m}\n${headInjections.join('\n')}`);
+  }
+  out = out.replace(/<img\b(?![^>]*\balt=)([^>]*)>/gi, '<img alt="App illustration"$1>');
+  return out;
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;

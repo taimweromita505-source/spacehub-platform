@@ -1349,6 +1349,21 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'embed_qr') {
+    const slug = state.selectedSpace?.slug || 'demo';
+    const snippet = `\n<!-- SpaceHub QR Code & Embed Widget -->\n<div style="margin:2rem auto;max-width:420px;background:#18181b;border:1px solid #27272a;border-radius:1rem;padding:1.25rem;text-align:center;font-family:system-ui,sans-serif;color:#fafafa;">\n  <h3 style="margin:0 0 0.5rem;font-size:1rem;">Scan or Embed This App</h3>\n  <img src="/live/${slug}/qr.svg" alt="Space QR Code" style="width:160px;height:auto;border-radius:0.75rem;margin-bottom:0.75rem;" />\n  <div style="font-size:0.75rem;color:#a1a1aa;background:#09090b;padding:0.5rem;border-radius:0.5rem;overflow-x:auto;white-space:nowrap;">&lt;script src="https://spacehub.win/live/${slug}/embed.js"&gt;&lt;/script&gt;</div>\n</div>\n`;
+    const curHtml = state.workingFiles['index.html'] || '';
+    state.workingFiles['index.html'] = curHtml.includes('</body>')
+      ? curHtml.replace('</body>', snippet + '</body>')
+      : curHtml + snippet;
+    state.activeFile = 'index.html';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['index.html'];
+    showToast('Injected Share QR Code & Embed snippet into index.html!');
+    return;
+  }
+
   const tag = snippets[stack];
   if (!tag) return;
   let html = state.workingFiles['index.html'] || '';
