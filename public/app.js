@@ -1364,6 +1364,44 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'i18n_starter') {
+    state.workingFiles['i18n.json'] = JSON.stringify({
+      "en": {
+        "welcome": "Welcome to our App",
+        "cta": "Get Started"
+      },
+      "es": {
+        "welcome": "Bienvenido a nuestra aplicación",
+        "cta": "Comenzar"
+      },
+      "fr": {
+        "welcome": "Bienvenue sur notre application",
+        "cta": "Commencer"
+      }
+    }, null, 2);
+    state.activeFile = 'i18n.json';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['i18n.json'];
+    showToast('Created multi-language i18n.json dictionary!');
+    return;
+  }
+
+  if (stack === 'error_telemetry') {
+    const slug = state.selectedSpace?.slug || 'demo';
+    const snippet = `\n<!-- SpaceHub Client Error Telemetry SDK -->\n<script>\n(function(){\n  window.addEventListener('error', function(e) {\n    fetch('/live/${slug}/errors', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({ message: e.message, source: e.filename, line: e.lineno, col: e.colno, stack: e.error && e.error.stack ? e.error.stack : '' })\n    }).catch(function(){});\n  });\n  window.addEventListener('unhandledrejection', function(e) {\n    fetch('/live/${slug}/errors', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({ message: String(e.reason), source: 'PromiseRejection' })\n    }).catch(function(){});\n  });\n})();\n</script>\n`;
+    const curHtml = state.workingFiles['index.html'] || '';
+    state.workingFiles['index.html'] = curHtml.includes('</head>')
+      ? curHtml.replace('</head>', snippet + '</head>')
+      : curHtml + snippet;
+    state.activeFile = 'index.html';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['index.html'];
+    showToast('Injected Client Error Telemetry SDK into index.html!');
+    return;
+  }
+
   const tag = snippets[stack];
   if (!tag) return;
   let html = state.workingFiles['index.html'] || '';

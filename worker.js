@@ -2065,6 +2065,111 @@ function autoFixSpaceSeoHtml(html = '', space = {}) {
   return out;
 }
 
+function evaluateFeatureFlags(flagsObj = {}, userKey = '', segment = '') {
+  const evaluated = {};
+  const rules = {};
+  for (const [k, raw] of Object.entries(flagsObj || {})) {
+    if (typeof raw === 'boolean') {
+      evaluated[k] = raw;
+      rules[k] = { enabled: raw, rollout: raw ? 100 : 0, segments: [] };
+      continue;
+    }
+    if (raw && typeof raw === 'object') {
+      const enabled = Boolean(raw.enabled);
+      const rollout = typeof raw.rollout === 'number' ? Math.max(0, Math.min(100, raw.rollout)) : (enabled ? 100 : 0);
+      const segments = Array.isArray(raw.segments) ? raw.segments.map((s) => String(s).toLowerCase()) : [];
+      rules[k] = { enabled, rollout, segments };
+      if (!enabled) {
+        evaluated[k] = false;
+        continue;
+      }
+      if (segments.length > 0 && segment && segments.includes(String(segment).toLowerCase())) {
+        evaluated[k] = true;
+        continue;
+      }
+      if (rollout >= 100) {
+        evaluated[k] = true;
+      } else if (rollout <= 0) {
+        evaluated[k] = false;
+      } else {
+        const seedStr = `${k}:${userKey || 'anon'}`;
+        let h = 2166136261;
+        for (let i = 0; i < seedStr.length; i++) {
+          h ^= seedStr.charCodeAt(i);
+          h = Math.imul(h, 16777619) >>> 0;
+        }
+        evaluated[k] = (h % 100) < rollout;
+      }
+    }
+  }
+  return { evaluated, rules };
+}
+
+function generateSpaceOpenApiSpec(space, origin = 'https://spacehub.win') {
+  const slug = String(space.slug || 'app');
+  const title = String(space.title || slug);
+  const dbTablesObj = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
+  const tableNames = Object.keys(dbTablesObj);
+  if (tableNames.length === 0) tableNames.push('items');
+
+  const paths = {
+    [`/live/${slug}/storage`]: {
+      get: { summary: 'Read Space Cloud JSON Storage', responses: { '200': { description: 'Current JSON key-value store' } } },
+      post: { summary: 'Merge/Update Space Cloud JSON Storage', responses: { '200': { description: 'Updated JSON store' } } }
+    },
+    [`/live/${slug}/submit`]: {
+      post: { summary: 'Submit Form / Waitlist Entry (Validated by form.schema.json if present)', responses: { '201': { description: 'Submission saved' }, '422': { description: 'Schema validation error' } } }
+    },
+    [`/live/${slug}/cache/{key}`]: {
+      get: { summary: 'Read Edge TTL Cache Key', parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Cache HIT or MISS' } } },
+      put: { summary: 'Write Edge TTL Cache Key', parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }, { name: 'ttl', in: 'query', required: false, schema: { type: 'integer' } }], responses: { '200': { description: 'Stored in Edge Cache' } } },
+      delete: { summary: 'Evict Edge Cache Key', parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Key evicted' } } }
+    },
+    [`/live/${slug}/presence`]: {
+      get: { summary: 'List Online Visitors & Cursors', responses: { '200': { description: 'Active sessions list' } } },
+      post: { summary: 'Send Visitor Presence Heartbeat', responses: { '200': { description: 'Updated presence state' } } }
+    },
+    [`/live/${slug}/flags`]: {
+      get: { summary: 'Evaluate Feature Flags & Rollout Experiments', parameters: [{ name: 'userKey', in: 'query', required: false, schema: { type: 'string' } }, { name: 'segment', in: 'query', required: false, schema: { type: 'string' } }], responses: { '200': { description: 'Evaluated boolean flags' } } }
+    },
+    [`/live/${slug}/errors`]: {
+      post: { summary: 'Report Client Runtime Error / Exception', responses: { '201': { description: 'Error logged' } } }
+    },
+    [`/live/${slug}/i18n`]: {
+      get: { summary: 'Resolve Localization Dictionary (locales.<lang>.json)', parameters: [{ name: 'lang', in: 'query', required: false, schema: { type: 'string' } }], responses: { '200': { description: 'Translation key-value dictionary' } } }
+    },
+    [`/live/${slug}/ai`]: {
+      post: { summary: 'Built-in Space AI Assistant Completion', responses: { '200': { description: 'AI response' } } }
+    },
+    [`/live/${slug}/orders`]: {
+      get: { summary: 'List E-Commerce Orders', responses: { '200': { description: 'Orders list' } } },
+      post: { summary: 'Create E-Commerce Checkout Order', responses: { '201': { description: 'Order created' } } }
+    }
+  };
+
+  for (const tbl of tableNames) {
+    paths[`/live/${slug}/db/${tbl}`] = {
+      get: { summary: `Query rows in "${tbl}" table`, parameters: [{ name: 'q', in: 'query', schema: { type: 'string' } }, { name: 'where', in: 'query', schema: { type: 'string' } }, { name: 'sort', in: 'query', schema: { type: 'string' } }, { name: 'limit', in: 'query', schema: { type: 'integer' } }], responses: { '200': { description: 'Matching rows' } } },
+      post: { summary: `Insert row into "${tbl}" table`, responses: { '201': { description: 'Created row' } } }
+    };
+    paths[`/live/${slug}/db/${tbl}/csv`] = {
+      get: { summary: `Export "${tbl}" table as CSV`, responses: { '200': { description: 'CSV download' } } },
+      post: { summary: `Bulk import CSV into "${tbl}" table`, responses: { '201': { description: 'Imported rows' } } }
+    };
+  }
+
+  return {
+    openapi: '3.0.3',
+    info: {
+      title: `${title} — SpaceHub Live API`,
+      version: `1.0.${space.version || 1}`,
+      description: space.description || `Auto-generated OpenAPI 3.0 specification for SpaceHub Space "${slug}".`
+    },
+    servers: [{ url: origin, description: 'SpaceHub Edge Production' }],
+    paths
+  };
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
@@ -3058,7 +3163,7 @@ const spaceHubWorker = {
     }
 
     // 1. Per-Space Installable PWA Assets (/live/:slug/manifest.webmanifest, /live/:slug/icon.svg, /live/:slug/sw.js, /live/:slug/og.svg)
-    const spacePwaMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(manifest\.webmanifest|icon\.svg|sw\.js|og\.svg|embed\.js|qr\.svg)$/i);
+    const spacePwaMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(manifest\.webmanifest|icon\.svg|sw\.js|og\.svg|embed\.js|qr\.svg|openapi\.json)$/i);
     if (spacePwaMatch && method === 'GET') {
       const slug = decodeURIComponent(spacePwaMatch[1]).toLowerCase();
       const asset = spacePwaMatch[2].toLowerCase();
@@ -3071,6 +3176,16 @@ const spaceHubWorker = {
         return new Response(JSON.stringify(generateSpaceManifest(space, url.origin), null, 2), {
           status: 200,
           headers: { 'Content-Type': 'application/manifest+json; charset=utf-8' }
+        });
+      }
+      if (asset === 'openapi.json') {
+        return new Response(JSON.stringify(generateSpaceOpenApiSpec(space, url.origin), null, 2), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store'
+          }
         });
       }
       if (asset === 'icon.svg') {
@@ -3465,6 +3580,143 @@ const spaceHubWorker = {
           { 'Access-Control-Allow-Origin': '*' }
         );
       }
+    }
+
+    // 1b-0e. Wave 17: Feature Flag & Remote Experimentation Engine (/live/:slug/flags)
+    const spaceFlagsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/flags\/?$/i);
+    if (spaceFlagsMatch) {
+      const slug = decodeURIComponent(spaceFlagsMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.featureFlags = space.featureFlags && typeof space.featureFlags === 'object' ? space.featureFlags : {};
+
+      if (method === 'GET') {
+        const userKey = url.searchParams.get('userKey') || request.headers.get('cf-connecting-ip') || 'anon';
+        const segment = url.searchParams.get('segment') || '';
+        const { evaluated, rules } = evaluateFeatureFlags(space.featureFlags, userKey, segment);
+        return jsonResponse(
+          { ok: true, flags: evaluated, rules },
+          200,
+          { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }
+        );
+      }
+
+      if (method === 'POST' || method === 'PUT') {
+        const payload = await request.json().catch(() => ({}));
+        const incoming = payload.flags && typeof payload.flags === 'object' ? payload.flags : payload;
+        if (incoming && typeof incoming === 'object') {
+          space.featureFlags = { ...space.featureFlags, ...incoming };
+        }
+        recordAuditLog(space, user, 'feature_flags_updated', { flagCount: Object.keys(space.featureFlags).length });
+        await saveDb(env, db);
+        const { evaluated, rules } = evaluateFeatureFlags(space.featureFlags, 'admin', '');
+        return jsonResponse(
+          { ok: true, flags: evaluated, rules },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+    }
+
+    // 1b-0f. Wave 17: Per-Space Error Tracking & Client Crash Telemetry (/live/:slug/errors)
+    const spaceErrorsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/errors\/?$/i);
+    if (spaceErrorsMatch) {
+      const slug = decodeURIComponent(spaceErrorsMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.errorLogs = Array.isArray(space.errorLogs) ? space.errorLogs : [];
+
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const entry = {
+          id: 'err_' + randomHex(6),
+          message: String(payload.message || 'Uncaught Error').trim().slice(0, 500),
+          stack: String(payload.stack || '').trim().slice(0, 2000),
+          source: String(payload.source || payload.filename || 'index.html').trim().slice(0, 200),
+          line: Number(payload.line || payload.lineno || 0),
+          col: Number(payload.col || payload.colno || 0),
+          userAgent: String(payload.userAgent || request.headers.get('user-agent') || '').slice(0, 200),
+          createdAt: new Date().toISOString()
+        };
+        space.errorLogs.unshift(entry);
+        if (space.errorLogs.length > 100) space.errorLogs = space.errorLogs.slice(0, 100);
+        recordAuditLog(space, null, 'client_error_reported', { message: entry.message, source: entry.source });
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, errorId: entry.id, count: space.errorLogs.length },
+          201,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'GET') {
+        if (!user || !canViewSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized.' }, 403);
+        }
+        return jsonResponse(
+          { ok: true, count: space.errorLogs.length, errors: space.errorLogs },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'DELETE') {
+        if (!user || !canEditSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized.' }, 403);
+        }
+        space.errorLogs = [];
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, count: 0, errors: [] });
+      }
+    }
+
+    // 1b-0g. Wave 17: Multi-Language i18n & Auto-Translation Endpoint (/live/:slug/i18n & /live/:slug/i18n/:lang)
+    const spaceI18nMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/i18n(?:\/([a-zA-Z-]+?)(?:\.json)?)?\/?$/i);
+    if (spaceI18nMatch && method === 'GET') {
+      const slug = decodeURIComponent(spaceI18nMatch[1]).toLowerCase();
+      const paramLang = spaceI18nMatch[2] ? decodeURIComponent(spaceI18nMatch[2]).toLowerCase() : '';
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      const files = space.publishedFiles || space.draftFiles || {};
+      const acceptLang = (request.headers.get('accept-language') || '').split(',')[0].split('-')[0].trim().toLowerCase();
+      const requestedLang = (paramLang || url.searchParams.get('lang') || acceptLang || 'en').toLowerCase().slice(0, 10);
+
+      let translations = null;
+      let resolvedLang = requestedLang;
+      const tryParseFile = (fname) => {
+        if (files[fname]) {
+          try {
+            return JSON.parse(files[fname]);
+          } catch (_e) {}
+        }
+        return null;
+      };
+
+      translations = tryParseFile(`locales.${requestedLang}.json`) || tryParseFile(`${requestedLang}.json`);
+      if (!translations && files['i18n.json']) {
+        const bundle = tryParseFile('i18n.json');
+        if (bundle && typeof bundle === 'object') {
+          translations = bundle[requestedLang] || bundle.en || null;
+          if (!bundle[requestedLang] && bundle.en) resolvedLang = 'en';
+        }
+      }
+      if (!translations && requestedLang !== 'en') {
+        translations = tryParseFile('locales.en.json') || tryParseFile('en.json');
+        if (translations) resolvedLang = 'en';
+      }
+      if (!translations) {
+        translations = {
+          app_title: space.title || slug,
+          welcome: `Welcome to ${space.title || slug}`,
+          submit: 'Submit'
+        };
+      }
+
+      return jsonResponse(
+        { ok: true, lang: resolvedLang, requestedLang, translations },
+        200,
+        { 'Access-Control-Allow-Origin': '*', 'Vary': 'Accept-Language' }
+      );
     }
 
     // 1b-1. Per-Space Server-Side API Proxy & Secrets Vault (POST /live/:slug/proxy)
@@ -6289,6 +6541,20 @@ const spaceHubWorker = {
               publishedFiles: space.publishedFiles
             }
           });
+        }
+
+        // Wave 17: Creator Error Inbox (/api/spaces/:owner/:slug/errors)
+        if (action === 'errors' && method === 'GET') {
+          if (!user || !space || !canViewSpace(space, user)) return jsonResponse({ error: 'Unauthorized.' }, 403);
+          space.errorLogs = Array.isArray(space.errorLogs) ? space.errorLogs : [];
+          return jsonResponse({ ok: true, count: space.errorLogs.length, errors: space.errorLogs });
+        }
+
+        if (action === 'errors' && method === 'DELETE') {
+          if (!user || !space || !canEditSpace(space, user)) return jsonResponse({ error: 'Unauthorized.' }, 403);
+          space.errorLogs = [];
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, count: 0, errors: [] });
         }
 
         if (!action && method === 'DELETE') {

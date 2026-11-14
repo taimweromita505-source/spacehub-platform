@@ -1250,6 +1250,111 @@ function autoFixSpaceSeoHtml(html = '', space = {}) {
   return out;
 }
 
+function evaluateFeatureFlags(flagsObj = {}, userKey = '', segment = '') {
+  const evaluated = {};
+  const rules = {};
+  for (const [k, raw] of Object.entries(flagsObj || {})) {
+    if (typeof raw === 'boolean') {
+      evaluated[k] = raw;
+      rules[k] = { enabled: raw, rollout: raw ? 100 : 0, segments: [] };
+      continue;
+    }
+    if (raw && typeof raw === 'object') {
+      const enabled = Boolean(raw.enabled);
+      const rollout = typeof raw.rollout === 'number' ? Math.max(0, Math.min(100, raw.rollout)) : (enabled ? 100 : 0);
+      const segments = Array.isArray(raw.segments) ? raw.segments.map((s) => String(s).toLowerCase()) : [];
+      rules[k] = { enabled, rollout, segments };
+      if (!enabled) {
+        evaluated[k] = false;
+        continue;
+      }
+      if (segments.length > 0 && segment && segments.includes(String(segment).toLowerCase())) {
+        evaluated[k] = true;
+        continue;
+      }
+      if (rollout >= 100) {
+        evaluated[k] = true;
+      } else if (rollout <= 0) {
+        evaluated[k] = false;
+      } else {
+        const seedStr = `${k}:${userKey || 'anon'}`;
+        let h = 2166136261;
+        for (let i = 0; i < seedStr.length; i++) {
+          h ^= seedStr.charCodeAt(i);
+          h = Math.imul(h, 16777619) >>> 0;
+        }
+        evaluated[k] = (h % 100) < rollout;
+      }
+    }
+  }
+  return { evaluated, rules };
+}
+
+function generateSpaceOpenApiSpec(space, origin = 'https://spacehub.win') {
+  const slug = String(space.slug || 'app');
+  const title = String(space.title || slug);
+  const dbTablesObj = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
+  const tableNames = Object.keys(dbTablesObj);
+  if (tableNames.length === 0) tableNames.push('items');
+
+  const paths = {
+    [`/live/${slug}/storage`]: {
+      get: { summary: 'Read Space Cloud JSON Storage', responses: { '200': { description: 'Current JSON key-value store' } } },
+      post: { summary: 'Merge/Update Space Cloud JSON Storage', responses: { '200': { description: 'Updated JSON store' } } }
+    },
+    [`/live/${slug}/submit`]: {
+      post: { summary: 'Submit Form / Waitlist Entry', responses: { '201': { description: 'Submission saved' }, '422': { description: 'Schema validation error' } } }
+    },
+    [`/live/${slug}/cache/{key}`]: {
+      get: { summary: 'Read Edge TTL Cache Key', responses: { '200': { description: 'Cache HIT or MISS' } } },
+      put: { summary: 'Write Edge TTL Cache Key', responses: { '200': { description: 'Stored in Edge Cache' } } },
+      delete: { summary: 'Evict Edge Cache Key', responses: { '200': { description: 'Key evicted' } } }
+    },
+    [`/live/${slug}/presence`]: {
+      get: { summary: 'List Online Visitors & Cursors', responses: { '200': { description: 'Active sessions list' } } },
+      post: { summary: 'Send Visitor Presence Heartbeat', responses: { '200': { description: 'Updated presence state' } } }
+    },
+    [`/live/${slug}/flags`]: {
+      get: { summary: 'Evaluate Feature Flags & Rollout Experiments', responses: { '200': { description: 'Evaluated boolean flags' } } }
+    },
+    [`/live/${slug}/errors`]: {
+      post: { summary: 'Report Client Runtime Error / Exception', responses: { '201': { description: 'Error logged' } } }
+    },
+    [`/live/${slug}/i18n`]: {
+      get: { summary: 'Resolve Localization Dictionary', responses: { '200': { description: 'Translation key-value dictionary' } } }
+    },
+    [`/live/${slug}/ai`]: {
+      post: { summary: 'Built-in Space AI Assistant Completion', responses: { '200': { description: 'AI response' } } }
+    },
+    [`/live/${slug}/orders`]: {
+      get: { summary: 'List E-Commerce Orders', responses: { '200': { description: 'Orders list' } } },
+      post: { summary: 'Create E-Commerce Checkout Order', responses: { '201': { description: 'Order created' } } }
+    }
+  };
+
+  for (const tbl of tableNames) {
+    paths[`/live/${slug}/db/${tbl}`] = {
+      get: { summary: `Query rows in "${tbl}" table`, responses: { '200': { description: 'Matching rows' } } },
+      post: { summary: `Insert row into "${tbl}" table`, responses: { '201': { description: 'Created row' } } }
+    };
+    paths[`/live/${slug}/db/${tbl}/csv`] = {
+      get: { summary: `Export "${tbl}" table as CSV`, responses: { '200': { description: 'CSV download' } } },
+      post: { summary: `Bulk import CSV into "${tbl}" table`, responses: { '201': { description: 'Imported rows' } } }
+    };
+  }
+
+  return {
+    openapi: '3.0.3',
+    info: {
+      title: `${title} — SpaceHub Live API`,
+      version: `1.0.${space.version || 1}`,
+      description: space.description || `Auto-generated OpenAPI 3.0 specification for SpaceHub Space "${slug}".`
+    },
+    servers: [{ url: origin, description: 'SpaceHub Edge Production' }],
+    paths
+  };
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
