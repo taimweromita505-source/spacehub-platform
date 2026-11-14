@@ -1285,6 +1285,37 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'form_schema') {
+    state.workingFiles['form.schema.json'] = JSON.stringify({
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "SpaceFormSubmission",
+      "required": ["email"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 120
+        },
+        "message": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 1000
+        }
+      }
+    }, null, 2);
+    state.activeFile = 'form.schema.json';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['form.schema.json'];
+    showToast('Created form.schema.json validation schema!');
+    return;
+  }
+
   const tag = snippets[stack];
   if (!tag) return;
   let html = state.workingFiles['index.html'] || '';

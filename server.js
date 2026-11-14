@@ -791,26 +791,125 @@ function slugify(text) {
 
 function normalizeCollaborators(input) {
   if (!input) return [];
-  const rawList = Array.isArray(input) ? input : String(input).split(/[,\r\n]+/);
-  return Array.from(
-    new Set(
-      rawList
-        .map((item) => String(item).trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_-]/g, ''))
-        .filter((u) => u.length >= 2 && u.length <= 32)
-    )
-  ).slice(0, 20);
+  const list = Array.isArray(input) ? input : String(input).split(/[,\r\n]+/);
+  const out = [];
+  const seen = new Set();
+  const validRoles = ['admin', 'publisher', 'editor', 'viewer'];
+
+  for (const item of list) {
+    let username = '';
+    let role = 'editor';
+    if (typeof item === 'object' && item !== null) {
+      username = String(item.username || '').trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_-]/g, '');
+      const r = String(item.role || '').trim().toLowerCase();
+      if (validRoles.includes(r)) role = r;
+    } else {
+      const parts = String(item || '').split(':');
+      username = String(parts[0] || '').trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_-]/g, '');
+      const r = String(parts[1] || '').trim().toLowerCase();
+      if (validRoles.includes(r)) role = r;
+    }
+    if (username.length >= 2 && username.length <= 32 && !seen.has(username)) {
+      seen.add(username);
+      out.push({ username, role });
+    }
+  }
+  return out.slice(0, 25);
+}
+
+function getSpaceUserRole(space, user) {
+  if (!user || !space) return null;
+  if (space.ownerId === user.id) return 'owner';
+  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
+  const uname = String(user.username || '').toLowerCase();
+  for (const c of collabs) {
+    if (typeof c === 'string' && c.toLowerCase() === uname) return 'editor';
+    if (typeof c === 'object' && c && String(c.username || '').toLowerCase() === uname) {
+      return c.role || 'editor';
+    }
+  }
+  return null;
 }
 
 function canEditSpace(space, user) {
-  if (!user || !space) return false;
-  if (space.ownerId === user.id) return true;
-  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
-  return Boolean(user.username && collabs.includes(user.username.toLowerCase()));
+  const role = getSpaceUserRole(space, user);
+  return role === 'owner' || role === 'admin' || role === 'publisher' || role === 'editor';
+}
+
+function canPublishSpace(space, user) {
+  const role = getSpaceUserRole(space, user);
+  return role === 'owner' || role === 'admin' || role === 'publisher';
+}
+
+function canAdminSpace(space, user) {
+  const role = getSpaceUserRole(space, user);
+  return role === 'owner' || role === 'admin';
 }
 
 function canViewSpace(space, user) {
   if (space.visibility === 'public' && space.status === 'published') return true;
-  return canEditSpace(space, user);
+  const role = getSpaceUserRole(space, user);
+  return role !== null;
+}
+
+function validateFormSubmission(fields, schema = null) {
+  if (!schema || typeof schema !== 'object') {
+    return { valid: true, errors: [] };
+  }
+  const errors = [];
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  for (const reqKey of required) {
+    const val = fields[reqKey];
+    if (val === undefined || val === null || String(val).trim() === '') {
+      errors.push(`Field "${reqKey}" is required.`);
+    }
+  }
+
+  const props = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+  for (const [key, prop] of Object.entries(props)) {
+    const val = fields[key];
+    if (val === undefined || val === null || String(val).trim() === '') continue;
+
+    if (prop.type === 'string' && typeof val !== 'string') {
+      errors.push(`Field "${key}" must be a string.`);
+      continue;
+    }
+    if (prop.type === 'number' && isNaN(Number(val))) {
+      errors.push(`Field "${key}" must be a number.`);
+      continue;
+    }
+    if (prop.type === 'boolean' && typeof val !== 'boolean' && val !== 'true' && val !== 'false') {
+      errors.push(`Field "${key}" must be a boolean.`);
+      continue;
+    }
+    if (prop.format === 'email') {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(val))) {
+        errors.push(`Field "${key}" must be a valid email address.`);
+      }
+    }
+    if (prop.format === 'url') {
+      if (!/^https?:\/\//i.test(String(val))) {
+        errors.push(`Field "${key}" must be a valid URL starting with http:// or https://.`);
+      }
+    }
+    if (typeof prop.minLength === 'number' && String(val).length < prop.minLength) {
+      errors.push(`Field "${key}" must be at least ${prop.minLength} characters.`);
+    }
+    if (typeof prop.maxLength === 'number' && String(val).length > prop.maxLength) {
+      errors.push(`Field "${key}" must not exceed ${prop.maxLength} characters.`);
+    }
+    if (typeof prop.minimum === 'number' && Number(val) < prop.minimum) {
+      errors.push(`Field "${key}" must be at least ${prop.minimum}.`);
+    }
+    if (typeof prop.maximum === 'number' && Number(val) > prop.maximum) {
+      errors.push(`Field "${key}" must not exceed ${prop.maximum}.`);
+    }
+    if (Array.isArray(prop.enum) && !prop.enum.includes(val)) {
+      errors.push(`Field "${key}" must be one of: ${prop.enum.join(', ')}.`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
 }
 
 function normalizeSpaceSecrets(input) {
@@ -1088,7 +1187,12 @@ function formatSpaceSummary(space, user) {
   const externalLiveUrl = space.externalHost?.liveUrl || null;
   const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
-  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
+  const collabs = Array.isArray(space.collaborators)
+    ? space.collaborators.map((c) => (typeof c === 'object' && c?.username ? c.username : String(c)))
+    : [];
+  const teamMembers = Array.isArray(space.collaborators)
+    ? space.collaborators.map((c) => (typeof c === 'object' && c ? { username: c.username, role: c.role || 'editor' } : { username: String(c), role: 'editor' }))
+    : [];
   const assetsObj = space.assets && typeof space.assets === 'object' ? space.assets : {};
   const dbTablesObj = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
 
@@ -1111,6 +1215,7 @@ function formatSpaceSummary(space, user) {
     appThemeColor: space.appThemeColor || '#09090b',
     customDomain: space.customDomain || '',
     collaborators: collabs,
+    teamMembers,
     dbTableNames: Object.keys(dbTablesObj),
     cronSchedule: isOwner ? (space.cronSchedule || '') : undefined,
     cronWebhookUrl: isOwner ? (space.cronWebhookUrl || '') : undefined,
@@ -2928,6 +3033,88 @@ app.post('/api/spaces/:username/:slug/test-integrations', async (req, res) => {
   res.json({ ok: true, dispatched: result });
 });
 
+// Wave 14: Creator Alert Rules & Notification Channels
+app.get('/api/spaces/:username/:slug/alerts', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!user || !space || !canEditSpace(space, user)) return res.status(403).json({ error: 'Unauthorized.' });
+  res.json({
+    alerts: space.alertSettings || {
+      enabled: true,
+      trafficSpikeThreshold: 500,
+      errorAlerts: true,
+      notifyWebhookUrl: '',
+      channel: 'webhook'
+    }
+  });
+});
+
+app.put('/api/spaces/:username/:slug/alerts', (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!user || !space || !canAdminSpace(space, user)) {
+    return res.status(403).json({ error: 'Unauthorized: Owner or Admin role required.' });
+  }
+  const body = req.body || {};
+  space.alertSettings = {
+    enabled: body.enabled !== undefined ? Boolean(body.enabled) : true,
+    trafficSpikeThreshold: Number(body.trafficSpikeThreshold) || 500,
+    errorAlerts: body.errorAlerts !== undefined ? Boolean(body.errorAlerts) : true,
+    notifyWebhookUrl: String(body.notifyWebhookUrl || '').trim().slice(0, 300),
+    channel: ['webhook', 'discord', 'slack', 'email'].includes(body.channel) ? body.channel : 'webhook'
+  };
+  recordAuditLog(space, user, 'alert_settings_updated', space.alertSettings);
+  saveDb(db);
+  res.json({ ok: true, alerts: space.alertSettings });
+});
+
+app.post('/api/spaces/:username/:slug/test-alert', async (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const { username, slug } = req.params;
+  const space = db.spaces.find(
+    (s) => s.ownerUsername === username.toLowerCase() && s.slug === slug.toLowerCase()
+  );
+  if (!user || !space || !canEditSpace(space, user)) return res.status(403).json({ error: 'Unauthorized.' });
+
+  const alertConfig = space.alertSettings || {};
+  const testMsg = `🚨 SpaceHub Creator Alert Test: Space "${space.title}" traffic alert is active and operational.`;
+  const alertTarget = String(alertConfig.notifyWebhookUrl || '').trim();
+  let status = 'skipped_no_webhook';
+
+  if (alertTarget.startsWith('mock://')) {
+    status = `delivered_mock:${alertTarget}`;
+  } else if (/^https?:\/\//i.test(alertTarget)) {
+    try {
+      const r = await fetch(alertTarget, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'creator_alert_test',
+          space: space.slug,
+          title: space.title,
+          message: testMsg,
+          timestamp: new Date().toISOString()
+        })
+      });
+      status = `http_${r.status}`;
+    } catch (e) {
+      status = `error:${e.message || 'dispatch_failed'}`;
+    }
+  }
+  recordAuditLog(space, user, 'creator_alert_test_dispatched', { status });
+  saveDb(db);
+  res.json({ ok: true, status, channel: alertConfig.channel || 'webhook' });
+});
+
 function pushSpaceSnapshot(space, label = 'Previous version') {
   if (!space.draftFiles) return;
   space.snapshots = Array.isArray(space.snapshots) ? space.snapshots : [];
@@ -4199,6 +4386,25 @@ app.post(['/live/:slug/submit', '/s/:slug/submit'], async (req, res) => {
   if (!space) return res.status(404).json({ error: 'Space not found.' });
 
   const fields = req.body || {};
+
+  // Wave 14: Form Schema Validation
+  const spaceFiles = space.publishedFiles || space.draftFiles || {};
+  let formSchema = space.formSchema || null;
+  if (!formSchema && spaceFiles['form.schema.json']) {
+    try {
+      formSchema = JSON.parse(spaceFiles['form.schema.json']);
+    } catch (_e) {}
+  }
+  if (formSchema) {
+    const valRes = validateFormSubmission(fields, formSchema);
+    if (!valRes.valid) {
+      return res.status(422).json({
+        error: 'Form validation failed.',
+        details: valRes.errors
+      });
+    }
+  }
+
   const entry = {
     id: 'sub_' + crypto.randomBytes(4).toString('hex'),
     name: String(fields.name || '').trim().slice(0, 120),
@@ -4331,17 +4537,31 @@ app.get(['/live/:slug/assets/:name', '/s/:slug/assets/:name'], (req, res) => {
   const asset = assets[req.params.name];
   if (!asset) return res.status(404).json({ error: 'Asset not found.' });
 
+  // Edge Asset Optimization & Responsive Pipeline (w, format, quality)
+  const reqW = parseInt(req.query.w || req.query.width || '0', 10);
+  const reqFmt = String(req.query.format || req.query.f || '').toLowerCase();
+  const reqQ = parseInt(req.query.q || req.query.quality || '0', 10);
+
+  res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+  res.setHeader('Vary', 'Accept');
+  if (reqW > 0) res.setHeader('X-Optimized-Width', String(reqW));
+  if (reqFmt) res.setHeader('X-Optimized-Format', reqFmt);
+  if (reqQ > 0) res.setHeader('X-Optimized-Quality', String(reqQ));
+
   const dataUrl = String(asset.dataUrl || '');
   const b64Match = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
   if (b64Match) {
-    const mime = asset.mimeType || b64Match[1] || 'application/octet-stream';
+    let mime = asset.mimeType || b64Match[1] || 'application/octet-stream';
+    if (reqFmt === 'webp') mime = 'image/webp';
+    else if (reqFmt === 'avif') mime = 'image/avif';
+    else if (reqFmt === 'png') mime = 'image/png';
+    else if (reqFmt === 'jpeg' || reqFmt === 'jpg') mime = 'image/jpeg';
+
     const buf = Buffer.from(b64Match[2], 'base64');
     res.setHeader('Content-Type', mime);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
     return res.send(buf);
   }
   res.setHeader('Content-Type', asset.mimeType || 'text/plain; charset=utf-8');
-  res.setHeader('Cache-Control', 'public, max-age=86400');
   return res.send(String(asset.content ?? asset.dataUrl ?? ''));
 });
 

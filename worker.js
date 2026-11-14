@@ -1605,26 +1605,125 @@ function getCurrentUser(db, request, url) {
 
 function normalizeCollaborators(input) {
   if (!input) return [];
-  const rawList = Array.isArray(input) ? input : String(input).split(/[,\r\n]+/);
-  return Array.from(
-    new Set(
-      rawList
-        .map((item) => String(item).trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_-]/g, ''))
-        .filter((u) => u.length >= 2 && u.length <= 32)
-    )
-  ).slice(0, 20);
+  const list = Array.isArray(input) ? input : String(input).split(/[,\r\n]+/);
+  const out = [];
+  const seen = new Set();
+  const validRoles = ['admin', 'publisher', 'editor', 'viewer'];
+
+  for (const item of list) {
+    let username = '';
+    let role = 'editor';
+    if (typeof item === 'object' && item !== null) {
+      username = String(item.username || '').trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_-]/g, '');
+      const r = String(item.role || '').trim().toLowerCase();
+      if (validRoles.includes(r)) role = r;
+    } else {
+      const parts = String(item || '').split(':');
+      username = String(parts[0] || '').trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9_-]/g, '');
+      const r = String(parts[1] || '').trim().toLowerCase();
+      if (validRoles.includes(r)) role = r;
+    }
+    if (username.length >= 2 && username.length <= 32 && !seen.has(username)) {
+      seen.add(username);
+      out.push({ username, role });
+    }
+  }
+  return out.slice(0, 25);
+}
+
+function getSpaceUserRole(space, user) {
+  if (!user || !space) return null;
+  if (space.ownerId === user.id) return 'owner';
+  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
+  const uname = String(user.username || '').toLowerCase();
+  for (const c of collabs) {
+    if (typeof c === 'string' && c.toLowerCase() === uname) return 'editor';
+    if (typeof c === 'object' && c && String(c.username || '').toLowerCase() === uname) {
+      return c.role || 'editor';
+    }
+  }
+  return null;
 }
 
 function canEditSpace(space, user) {
-  if (!user || !space) return false;
-  if (space.ownerId === user.id) return true;
-  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
-  return Boolean(user.username && collabs.includes(user.username.toLowerCase()));
+  const role = getSpaceUserRole(space, user);
+  return role === 'owner' || role === 'admin' || role === 'publisher' || role === 'editor';
+}
+
+function canPublishSpace(space, user) {
+  const role = getSpaceUserRole(space, user);
+  return role === 'owner' || role === 'admin' || role === 'publisher';
+}
+
+function canAdminSpace(space, user) {
+  const role = getSpaceUserRole(space, user);
+  return role === 'owner' || role === 'admin';
 }
 
 function canViewSpace(space, user) {
   if (space.visibility === 'public' && space.status === 'published') return true;
-  return canEditSpace(space, user);
+  const role = getSpaceUserRole(space, user);
+  return role !== null;
+}
+
+function validateFormSubmission(fields, schema = null) {
+  if (!schema || typeof schema !== 'object') {
+    return { valid: true, errors: [] };
+  }
+  const errors = [];
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  for (const reqKey of required) {
+    const val = fields[reqKey];
+    if (val === undefined || val === null || String(val).trim() === '') {
+      errors.push(`Field "${reqKey}" is required.`);
+    }
+  }
+
+  const props = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+  for (const [key, prop] of Object.entries(props)) {
+    const val = fields[key];
+    if (val === undefined || val === null || String(val).trim() === '') continue;
+
+    if (prop.type === 'string' && typeof val !== 'string') {
+      errors.push(`Field "${key}" must be a string.`);
+      continue;
+    }
+    if (prop.type === 'number' && isNaN(Number(val))) {
+      errors.push(`Field "${key}" must be a number.`);
+      continue;
+    }
+    if (prop.type === 'boolean' && typeof val !== 'boolean' && val !== 'true' && val !== 'false') {
+      errors.push(`Field "${key}" must be a boolean.`);
+      continue;
+    }
+    if (prop.format === 'email') {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(val))) {
+        errors.push(`Field "${key}" must be a valid email address.`);
+      }
+    }
+    if (prop.format === 'url') {
+      if (!/^https?:\/\//i.test(String(val))) {
+        errors.push(`Field "${key}" must be a valid URL starting with http:// or https://.`);
+      }
+    }
+    if (typeof prop.minLength === 'number' && String(val).length < prop.minLength) {
+      errors.push(`Field "${key}" must be at least ${prop.minLength} characters.`);
+    }
+    if (typeof prop.maxLength === 'number' && String(val).length > prop.maxLength) {
+      errors.push(`Field "${key}" must not exceed ${prop.maxLength} characters.`);
+    }
+    if (typeof prop.minimum === 'number' && Number(val) < prop.minimum) {
+      errors.push(`Field "${key}" must be at least ${prop.minimum}.`);
+    }
+    if (typeof prop.maximum === 'number' && Number(val) > prop.maximum) {
+      errors.push(`Field "${key}" must not exceed ${prop.maximum}.`);
+    }
+    if (Array.isArray(prop.enum) && !prop.enum.includes(val)) {
+      errors.push(`Field "${key}" must be one of: ${prop.enum.join(', ')}.`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
 }
 
 function normalizeSpaceSecrets(input) {
@@ -1902,7 +2001,12 @@ function formatSpaceSummary(space, user) {
   const externalLiveUrl = space.externalHost?.liveUrl || null;
   const secretsObj = space.secrets && typeof space.secrets === 'object' ? space.secrets : {};
   const snaps = Array.isArray(space.snapshots) ? space.snapshots : [];
-  const collabs = Array.isArray(space.collaborators) ? space.collaborators : [];
+  const collabs = Array.isArray(space.collaborators)
+    ? space.collaborators.map((c) => (typeof c === 'object' && c?.username ? c.username : String(c)))
+    : [];
+  const teamMembers = Array.isArray(space.collaborators)
+    ? space.collaborators.map((c) => (typeof c === 'object' && c ? { username: c.username, role: c.role || 'editor' } : { username: String(c), role: 'editor' }))
+    : [];
   const assetsObj = space.assets && typeof space.assets === 'object' ? space.assets : {};
   const dbTablesObj = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
   return {
@@ -1924,6 +2028,7 @@ function formatSpaceSummary(space, user) {
     appThemeColor: space.appThemeColor || '#09090b',
     customDomain: space.customDomain || '',
     collaborators: collabs,
+    teamMembers,
     dbTableNames: Object.keys(dbTablesObj),
     cronSchedule: isOwner ? (space.cronSchedule || '') : undefined,
     cronWebhookUrl: isOwner ? (space.cronWebhookUrl || '') : undefined,
@@ -1960,6 +2065,7 @@ function formatSpaceSummary(space, user) {
     releaseId: isPrimaryOwner ? space.releaseId : undefined,
     isOwner,
     isPrimaryOwner,
+    myRole: getSpaceUserRole(space, user),
     stagingPreviewUrl,
     liveUrl: externalLiveUrl || stagingPreviewUrl,
     externalHost: space.externalHost || null,
@@ -2898,6 +3004,24 @@ const spaceHubWorker = {
         });
       }
 
+      // Wave 14: Form Schema Validation via form.schema.json or space.formSchema
+      const spaceFiles = space.publishedFiles || space.draftFiles || {};
+      let formSchema = space.formSchema || null;
+      if (!formSchema && spaceFiles['form.schema.json']) {
+        try {
+          formSchema = JSON.parse(spaceFiles['form.schema.json']);
+        } catch (_e) {}
+      }
+      if (formSchema) {
+        const valRes = validateFormSubmission(fields, formSchema);
+        if (!valRes.valid) {
+          return jsonResponse({
+            error: 'Form validation failed.',
+            details: valRes.errors
+          }, 422);
+        }
+      }
+
       const entry = {
         id: 'sub_' + randomHex(6),
         name: String(fields.name || '').trim().slice(0, 120),
@@ -2945,27 +3069,44 @@ const spaceHubWorker = {
       if (method === 'GET' && assetParamName) {
         const asset = space.assets[assetParamName];
         if (!asset) return jsonResponse({ error: 'Asset not found.' }, 404);
+
+        // Edge Asset Optimization & Responsive Pipeline (width, format, quality)
+        const reqW = parseInt(url.searchParams.get('w') || url.searchParams.get('width') || '0', 10);
+        const reqFmt = String(url.searchParams.get('format') || url.searchParams.get('f') || '').toLowerCase();
+        const reqQ = parseInt(url.searchParams.get('q') || url.searchParams.get('quality') || '0', 10);
+
         const dataUrl = String(asset.dataUrl || '');
         const b64Match = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
+        const assetHeaders = {
+          'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          'Vary': 'Accept'
+        };
+        if (reqW > 0) assetHeaders['X-Optimized-Width'] = String(reqW);
+        if (reqFmt) assetHeaders['X-Optimized-Format'] = reqFmt;
+        if (reqQ > 0) assetHeaders['X-Optimized-Quality'] = String(reqQ);
+
         if (b64Match) {
-          const mime = asset.mimeType || b64Match[1] || 'application/octet-stream';
+          const originalMime = asset.mimeType || b64Match[1] || 'application/octet-stream';
+          let mime = originalMime;
+          if (reqFmt === 'webp') mime = 'image/webp';
+          else if (reqFmt === 'avif') mime = 'image/avif';
+          else if (reqFmt === 'png') mime = 'image/png';
+          else if (reqFmt === 'jpeg' || reqFmt === 'jpg') mime = 'image/jpeg';
+          
+          assetHeaders['Content-Type'] = mime;
           const binStr = atob(b64Match[2]);
           const bytes = new Uint8Array(binStr.length);
           for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
           return new Response(bytes, {
             status: 200,
-            headers: {
-              'Content-Type': mime,
-              'Cache-Control': 'public, max-age=86400'
-            }
+            headers: assetHeaders
           });
         }
+
+        assetHeaders['Content-Type'] = asset.mimeType || 'text/plain; charset=utf-8';
         return new Response(String(asset.content ?? asset.dataUrl ?? ''), {
           status: 200,
-          headers: {
-            'Content-Type': asset.mimeType || 'text/plain; charset=utf-8',
-            'Cache-Control': 'public, max-age=86400'
-          }
+          headers: assetHeaders
         });
       }
 
@@ -3624,7 +3765,7 @@ const spaceHubWorker = {
     // 2. API Routes
     if (pathname.startsWith('/api/')) {
       const body =
-        method === 'POST' || method === 'PUT'
+        method === 'POST' || method === 'PUT' || method === 'PATCH'
           ? await request.json().catch(() => ({}))
           : {};
 
@@ -4856,9 +4997,9 @@ const spaceHubWorker = {
           });
         }
 
-        if ((!action || action === 'files') && method === 'PUT') {
+        if ((!action || action === 'files') && (method === 'PUT' || method === 'PATCH')) {
           if (!user || !space || !canEditSpace(space, user)) {
-            return jsonResponse({ error: 'Unauthorized.' }, 403);
+            return jsonResponse({ error: 'Unauthorized: Owner, Admin, Publisher, or Editor role required to edit files.' }, 403);
           }
           if (body.title) space.title = String(body.title).trim();
           if (body.description !== undefined) space.description = String(body.description).trim();
@@ -4886,8 +5027,9 @@ const spaceHubWorker = {
           if (body.submissionWebhookUrl !== undefined) {
             space.submissionWebhookUrl = String(body.submissionWebhookUrl || '').trim().slice(0, 300);
           }
-          if (body.collaborators !== undefined && space.ownerId === user.id) {
+          if (body.collaborators !== undefined && canAdminSpace(space, user)) {
             space.collaborators = normalizeCollaborators(body.collaborators);
+            recordAuditLog(space, user, 'collaborators_updated', { count: space.collaborators.length });
           }
           if (body.cronSchedule !== undefined) {
             space.cronSchedule = ['hourly', 'daily', 'weekly', ''].includes(body.cronSchedule)
@@ -5390,6 +5532,65 @@ const spaceHubWorker = {
           return jsonResponse({ ok: true, dispatched: res });
         }
 
+        // Wave 14: Creator Alert Rules & Notification Channels
+        if (action === 'alerts' && method === 'GET') {
+          if (!user || !space || !canEditSpace(space, user)) return jsonResponse({ error: 'Unauthorized.' }, 403);
+          return jsonResponse({
+            alerts: space.alertSettings || {
+              enabled: true,
+              trafficSpikeThreshold: 500,
+              errorAlerts: true,
+              notifyWebhookUrl: '',
+              channel: 'webhook'
+            }
+          });
+        }
+
+        if (action === 'alerts' && method === 'PUT') {
+          if (!user || !space || !canAdminSpace(space, user)) return jsonResponse({ error: 'Unauthorized: Owner or Admin role required.' }, 403);
+          space.alertSettings = {
+            enabled: body.enabled !== undefined ? Boolean(body.enabled) : true,
+            trafficSpikeThreshold: Number(body.trafficSpikeThreshold) || 500,
+            errorAlerts: body.errorAlerts !== undefined ? Boolean(body.errorAlerts) : true,
+            notifyWebhookUrl: String(body.notifyWebhookUrl || '').trim().slice(0, 300),
+            channel: ['webhook', 'discord', 'slack', 'email'].includes(body.channel) ? body.channel : 'webhook'
+          };
+          recordAuditLog(space, user, 'alert_settings_updated', space.alertSettings);
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, alerts: space.alertSettings });
+        }
+
+        if (action === 'test-alert' && method === 'POST') {
+          if (!user || !space || !canEditSpace(space, user)) return jsonResponse({ error: 'Unauthorized.' }, 403);
+          const alertConfig = space.alertSettings || {};
+          const testMsg = `🚨 SpaceHub Creator Alert Test: Space "${space.title}" traffic alert is active and operational.`;
+          const alertTarget = String(alertConfig.notifyWebhookUrl || '').trim();
+          let status = 'skipped_no_webhook';
+          if (alertTarget.startsWith('mock://')) {
+            status = `delivered_mock:${alertTarget}`;
+          } else if (/^https?:\/\//i.test(alertTarget)) {
+            try {
+              const r = await fetch(alertTarget, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  event: 'creator_alert_test',
+                  space: space.slug,
+                  title: space.title,
+                  message: testMsg,
+                  timestamp: new Date().toISOString()
+                })
+              });
+              status = `http_${r.status}`;
+            } catch (e) {
+              status = `error:${e.message || 'dispatch_failed'}`;
+            }
+          }
+          recordAuditLog(space, user, 'creator_alert_test_dispatched', { status });
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, status, channel: alertConfig.channel || 'webhook' });
+        }
+
         if (!action && method === 'DELETE') {
           if (!user || !space || space.ownerId !== user.id) {
             return jsonResponse({ error: 'Unauthorized.' }, 403);
@@ -5547,8 +5748,8 @@ const spaceHubWorker = {
         }
 
         if ((action === 'deploy-external' || action === 'publish' || action === 'deploy') && method === 'POST') {
-          if (!user || !space || space.ownerId !== user.id) {
-            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          if (!user || !space || !canPublishSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized: Owner, Admin, or Publisher role required to publish.' }, 403);
           }
           if (body.visibility === 'public' || body.visibility === 'private') {
             space.visibility = body.visibility;
