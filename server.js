@@ -1659,6 +1659,225 @@ function generateStatusBadgeSvg(space) {
 </svg>`;
 }
 
+function parseGqlArgs(rawArgsStr = '', variables = {}) {
+  const args = {};
+  if (!rawArgsStr || !rawArgsStr.trim()) return args;
+  const pairRegex = /([a-zA-Z0-9_]+)\s*:\s*(\$[a-zA-Z0-9_]+|"[^"]*"|'[^']*'|true|false|-?\d+(?:\.\d+)?|\{[^}]*\})/g;
+  let m;
+  while ((m = pairRegex.exec(rawArgsStr)) !== null) {
+    const key = m[1];
+    const rawVal = m[2].trim();
+    if (rawVal.startsWith('$')) {
+      const varName = rawVal.slice(1);
+      args[key] = variables && variables[varName] !== undefined ? variables[varName] : null;
+    } else if ((rawVal.startsWith('"') && rawVal.endsWith('"')) || (rawVal.startsWith("'") && rawVal.endsWith("'"))) {
+      args[key] = rawVal.slice(1, -1);
+    } else if (rawVal === 'true') {
+      args[key] = true;
+    } else if (rawVal === 'false') {
+      args[key] = false;
+    } else if (rawVal.startsWith('{') && rawVal.endsWith('}')) {
+      try {
+        const jsonNormalized = rawVal.replace(/([a-zA-Z0-9_]+)\s*:/g, '"$1":');
+        args[key] = JSON.parse(jsonNormalized);
+      } catch (_e) {
+        args[key] = {};
+      }
+    } else if (!Number.isNaN(Number(rawVal))) {
+      args[key] = Number(rawVal);
+    } else {
+      args[key] = rawVal;
+    }
+  }
+  return args;
+}
+
+function executeSpaceGraphql(space, queryStr = '', variables = {}) {
+  const q = String(queryStr || '').trim();
+  if (!q) {
+    return { data: null, errors: [{ message: 'GraphQL query string is required.' }] };
+  }
+  const data = {};
+  const errors = [];
+  let mutated = false;
+
+  space.dbTables = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
+  space.appStorage = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+  space.vectorStore = Array.isArray(space.vectorStore) ? space.vectorStore : [];
+  space.searchIndex = Array.isArray(space.searchIndex) ? space.searchIndex : [];
+
+  if (q.includes('__schema')) {
+    data.__schema = {
+      queryType: { name: 'Query' },
+      mutationType: { name: 'Mutation' },
+      types: [
+        { name: 'Query', kind: 'OBJECT', fields: ['spaceInfo', 'table', 'storage', 'vectors', 'search'] },
+        { name: 'Mutation', kind: 'OBJECT', fields: ['insertRow', 'updateRow', 'deleteRow', 'setStorage', 'upsertVector'] },
+        { name: 'SpaceInfo', kind: 'OBJECT', fields: ['id', 'slug', 'title', 'description', 'ownerUsername', 'status', 'views', 'likes', 'uptimePercent'] },
+        { name: 'TableRow', kind: 'OBJECT', fields: ['id', 'data', 'createdAt', 'updatedAt'] },
+        { name: 'StorageEntry', kind: 'OBJECT', fields: ['key', 'value'] },
+        { name: 'VectorMatch', kind: 'OBJECT', fields: ['id', 'namespace', 'score', 'text', 'metadata'] }
+      ]
+    };
+  }
+
+  if (/\bspaceInfo\b/.test(q)) {
+    const st = evaluateSpaceStatus(space);
+    data.spaceInfo = {
+      id: space.id,
+      slug: space.slug,
+      title: space.title,
+      description: space.description || '',
+      ownerUsername: space.ownerUsername,
+      status: space.status,
+      views: space.views || 0,
+      likes: space.likes || 0,
+      uptimePercent: st.uptimePercent,
+      operationalState: st.state
+    };
+  }
+
+  const tableMatch = q.match(/\btable\s*\(([^)]*)\)/);
+  if (tableMatch) {
+    const args = parseGqlArgs(tableMatch[1], variables);
+    const tableName = String(args.name || variables.table || 'items').trim();
+    const rows = Array.isArray(space.dbTables[tableName]) ? [...space.dbTables[tableName]] : [];
+    let filtered = rows;
+    if (args.whereKey !== undefined && args.whereEquals !== undefined) {
+      filtered = filtered.filter((r) => String(r[args.whereKey]) === String(args.whereEquals));
+    } else if (args.where && typeof args.where === 'object') {
+      filtered = filtered.filter((r) =>
+        Object.entries(args.where).every(([wk, wv]) => r && r[wk] === wv)
+      );
+    }
+    const offset = Math.max(0, Number(args.offset || 0));
+    const limit = Math.max(1, Math.min(200, Number(args.limit || 50)));
+    data.table = filtered.slice(offset, offset + limit);
+  }
+
+  const storageMatch = q.match(/\bstorage(?:\s*\(([^)]*)\))?/);
+  if (storageMatch && !/\bsetStorage\b/.test(q)) {
+    const args = parseGqlArgs(storageMatch[1] || '', variables);
+    if (args.key) {
+      data.storage = {
+        key: String(args.key),
+        value: space.appStorage[args.key] ?? null
+      };
+    } else {
+      data.storage = Object.entries(space.appStorage).map(([k, v]) => ({ key: k, value: v }));
+    }
+  }
+
+  const vectorsMatch = q.match(/\bvectors\s*\(([^)]*)\)/);
+  if (vectorsMatch) {
+    const args = parseGqlArgs(vectorsMatch[1], variables);
+    const queryText = String(args.query || args.text || variables.query || '').trim();
+    const topK = Math.max(1, Math.min(50, Number(args.topK || 5)));
+    const ns = String(args.namespace || '').trim();
+    const qVec = computeTextVector(queryText, 32);
+    let candidates = space.vectorStore;
+    if (ns) candidates = candidates.filter((v) => v.namespace === ns);
+    data.vectors = candidates
+      .map((v) => ({
+        id: v.id,
+        namespace: v.namespace,
+        score: cosineSimilarity(qVec, v.values || []),
+        text: v.text,
+        metadata: v.metadata || {}
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+  }
+
+  const searchMatch = q.match(/\bsearch\s*\(([^)]*)\)/);
+  if (searchMatch) {
+    const args = parseGqlArgs(searchMatch[1], variables);
+    data.search = searchSpaceContent(space, args.q || args.query || '', args.tag || '');
+  }
+
+  const insertMatch = q.match(/\binsertRow\s*\(([^)]*)\)/);
+  if (insertMatch) {
+    const args = parseGqlArgs(insertMatch[1], variables);
+    const tableName = String(args.table || args.name || variables.table || 'items').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+    const recordInput = (args.record && typeof args.record === 'object' ? args.record : null) ||
+      (args.data && typeof args.data === 'object' ? args.data : null) ||
+      (variables.record && typeof variables.record === 'object' ? variables.record : {}) || {};
+    space.dbTables[tableName] = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+    const nowIso = new Date().toISOString();
+    const newRow = {
+      id: String(recordInput.id || `row_${crypto.randomBytes(4).toString('hex')}`),
+      ...recordInput,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    space.dbTables[tableName].push(newRow);
+    data.insertRow = newRow;
+    mutated = true;
+  }
+
+  const updateMatch = q.match(/\bupdateRow\s*\(([^)]*)\)/);
+  if (updateMatch) {
+    const args = parseGqlArgs(updateMatch[1], variables);
+    const tableName = String(args.table || variables.table || 'items').trim();
+    const targetId = String(args.id || variables.id || '');
+    const patchInput = (args.patch && typeof args.patch === 'object' ? args.patch : null) ||
+      (args.data && typeof args.data === 'object' ? args.data : null) ||
+      (variables.patch && typeof variables.patch === 'object' ? variables.patch : {}) || {};
+    const rows = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+    const row = rows.find((r) => String(r.id) === targetId);
+    if (row) {
+      Object.assign(row, patchInput, { id: row.id, updatedAt: new Date().toISOString() });
+      data.updateRow = row;
+      mutated = true;
+    } else {
+      data.updateRow = null;
+      errors.push({ message: `Row "${targetId}" not found in table "${tableName}".` });
+    }
+  }
+
+  const deleteMatch = q.match(/\bdeleteRow\s*\(([^)]*)\)/);
+  if (deleteMatch) {
+    const args = parseGqlArgs(deleteMatch[1], variables);
+    const tableName = String(args.table || variables.table || 'items').trim();
+    const targetId = String(args.id || variables.id || '');
+    const rows = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+    const beforeLen = rows.length;
+    space.dbTables[tableName] = rows.filter((r) => String(r.id) !== targetId);
+    const deleted = space.dbTables[tableName].length < beforeLen;
+    data.deleteRow = { deleted, id: targetId, remaining: space.dbTables[tableName].length };
+    if (deleted) mutated = true;
+  }
+
+  const setStorageMatch = q.match(/\bsetStorage\s*\(([^)]*)\)/);
+  if (setStorageMatch) {
+    const args = parseGqlArgs(setStorageMatch[1], variables);
+    const k = String(args.key || variables.key || '').trim();
+    const v = args.value !== undefined ? args.value : variables.value;
+    if (k) {
+      space.appStorage[k] = v;
+      data.setStorage = { key: k, value: v };
+      mutated = true;
+    }
+  }
+
+  const upsertVecMatch = q.match(/\bupsertVector\s*\(([^)]*)\)/);
+  if (upsertVecMatch) {
+    const args = parseGqlArgs(upsertVecMatch[1], variables);
+    const id = String(args.id || `vec_${crypto.randomBytes(4).toString('hex')}`).trim();
+    const text = String(args.text || '').trim();
+    const ns = String(args.namespace || 'default').trim();
+    const values = computeTextVector(text, 32);
+    const rec = { id, namespace: ns, text, values, metadata: args.metadata || {}, updatedAt: new Date().toISOString() };
+    const idx = space.vectorStore.findIndex((v) => v.id === id && v.namespace === ns);
+    if (idx > -1) space.vectorStore[idx] = rec;
+    else space.vectorStore.push(rec);
+    data.upsertVector = { id, namespace: ns, dimensions: values.length };
+    mutated = true;
+  }
+
+  return { data, errors: errors.length > 0 ? errors : undefined, mutated };
+}
+
 function searchSpaceContent(space, rawQuery, tagFilter = '') {
   const q = String(rawQuery || '').trim().toLowerCase();
   const cleanTag = String(tagFilter || '').trim().toLowerCase();
@@ -5436,6 +5655,177 @@ app.get(['/live/:slug/status', '/s/:slug/status'], (req, res) => {
   if (!space) return res.status(404).json({ error: 'Space not found.' });
   const st = evaluateSpaceStatus(space);
   res.json({ ok: true, slug: space.slug, title: space.title, state: st.state, label: st.label, uptimePercent: st.uptimePercent, badgeUrl: `/live/${space.slug}/status.svg`, activeIncidents: st.activeIncidents, incidents: st.incidents });
+});
+
+// Wave 21: Instant Per-Space GraphQL API (/live/:slug/graphql)
+app.all(['/live/:slug/graphql', '/s/:slug/graphql'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const payload = req.body || {};
+  const queryStr = String(payload.query || req.query.query || '').trim();
+  const variables = payload.variables && typeof payload.variables === 'object' ? payload.variables : {};
+  const gqlResult = executeSpaceGraphql(space, queryStr, variables);
+  if (gqlResult.mutated) saveDb(db);
+  res.status(gqlResult.data === null && gqlResult.errors ? 400 : 200).json({
+    data: gqlResult.data,
+    ...(gqlResult.errors ? { errors: gqlResult.errors } : {})
+  });
+});
+
+// Wave 21: Built-in Customer Support Ticket & Helpdesk Engine (/live/:slug/tickets)
+app.post(['/live/:slug/tickets/:ticketId/reply', '/s/:slug/tickets/:ticketId/reply'], (req, res) => {
+  const db = loadDb();
+  const user = getCurrentUser(req, db);
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.supportTickets = Array.isArray(space.supportTickets) ? space.supportTickets : [];
+  const targetTicket = space.supportTickets.find((t) => t.id === req.params.ticketId);
+  if (!targetTicket) return res.status(404).json({ error: 'Support ticket not found.' });
+  const payload = req.body || {};
+  const message = String(payload.message || payload.body || '').trim().slice(0, 2000);
+  if (!message) return res.status(400).json({ error: 'Reply message is required.' });
+  const isAgent = Boolean(user && canEditSpace(space, user));
+  const senderRole = isAgent ? 'agent' : 'customer';
+  const nowIso = new Date().toISOString();
+  const replyEntry = {
+    id: 'rep_' + crypto.randomBytes(4).toString('hex'),
+    role: senderRole,
+    author: String(payload.author || (user ? user.username : targetTicket.customerName || 'Customer')).slice(0, 80),
+    message,
+    createdAt: nowIso
+  };
+  targetTicket.messages = Array.isArray(targetTicket.messages) ? targetTicket.messages : [];
+  targetTicket.messages.push(replyEntry);
+  targetTicket.updatedAt = nowIso;
+  if (senderRole === 'agent' && !targetTicket.firstResponseAt) {
+    targetTicket.firstResponseAt = nowIso;
+    targetTicket.firstResponseMs = Math.max(1, Date.parse(nowIso) - Date.parse(targetTicket.createdAt));
+  }
+  if (payload.status && ['open', 'pending', 'resolved', 'closed'].includes(String(payload.status).toLowerCase())) {
+    targetTicket.status = String(payload.status).toLowerCase();
+  } else if (senderRole === 'agent' && targetTicket.status === 'open') {
+    targetTicket.status = 'pending';
+  }
+  saveDb(db);
+  res.json({ ok: true, ticket: targetTicket, reply: replyEntry });
+});
+
+app.post(['/live/:slug/tickets', '/s/:slug/tickets'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.supportTickets = Array.isArray(space.supportTickets) ? space.supportTickets : [];
+  const payload = req.body || {};
+  const subject = String(payload.subject || payload.title || '').trim().slice(0, 160);
+  const message = String(payload.message || payload.body || '').trim().slice(0, 2000);
+  if (!subject || !message) return res.status(400).json({ error: 'Both subject and message are required.' });
+  const nowIso = new Date().toISOString();
+  const priorityRaw = String(payload.priority || 'normal').toLowerCase();
+  const priority = ['low', 'normal', 'high', 'urgent'].includes(priorityRaw) ? priorityRaw : 'normal';
+  const newTicket = {
+    id: 'tkt_' + crypto.randomBytes(4).toString('hex'),
+    subject,
+    customerEmail: String(payload.email || payload.customerEmail || 'visitor@example.com').trim().slice(0, 140),
+    customerName: String(payload.name || payload.customerName || 'Visitor').trim().slice(0, 80),
+    category: String(payload.category || 'general').trim().slice(0, 60),
+    priority,
+    status: 'open',
+    messages: [{ id: 'rep_' + crypto.randomBytes(4).toString('hex'), role: 'customer', author: String(payload.name || 'Visitor'), message, createdAt: nowIso }],
+    firstResponseAt: null,
+    firstResponseMs: null,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+  space.supportTickets.unshift(newTicket);
+  saveDb(db);
+  res.status(201).json({ ok: true, ticket: newTicket });
+});
+
+app.get(['/live/:slug/tickets', '/s/:slug/tickets'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.supportTickets = Array.isArray(space.supportTickets) ? space.supportTickets : [];
+  if (req.query.id) {
+    const found = space.supportTickets.find((t) => t.id === req.query.id);
+    if (!found) return res.status(404).json({ error: 'Support ticket not found.' });
+    return res.json({ ok: true, ticket: found });
+  }
+  const openCount = space.supportTickets.filter((t) => t.status === 'open' || t.status === 'pending').length;
+  const resolvedCount = space.supportTickets.filter((t) => t.status === 'resolved' || t.status === 'closed').length;
+  res.json({ ok: true, count: space.supportTickets.length, openCount, resolvedCount, tickets: space.supportTickets });
+});
+
+// Wave 21: Viral Referral & Affiliate Tracking System (/live/:slug/referrals, /live/:slug/referrals/convert, /live/:slug/ref/:code)
+app.get(['/live/:slug/ref/:code', '/s/:slug/ref/:code'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).send('Not found');
+  space.referrals = Array.isArray(space.referrals) ? space.referrals : [];
+  const refEntry = space.referrals.find((r) => r.code.toLowerCase() === req.params.code.toLowerCase());
+  if (!refEntry) return res.status(404).json({ error: 'Referral code not found.' });
+  refEntry.clicks = (refEntry.clicks || 0) + 1;
+  refEntry.lastClickedAt = new Date().toISOString();
+  saveDb(db);
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const dest = `${refEntry.targetUrl || `${origin}/live/${space.slug}`}?ref=${encodeURIComponent(refEntry.code)}`;
+  res.setHeader('Set-Cookie', `sh_ref_${space.slug}=${encodeURIComponent(refEntry.code)}; Path=/; Max-Age=2592000; SameSite=Lax`);
+  res.redirect(302, dest);
+});
+
+app.post(['/live/:slug/referrals/convert', '/s/:slug/referrals/convert'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.referrals = Array.isArray(space.referrals) ? space.referrals : [];
+  const payload = req.body || {};
+  const codeInput = String(payload.code || '').trim();
+  const refEntry = space.referrals.find((r) => r.code.toLowerCase() === codeInput.toLowerCase());
+  if (!refEntry) return res.status(404).json({ error: 'Referral code not found.' });
+  const amountUsd = Math.max(0, Number(payload.amountUsd || payload.amount || 0));
+  const commissionUsd = Math.round(amountUsd * ((refEntry.commissionRate || 20) / 100) * 100) / 100;
+  refEntry.conversions = (refEntry.conversions || 0) + 1;
+  refEntry.revenueUsd = Math.round(((refEntry.revenueUsd || 0) + amountUsd) * 100) / 100;
+  refEntry.commissionEarnedUsd = Math.round(((refEntry.commissionEarnedUsd || 0) + commissionUsd) * 100) / 100;
+  saveDb(db);
+  res.json({ ok: true, referral: refEntry, conversion: { amountUsd, commissionUsd } });
+});
+
+app.post(['/live/:slug/referrals', '/s/:slug/referrals'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.referrals = Array.isArray(space.referrals) ? space.referrals : [];
+  const payload = req.body || {};
+  const referrerName = String(payload.referrerName || payload.name || 'Affiliate Partner').trim().slice(0, 80);
+  const rawCode = String(payload.code || slugify(referrerName)).trim().replace(/[^a-zA-Z0-9_-]/g, '');
+  const commissionRate = Math.max(1, Math.min(90, Number(payload.commissionRate ?? 20)));
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const refRecord = {
+    id: 'ref_' + crypto.randomBytes(4).toString('hex'),
+    code: rawCode,
+    referrerName,
+    referrerEmail: String(payload.referrerEmail || '').trim(),
+    commissionRate,
+    referralUrl: `${origin}/live/${space.slug}/ref/${rawCode}`,
+    clicks: 0,
+    conversions: 0,
+    revenueUsd: 0,
+    commissionEarnedUsd: 0,
+    createdAt: new Date().toISOString()
+  };
+  space.referrals.push(refRecord);
+  saveDb(db);
+  res.status(201).json({ ok: true, referral: refRecord });
+});
+
+app.get(['/live/:slug/referrals', '/s/:slug/referrals'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const leaderboard = [...(space.referrals || [])].sort((a, b) => (b.conversions || 0) - (a.conversions || 0));
+  res.json({ ok: true, count: leaderboard.length, leaderboard });
 });
 
 // Automatic SEO sitemap.xml, robots.txt & /live/:slug/health

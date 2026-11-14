@@ -2482,6 +2482,236 @@ function generateStatusBadgeSvg(space) {
 </svg>`;
 }
 
+function parseGqlArgs(rawArgsStr = '', variables = {}) {
+  const args = {};
+  if (!rawArgsStr || !rawArgsStr.trim()) return args;
+  const pairRegex = /([a-zA-Z0-9_]+)\s*:\s*(\$[a-zA-Z0-9_]+|"[^"]*"|'[^']*'|true|false|-?\d+(?:\.\d+)?|\{[^}]*\})/g;
+  let m;
+  while ((m = pairRegex.exec(rawArgsStr)) !== null) {
+    const key = m[1];
+    const rawVal = m[2].trim();
+    if (rawVal.startsWith('$')) {
+      const varName = rawVal.slice(1);
+      args[key] = variables && variables[varName] !== undefined ? variables[varName] : null;
+    } else if ((rawVal.startsWith('"') && rawVal.endsWith('"')) || (rawVal.startsWith("'") && rawVal.endsWith("'"))) {
+      args[key] = rawVal.slice(1, -1);
+    } else if (rawVal === 'true') {
+      args[key] = true;
+    } else if (rawVal === 'false') {
+      args[key] = false;
+    } else if (rawVal.startsWith('{') && rawVal.endsWith('}')) {
+      try {
+        const jsonNormalized = rawVal.replace(/([a-zA-Z0-9_]+)\s*:/g, '"$1":');
+        args[key] = JSON.parse(jsonNormalized);
+      } catch (_e) {
+        args[key] = {};
+      }
+    } else if (!Number.isNaN(Number(rawVal))) {
+      args[key] = Number(rawVal);
+    } else {
+      args[key] = rawVal;
+    }
+  }
+  return args;
+}
+
+function executeSpaceGraphql(space, queryStr = '', variables = {}) {
+  const q = String(queryStr || '').trim();
+  if (!q) {
+    return { data: null, errors: [{ message: 'GraphQL query string is required.' }] };
+  }
+  const data = {};
+  const errors = [];
+  let mutated = false;
+
+  space.dbTables = space.dbTables && typeof space.dbTables === 'object' ? space.dbTables : {};
+  space.appStorage = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
+  space.vectorStore = Array.isArray(space.vectorStore) ? space.vectorStore : [];
+  space.searchIndex = Array.isArray(space.searchIndex) ? space.searchIndex : [];
+
+  // Schema introspection
+  if (q.includes('__schema')) {
+    data.__schema = {
+      queryType: { name: 'Query' },
+      mutationType: { name: 'Mutation' },
+      types: [
+        { name: 'Query', kind: 'OBJECT', fields: ['spaceInfo', 'table', 'storage', 'vectors', 'search'] },
+        { name: 'Mutation', kind: 'OBJECT', fields: ['insertRow', 'updateRow', 'deleteRow', 'setStorage', 'upsertVector'] },
+        { name: 'SpaceInfo', kind: 'OBJECT', fields: ['id', 'slug', 'title', 'description', 'ownerUsername', 'status', 'views', 'likes', 'uptimePercent'] },
+        { name: 'TableRow', kind: 'OBJECT', fields: ['id', 'data', 'createdAt', 'updatedAt'] },
+        { name: 'StorageEntry', kind: 'OBJECT', fields: ['key', 'value'] },
+        { name: 'VectorMatch', kind: 'OBJECT', fields: ['id', 'namespace', 'score', 'text', 'metadata'] }
+      ]
+    };
+  }
+
+  // spaceInfo query
+  if (/\bspaceInfo\b/.test(q)) {
+    const st = evaluateSpaceStatus(space);
+    data.spaceInfo = {
+      id: space.id,
+      slug: space.slug,
+      title: space.title,
+      description: space.description || '',
+      ownerUsername: space.ownerUsername,
+      status: space.status,
+      views: space.views || 0,
+      likes: space.likes || 0,
+      uptimePercent: st.uptimePercent,
+      operationalState: st.state
+    };
+  }
+
+  // table(...) query
+  const tableMatch = q.match(/\btable\s*\(([^)]*)\)/);
+  if (tableMatch) {
+    const args = parseGqlArgs(tableMatch[1], variables);
+    const tableName = String(args.name || variables.table || 'items').trim();
+    const rows = Array.isArray(space.dbTables[tableName]) ? [...space.dbTables[tableName]] : [];
+    let filtered = rows;
+    if (args.whereKey !== undefined && args.whereEquals !== undefined) {
+      filtered = filtered.filter((r) => String(r[args.whereKey]) === String(args.whereEquals));
+    } else if (args.where && typeof args.where === 'object') {
+      filtered = filtered.filter((r) =>
+        Object.entries(args.where).every(([wk, wv]) => r && r[wk] === wv)
+      );
+    }
+    const offset = Math.max(0, Number(args.offset || 0));
+    const limit = Math.max(1, Math.min(200, Number(args.limit || 50)));
+    data.table = filtered.slice(offset, offset + limit);
+  }
+
+  // storage(...) query
+  const storageMatch = q.match(/\bstorage(?:\s*\(([^)]*)\))?/);
+  if (storageMatch && !/\bsetStorage\b/.test(q)) {
+    const args = parseGqlArgs(storageMatch[1] || '', variables);
+    if (args.key) {
+      data.storage = {
+        key: String(args.key),
+        value: space.appStorage[args.key] ?? null
+      };
+    } else {
+      data.storage = Object.entries(space.appStorage).map(([k, v]) => ({ key: k, value: v }));
+    }
+  }
+
+  // vectors(...) query
+  const vectorsMatch = q.match(/\bvectors\s*\(([^)]*)\)/);
+  if (vectorsMatch) {
+    const args = parseGqlArgs(vectorsMatch[1], variables);
+    const queryText = String(args.query || args.text || variables.query || '').trim();
+    const topK = Math.max(1, Math.min(50, Number(args.topK || 5)));
+    const ns = String(args.namespace || '').trim();
+    const qVec = computeTextVector(queryText, 32);
+    let candidates = space.vectorStore;
+    if (ns) candidates = candidates.filter((v) => v.namespace === ns);
+    data.vectors = candidates
+      .map((v) => ({
+        id: v.id,
+        namespace: v.namespace,
+        score: cosineSimilarity(qVec, v.values || []),
+        text: v.text,
+        metadata: v.metadata || {}
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+  }
+
+  // search(...) query
+  const searchMatch = q.match(/\bsearch\s*\(([^)]*)\)/);
+  if (searchMatch) {
+    const args = parseGqlArgs(searchMatch[1], variables);
+    data.search = searchSpaceContent(space, args.q || args.query || '', args.tag || '');
+  }
+
+  // Mutations: insertRow
+  const insertMatch = q.match(/\binsertRow\s*\(([^)]*)\)/);
+  if (insertMatch) {
+    const args = parseGqlArgs(insertMatch[1], variables);
+    const tableName = String(args.table || args.name || variables.table || 'items').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+    const recordInput = (args.record && typeof args.record === 'object' ? args.record : null) ||
+      (args.data && typeof args.data === 'object' ? args.data : null) ||
+      (variables.record && typeof variables.record === 'object' ? variables.record : {}) || {};
+    space.dbTables[tableName] = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+    const nowIso = new Date().toISOString();
+    const newRow = {
+      id: String(recordInput.id || `row_${randomHex(5)}`),
+      ...recordInput,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    space.dbTables[tableName].push(newRow);
+    data.insertRow = newRow;
+    mutated = true;
+  }
+
+  // Mutations: updateRow
+  const updateMatch = q.match(/\bupdateRow\s*\(([^)]*)\)/);
+  if (updateMatch) {
+    const args = parseGqlArgs(updateMatch[1], variables);
+    const tableName = String(args.table || variables.table || 'items').trim();
+    const targetId = String(args.id || variables.id || '');
+    const patchInput = (args.patch && typeof args.patch === 'object' ? args.patch : null) ||
+      (args.data && typeof args.data === 'object' ? args.data : null) ||
+      (variables.patch && typeof variables.patch === 'object' ? variables.patch : {}) || {};
+    const rows = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+    const row = rows.find((r) => String(r.id) === targetId);
+    if (row) {
+      Object.assign(row, patchInput, { id: row.id, updatedAt: new Date().toISOString() });
+      data.updateRow = row;
+      mutated = true;
+    } else {
+      data.updateRow = null;
+      errors.push({ message: `Row "${targetId}" not found in table "${tableName}".` });
+    }
+  }
+
+  // Mutations: deleteRow
+  const deleteMatch = q.match(/\bdeleteRow\s*\(([^)]*)\)/);
+  if (deleteMatch) {
+    const args = parseGqlArgs(deleteMatch[1], variables);
+    const tableName = String(args.table || variables.table || 'items').trim();
+    const targetId = String(args.id || variables.id || '');
+    const rows = Array.isArray(space.dbTables[tableName]) ? space.dbTables[tableName] : [];
+    const beforeLen = rows.length;
+    space.dbTables[tableName] = rows.filter((r) => String(r.id) !== targetId);
+    const deleted = space.dbTables[tableName].length < beforeLen;
+    data.deleteRow = { deleted, id: targetId, remaining: space.dbTables[tableName].length };
+    if (deleted) mutated = true;
+  }
+
+  // Mutations: setStorage
+  const setStorageMatch = q.match(/\bsetStorage\s*\(([^)]*)\)/);
+  if (setStorageMatch) {
+    const args = parseGqlArgs(setStorageMatch[1], variables);
+    const k = String(args.key || variables.key || '').trim();
+    const v = args.value !== undefined ? args.value : variables.value;
+    if (k) {
+      space.appStorage[k] = v;
+      data.setStorage = { key: k, value: v };
+      mutated = true;
+    }
+  }
+
+  // Mutations: upsertVector
+  const upsertVecMatch = q.match(/\bupsertVector\s*\(([^)]*)\)/);
+  if (upsertVecMatch) {
+    const args = parseGqlArgs(upsertVecMatch[1], variables);
+    const id = String(args.id || `vec_${randomHex(5)}`).trim();
+    const text = String(args.text || '').trim();
+    const ns = String(args.namespace || 'default').trim();
+    const values = computeTextVector(text, 32);
+    const rec = { id, namespace: ns, text, values, metadata: args.metadata || {}, updatedAt: new Date().toISOString() };
+    const idx = space.vectorStore.findIndex((v) => v.id === id && v.namespace === ns);
+    if (idx > -1) space.vectorStore[idx] = rec;
+    else space.vectorStore.push(rec);
+    data.upsertVector = { id, namespace: ns, dimensions: values.length };
+    mutated = true;
+  }
+
+  return { data, errors: errors.length > 0 ? errors : undefined, mutated };
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
@@ -2916,14 +3146,19 @@ function generateSpaceIconSvg(spaceOrTitle = 'S') {
 </svg>`;
 }
 
-function generateSpaceOgSvg(space) {
+function generateSpaceOgSvg(space, opts = {}) {
   const isObj = space && typeof space === 'object';
-  const title = String((isObj ? space.title : space) || 'SpaceHub Live App').replace(/[<>&"']/g, '').slice(0, 48);
-  const desc = String((isObj ? space.description : '') || 'Hosted & Deployed on SpaceHub managed edge cloud.').replace(/[<>&"']/g, '').slice(0, 110);
+  const title = String(opts.title || (isObj ? space.title : space) || 'SpaceHub Live App').replace(/[<>&"']/g, '').slice(0, 48);
+  const desc = String(opts.subtitle || opts.description || (isObj ? space.description : '') || 'Hosted & Deployed on SpaceHub managed edge cloud.').replace(/[<>&"']/g, '').slice(0, 110);
   const owner = String((isObj ? space.ownerUsername : 'spacehub') || 'spacehub').replace(/[<>&"']/g, '');
   const rawIcon = (isObj ? space.appIconText : '') || title.charAt(0) || '⚡';
   const iconText = String(rawIcon).trim().slice(0, 2) || '⚡';
-  const theme = (isObj && /^#[0-9a-fA-F]{3,8}$/.test(space.appThemeColor)) ? space.appThemeColor : '#6366f1';
+  const rawTheme = opts.theme || (isObj ? space.appThemeColor : '');
+  const theme = /^#[0-9a-fA-F]{3,8}$/.test(rawTheme) ? rawTheme : '#6366f1';
+  const badgeText = String(opts.badge || '⚡ SPACEHUB LIVE').replace(/[<>&"']/g, '').slice(0, 24);
+  const st = isObj ? evaluateSpaceStatus(space) : { label: 'Operational', color: '#10b981', uptimePercent: 99.98 };
+  const views = isObj ? Number(space.views || 0) : 0;
+  const likes = isObj ? Number(space.likes || 0) : 0;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
   <defs>
@@ -2948,8 +3183,8 @@ function generateSpaceOgSvg(space) {
   <rect x="60" y="60" width="1080" height="510" rx="24" fill="url(#cardBg)" stroke="#27272a" stroke-width="2" />
 
   <g transform="translate(110, 120)">
-    <rect width="170" height="40" rx="20" fill="rgba(99, 102, 241, 0.15)" stroke="#6366f1" stroke-width="1.5" />
-    <text x="85" y="25" fill="#a5b4fc" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" text-anchor="middle">⚡ SPACEHUB LIVE</text>
+    <rect width="190" height="40" rx="20" fill="rgba(99, 102, 241, 0.15)" stroke="${theme}" stroke-width="1.5" />
+    <text x="95" y="25" fill="#a5b4fc" font-family="system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" text-anchor="middle">${badgeText}</text>
   </g>
 
   <g transform="translate(110, 190)">
@@ -2968,8 +3203,12 @@ function generateSpaceOgSvg(space) {
     <rect x="0" y="0" width="220" height="42" rx="10" fill="#18181b" stroke="#27272a" stroke-width="1.5" />
     <text x="110" y="26" fill="#e4e4e7" font-family="system-ui, sans-serif" font-size="15" font-weight="600" text-anchor="middle">🌐 Cloudflare Edge Live</text>
 
-    <rect x="235" y="0" width="180" height="42" rx="10" fill="#18181b" stroke="#27272a" stroke-width="1.5" />
-    <text x="325" y="26" fill="#34d399" font-family="system-ui, sans-serif" font-size="15" font-weight="600" text-anchor="middle">🔒 SSL / PWA Ready</text>
+    <rect x="235" y="0" width="210" height="42" rx="10" fill="#18181b" stroke="#27272a" stroke-width="1.5" />
+    <circle cx="255" cy="21" r="5" fill="${st.color}" />
+    <text x="348" y="26" fill="#34d399" font-family="system-ui, sans-serif" font-size="15" font-weight="600" text-anchor="middle">${st.label} (${st.uptimePercent}%)</text>
+
+    <rect x="460" y="0" width="210" height="42" rx="10" fill="#18181b" stroke="#27272a" stroke-width="1.5" />
+    <text x="565" y="26" fill="#a5b4fc" font-family="system-ui, sans-serif" font-size="15" font-weight="600" text-anchor="middle">👁 ${views} views · ♥ ${likes}</text>
 
     <text x="970" y="28" fill="#71717a" font-family="system-ui, sans-serif" font-size="18" font-weight="700" text-anchor="end">spacehub.win</text>
   </g>
@@ -3557,7 +3796,13 @@ const spaceHubWorker = {
         });
       }
       if (asset === 'og.svg') {
-        return new Response(generateSpaceOgSvg(space), {
+        const ogOpts = {
+          title: url.searchParams.get('title') || '',
+          subtitle: url.searchParams.get('subtitle') || url.searchParams.get('description') || '',
+          theme: url.searchParams.get('theme') || '',
+          badge: url.searchParams.get('badge') || ''
+        };
+        return new Response(generateSpaceOgSvg(space, ogOpts), {
           status: 200,
           headers: {
             'Content-Type': 'image/svg+xml; charset=utf-8',
@@ -4806,6 +5051,302 @@ const spaceHubWorker = {
             badgeUrl: `/live/${space.slug}/status.svg`,
             activeIncidents: st.activeIncidents,
             incidents: st.incidents
+          },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+    }
+
+    // 1b-0o. Wave 21: Instant Per-Space GraphQL API (/live/:slug/graphql)
+    const spaceGraphqlMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/graphql\/?$/i);
+    if (spaceGraphqlMatch) {
+      const slug = decodeURIComponent(spaceGraphqlMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+
+      if (method === 'GET' || method === 'POST') {
+        const payload = method === 'POST' ? await request.json().catch(() => ({})) : {};
+        const queryStr = String(payload.query || url.searchParams.get('query') || '').trim();
+        let variables = payload.variables && typeof payload.variables === 'object' ? payload.variables : {};
+        if (method === 'GET' && url.searchParams.get('variables')) {
+          try {
+            variables = JSON.parse(url.searchParams.get('variables'));
+          } catch (_e) {}
+        }
+        const gqlResult = executeSpaceGraphql(space, queryStr, variables);
+        if (gqlResult.mutated) {
+          await saveDb(env, db);
+        }
+        return jsonResponse(
+          {
+            data: gqlResult.data,
+            ...(gqlResult.errors ? { errors: gqlResult.errors } : {})
+          },
+          gqlResult.data === null && gqlResult.errors ? 400 : 200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+    }
+
+    // 1b-0p. Wave 21: Built-in Customer Support Ticket & Helpdesk Engine (/live/:slug/tickets & /live/:slug/tickets/:id/reply)
+    const spaceTicketsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/tickets(?:\/([^/]+)(?:\/(reply))?)?\/?$/i);
+    if (spaceTicketsMatch) {
+      const slug = decodeURIComponent(spaceTicketsMatch[1]).toLowerCase();
+      const ticketIdParam = spaceTicketsMatch[2] ? decodeURIComponent(spaceTicketsMatch[2]) : '';
+      const subAction = (spaceTicketsMatch[3] || '').toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.supportTickets = Array.isArray(space.supportTickets) ? space.supportTickets : [];
+
+      if (method === 'POST' && (subAction === 'reply' || ticketIdParam)) {
+        const targetTicket = space.supportTickets.find((t) => t.id === ticketIdParam);
+        if (!targetTicket) return jsonResponse({ error: 'Support ticket not found.' }, 404);
+        const payload = await request.json().catch(() => ({}));
+        const message = String(payload.message || payload.body || '').trim().slice(0, 2000);
+        if (!message) return jsonResponse({ error: 'Reply message is required.' }, 400);
+        const isAgent = Boolean(user && canEditSpace(space, user));
+        const senderRole = payload.role === 'agent' && isAgent ? 'agent' : isAgent ? 'agent' : 'customer';
+        const nowIso = new Date().toISOString();
+        const replyEntry = {
+          id: 'rep_' + randomHex(4),
+          role: senderRole,
+          author: String(payload.author || (user ? user.username : targetTicket.customerName || 'Customer')).slice(0, 80),
+          message,
+          createdAt: nowIso
+        };
+        targetTicket.messages = Array.isArray(targetTicket.messages) ? targetTicket.messages : [];
+        targetTicket.messages.push(replyEntry);
+        targetTicket.updatedAt = nowIso;
+        if (senderRole === 'agent' && !targetTicket.firstResponseAt) {
+          targetTicket.firstResponseAt = nowIso;
+          targetTicket.firstResponseMs = Math.max(1, Date.parse(nowIso) - Date.parse(targetTicket.createdAt));
+        }
+        if (payload.status && ['open', 'pending', 'resolved', 'closed'].includes(String(payload.status).toLowerCase())) {
+          targetTicket.status = String(payload.status).toLowerCase();
+        } else if (senderRole === 'agent' && targetTicket.status === 'open') {
+          targetTicket.status = 'pending';
+        }
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, ticket: targetTicket, reply: replyEntry }, 200, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'POST' && !ticketIdParam) {
+        const payload = await request.json().catch(() => ({}));
+        const subject = String(payload.subject || payload.title || '').trim().slice(0, 160);
+        const message = String(payload.message || payload.body || '').trim().slice(0, 2000);
+        if (!subject || !message) {
+          return jsonResponse({ error: 'Both subject and message are required to open a ticket.' }, 400);
+        }
+        const nowIso = new Date().toISOString();
+        const priorityRaw = String(payload.priority || 'normal').toLowerCase();
+        const priority = ['low', 'normal', 'high', 'urgent'].includes(priorityRaw) ? priorityRaw : 'normal';
+        const newTicket = {
+          id: 'tkt_' + randomHex(5),
+          subject,
+          customerEmail: String(payload.email || payload.customerEmail || 'visitor@example.com').trim().slice(0, 140),
+          customerName: String(payload.name || payload.customerName || 'Visitor').trim().slice(0, 80),
+          category: String(payload.category || 'general').trim().slice(0, 60),
+          priority,
+          status: 'open',
+          messages: [
+            {
+              id: 'rep_' + randomHex(4),
+              role: 'customer',
+              author: String(payload.name || payload.customerName || 'Visitor').trim().slice(0, 80),
+              message,
+              createdAt: nowIso
+            }
+          ],
+          firstResponseAt: null,
+          firstResponseMs: null,
+          createdAt: nowIso,
+          updatedAt: nowIso
+        };
+        space.supportTickets.unshift(newTicket);
+        if (space.supportTickets.length > 200) space.supportTickets = space.supportTickets.slice(0, 200);
+        await dispatchSpaceEventBus(space, 'ticket.created', { ticketId: newTicket.id, subject: newTicket.subject, priority: newTicket.priority });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, ticket: newTicket }, 201, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'PATCH' || method === 'PUT') {
+        const payload = await request.json().catch(() => ({}));
+        const targetId = ticketIdParam || String(payload.id || url.searchParams.get('id') || '');
+        const targetTicket = space.supportTickets.find((t) => t.id === targetId);
+        if (!targetTicket) return jsonResponse({ error: 'Support ticket not found.' }, 404);
+        const nowIso = new Date().toISOString();
+        if (payload.status && ['open', 'pending', 'resolved', 'closed'].includes(String(payload.status).toLowerCase())) {
+          targetTicket.status = String(payload.status).toLowerCase();
+          if (targetTicket.status === 'resolved' || targetTicket.status === 'closed') {
+            targetTicket.resolvedAt = nowIso;
+          }
+        }
+        if (payload.priority && ['low', 'normal', 'high', 'urgent'].includes(String(payload.priority).toLowerCase())) {
+          targetTicket.priority = String(payload.priority).toLowerCase();
+        }
+        targetTicket.updatedAt = nowIso;
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, ticket: targetTicket }, 200, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'GET') {
+        const lookupId = ticketIdParam || url.searchParams.get('id');
+        if (lookupId) {
+          const found = space.supportTickets.find((t) => t.id === lookupId);
+          if (!found) return jsonResponse({ error: 'Support ticket not found.' }, 404);
+          return jsonResponse({ ok: true, ticket: found }, 200, { 'Access-Control-Allow-Origin': '*' });
+        }
+        const statusFilter = (url.searchParams.get('status') || '').toLowerCase();
+        const priorityFilter = (url.searchParams.get('priority') || '').toLowerCase();
+        let list = space.supportTickets;
+        if (statusFilter) list = list.filter((t) => t.status === statusFilter);
+        if (priorityFilter) list = list.filter((t) => t.priority === priorityFilter);
+        const openCount = space.supportTickets.filter((t) => t.status === 'open' || t.status === 'pending').length;
+        const resolvedCount = space.supportTickets.filter((t) => t.status === 'resolved' || t.status === 'closed').length;
+        return jsonResponse(
+          {
+            ok: true,
+            count: list.length,
+            openCount,
+            resolvedCount,
+            tickets: list
+          },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+    }
+
+    // 1b-0q. Wave 21: Viral Referral & Affiliate Tracking System (/live/:slug/referrals, /live/:slug/referrals/convert, /live/:slug/ref/:code)
+    const spaceRefVisitMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/ref\/([a-zA-Z0-9_-]+)\/?$/i);
+    if (spaceRefVisitMatch && method === 'GET') {
+      const slug = decodeURIComponent(spaceRefVisitMatch[1]).toLowerCase();
+      const refCode = decodeURIComponent(spaceRefVisitMatch[2]);
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return new Response('Not found', { status: 404 });
+      space.referrals = Array.isArray(space.referrals) ? space.referrals : [];
+      const refEntry = space.referrals.find((r) => r.code.toLowerCase() === refCode.toLowerCase());
+      if (!refEntry) return jsonResponse({ error: 'Referral code not found.' }, 404);
+
+      refEntry.clicks = (refEntry.clicks || 0) + 1;
+      refEntry.lastClickedAt = new Date().toISOString();
+      await saveDb(env, db);
+
+      const destBase = refEntry.targetUrl || `${url.origin}/live/${space.slug}`;
+      let dest = destBase;
+      try {
+        const destUrl = new URL(destBase, url.origin);
+        destUrl.searchParams.set('ref', refEntry.code);
+        dest = destUrl.href;
+      } catch (_e) {}
+
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: dest,
+          'Set-Cookie': `sh_ref_${space.slug}=${encodeURIComponent(refEntry.code)}; Path=/; Max-Age=2592000; SameSite=Lax`,
+          'Cache-Control': 'no-store'
+        }
+      });
+    }
+
+    const spaceReferralsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/referrals(?:\/(convert))?\/?$/i);
+    if (spaceReferralsMatch) {
+      const slug = decodeURIComponent(spaceReferralsMatch[1]).toLowerCase();
+      const refSub = (spaceReferralsMatch[2] || '').toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.referrals = Array.isArray(space.referrals) ? space.referrals : [];
+
+      if (refSub === 'convert' && method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const cookies = parseCookies(request.headers.get('cookie') || '');
+        const codeInput = String(payload.code || cookies[`sh_ref_${space.slug}`] || '').trim();
+        if (!codeInput) return jsonResponse({ error: 'Referral code is required.' }, 400);
+        const refEntry = space.referrals.find((r) => r.code.toLowerCase() === codeInput.toLowerCase());
+        if (!refEntry) return jsonResponse({ error: 'Referral code not found.' }, 404);
+
+        const amountUsd = Math.max(0, Number(payload.amountUsd || payload.amount || 0));
+        const commissionUsd = Math.round(amountUsd * ((refEntry.commissionRate || 20) / 100) * 100) / 100;
+        const nowIso = new Date().toISOString();
+
+        refEntry.conversions = (refEntry.conversions || 0) + 1;
+        refEntry.revenueUsd = Math.round(((refEntry.revenueUsd || 0) + amountUsd) * 100) / 100;
+        refEntry.commissionEarnedUsd = Math.round(((refEntry.commissionEarnedUsd || 0) + commissionUsd) * 100) / 100;
+        refEntry.lastConvertedAt = nowIso;
+        refEntry.conversionLog = Array.isArray(refEntry.conversionLog) ? refEntry.conversionLog : [];
+        const convRecord = {
+          id: 'cnv_' + randomHex(4),
+          customerEmail: String(payload.customerEmail || payload.email || '').trim().slice(0, 140),
+          orderId: String(payload.orderId || '').trim().slice(0, 80),
+          amountUsd,
+          commissionUsd,
+          timestamp: nowIso
+        };
+        refEntry.conversionLog.unshift(convRecord);
+        if (refEntry.conversionLog.length > 50) refEntry.conversionLog = refEntry.conversionLog.slice(0, 50);
+
+        await dispatchSpaceEventBus(space, 'referral.converted', { code: refEntry.code, amountUsd, commissionUsd });
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, referral: refEntry, conversion: convRecord },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'POST' && !refSub) {
+        const payload = await request.json().catch(() => ({}));
+        const referrerName = String(payload.referrerName || payload.name || 'Affiliate Partner').trim().slice(0, 80);
+        const referrerEmail = String(payload.referrerEmail || payload.email || '').trim().slice(0, 140);
+        const rawCode = String(payload.code || slugify(referrerName) + '-' + randomHex(2))
+          .trim()
+          .replace(/[^a-zA-Z0-9_-]/g, '')
+          .slice(0, 40);
+        const commissionRate = Math.max(1, Math.min(90, Number(payload.commissionRate ?? 20)));
+        const existingIdx = space.referrals.findIndex((r) => r.code.toLowerCase() === rawCode.toLowerCase());
+        const nowIso = new Date().toISOString();
+        const refRecord = {
+          id: existingIdx > -1 ? space.referrals[existingIdx].id : 'ref_' + randomHex(5),
+          code: rawCode,
+          referrerName,
+          referrerEmail,
+          commissionRate,
+          targetUrl: String(payload.targetUrl || '').trim().slice(0, 300) || null,
+          referralUrl: `${url.origin}/live/${space.slug}/ref/${rawCode}`,
+          clicks: existingIdx > -1 ? space.referrals[existingIdx].clicks || 0 : 0,
+          conversions: existingIdx > -1 ? space.referrals[existingIdx].conversions || 0 : 0,
+          revenueUsd: existingIdx > -1 ? space.referrals[existingIdx].revenueUsd || 0 : 0,
+          commissionEarnedUsd: existingIdx > -1 ? space.referrals[existingIdx].commissionEarnedUsd || 0 : 0,
+          createdAt: existingIdx > -1 ? space.referrals[existingIdx].createdAt : nowIso
+        };
+        if (existingIdx > -1) space.referrals[existingIdx] = refRecord;
+        else space.referrals.push(refRecord);
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, referral: refRecord }, 201, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'GET') {
+        const leaderboard = [...space.referrals].sort(
+          (a, b) => (b.conversions || 0) - (a.conversions || 0) || (b.clicks || 0) - (a.clicks || 0)
+        );
+        const totals = leaderboard.reduce(
+          (acc, r) => {
+            acc.totalClicks += r.clicks || 0;
+            acc.totalConversions += r.conversions || 0;
+            acc.totalRevenueUsd = Math.round((acc.totalRevenueUsd + (r.revenueUsd || 0)) * 100) / 100;
+            acc.totalCommissionUsd = Math.round((acc.totalCommissionUsd + (r.commissionEarnedUsd || 0)) * 100) / 100;
+            return acc;
+          },
+          { totalClicks: 0, totalConversions: 0, totalRevenueUsd: 0, totalCommissionUsd: 0 }
+        );
+        return jsonResponse(
+          {
+            ok: true,
+            count: leaderboard.length,
+            ...totals,
+            leaderboard
           },
           200,
           { 'Access-Control-Allow-Origin': '*' }
