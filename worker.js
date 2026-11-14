@@ -2400,6 +2400,88 @@ function computeSearchFacets(space) {
   return { tags: tagCounts, indexedCount: index.length };
 }
 
+function computeTextVector(text = '', dims = 32) {
+  const vec = new Array(dims).fill(0);
+  const clean = String(text || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim();
+  if (!clean) return vec;
+  const words = clean.split(/\s+/).filter(Boolean);
+  for (const word of words) {
+    let h = 2166136261;
+    for (let i = 0; i < word.length; i++) {
+      h ^= word.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    vec[h % dims] += 2;
+    for (let i = 0; i <= word.length - 3; i++) {
+      const tri = word.slice(i, i + 3);
+      let th = 2166136261;
+      for (let j = 0; j < tri.length; j++) {
+        th ^= tri.charCodeAt(j);
+        th = Math.imul(th, 16777619) >>> 0;
+      }
+      vec[th % dims] += 1;
+    }
+  }
+  const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;
+  return vec.map((v) => Math.round((v / norm) * 10000) / 10000);
+}
+
+function cosineSimilarity(vecA = [], vecB = []) {
+  const len = Math.min(vecA.length, vecB.length);
+  if (len === 0) return 0;
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < len; i++) {
+    const a = Number(vecA[i]) || 0;
+    const b = Number(vecB[i]) || 0;
+    dot += a * b;
+    magA += a * a;
+    magB += b * b;
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  if (!denom) return 0;
+  return Math.round((dot / denom) * 10000) / 10000;
+}
+
+function evaluateSpaceStatus(space) {
+  const incidents = Array.isArray(space?.statusIncidents) ? space.statusIncidents : [];
+  const activeIncidents = incidents.filter((inc) => inc && inc.status !== 'resolved');
+  let state = 'operational';
+  let label = 'Operational';
+  let color = '#10b981';
+  if (space?.maintenanceMode) {
+    state = 'maintenance';
+    label = 'Maintenance';
+    color = '#6366f1';
+  } else if (activeIncidents.some((i) => i.severity === 'critical' || i.severity === 'major')) {
+    state = 'outage';
+    label = 'Major Outage';
+    color = '#ef4444';
+  } else if (activeIncidents.length > 0) {
+    state = 'degraded';
+    label = 'Degraded';
+    color = '#f59e0b';
+  }
+  return {
+    state,
+    label,
+    color,
+    uptimePercent: state === 'operational' ? 99.98 : state === 'degraded' ? 99.4 : 98.0,
+    activeIncidents,
+    incidents
+  };
+}
+
+function generateStatusBadgeSvg(space) {
+  const st = evaluateSpaceStatus(space);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="170" height="28" viewBox="0 0 170 28">
+  <rect width="170" height="28" rx="14" fill="#18181b" stroke="#27272a" stroke-width="1.5"/>
+  <circle cx="16" cy="14" r="4.5" fill="${st.color}"/>
+  <text x="28" y="18" fill="#fafafa" font-family="system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="600">Status: ${st.label}</text>
+</svg>`;
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
@@ -4444,6 +4526,293 @@ const spaceHubWorker = {
       }
     }
 
+    // 1b-0l. Wave 20: Per-Space Vector Embeddings & Semantic Similarity Search (/live/:slug/vectors)
+    const spaceVectorsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/vectors(?:\/(upsert|query))?\/?$/i);
+    if (spaceVectorsMatch) {
+      const slug = decodeURIComponent(spaceVectorsMatch[1]).toLowerCase();
+      const vecAction = (spaceVectorsMatch[2] || '').toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.vectorStore = Array.isArray(space.vectorStore) ? space.vectorStore : [];
+
+      if ((vecAction === 'upsert' || (!vecAction && (method === 'POST' || method === 'PUT')))) {
+        const payload = await request.json().catch(() => ({}));
+        const rawItems = Array.isArray(payload.vectors)
+          ? payload.vectors
+          : Array.isArray(payload.items)
+            ? payload.items
+            : [payload];
+        const namespace = String(payload.namespace || 'default').trim().slice(0, 64);
+        const nowIso = new Date().toISOString();
+        const upserted = [];
+
+        for (const item of rawItems) {
+          if (!item || typeof item !== 'object') continue;
+          const id = String(item.id || `vec_${randomHex(5)}`).trim().slice(0, 80);
+          const text = String(item.text || item.content || '').trim().slice(0, 4000);
+          const values = Array.isArray(item.values) && item.values.length > 0
+            ? item.values.map((v) => Number(v) || 0)
+            : computeTextVector(text, 32);
+          const rec = {
+            id,
+            namespace: String(item.namespace || namespace),
+            text,
+            values,
+            metadata: item.metadata && typeof item.metadata === 'object' ? item.metadata : {},
+            updatedAt: nowIso
+          };
+          const existingIdx = space.vectorStore.findIndex((v) => v.id === id && v.namespace === rec.namespace);
+          if (existingIdx > -1) {
+            space.vectorStore[existingIdx] = rec;
+          } else {
+            space.vectorStore.push(rec);
+          }
+          upserted.push({ id: rec.id, namespace: rec.namespace, dimensions: rec.values.length });
+        }
+        if (space.vectorStore.length > 500) {
+          space.vectorStore = space.vectorStore.slice(-500);
+        }
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, upsertedCount: upserted.length, totalVectors: space.vectorStore.length, upserted },
+          201,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (vecAction === 'query' || method === 'GET') {
+        const payload = method === 'POST' ? await request.json().catch(() => ({})) : {};
+        const queryText = String(payload.text || payload.query || url.searchParams.get('q') || '').trim();
+        const queryVec = Array.isArray(payload.vector) && payload.vector.length > 0
+          ? payload.vector.map((v) => Number(v) || 0)
+          : computeTextVector(queryText, 32);
+        const topK = Math.max(1, Math.min(50, Number(payload.topK || url.searchParams.get('topK') || 5)));
+        const nsFilter = String(payload.namespace || url.searchParams.get('namespace') || '').trim();
+        const metaFilter = payload.filter && typeof payload.filter === 'object' ? payload.filter : null;
+
+        let candidates = space.vectorStore;
+        if (nsFilter) {
+          candidates = candidates.filter((v) => v.namespace === nsFilter);
+        }
+        if (metaFilter) {
+          candidates = candidates.filter((v) =>
+            Object.entries(metaFilter).every(([mk, mv]) => v.metadata && v.metadata[mk] === mv)
+          );
+        }
+
+        const matches = candidates
+          .map((v) => ({
+            id: v.id,
+            namespace: v.namespace,
+            score: cosineSimilarity(queryVec, v.values || []),
+            text: v.text,
+            metadata: v.metadata || {}
+          }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, topK);
+
+        return jsonResponse(
+          { ok: true, query: queryText || null, topK, count: matches.length, matches },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'DELETE') {
+        const targetId = url.searchParams.get('id');
+        const targetNs = url.searchParams.get('namespace');
+        if (targetId) {
+          space.vectorStore = space.vectorStore.filter((v) => v.id !== targetId);
+        } else if (targetNs) {
+          space.vectorStore = space.vectorStore.filter((v) => v.namespace !== targetNs);
+        } else {
+          space.vectorStore = [];
+        }
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, totalVectors: space.vectorStore.length }, 200, { 'Access-Control-Allow-Origin': '*' });
+      }
+    }
+
+    // 1b-0m. Wave 20: Built-in URL Shortener & UTM Campaign Click Tracker (/live/:slug/links & /live/:slug/go/:code)
+    const spaceGoMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/go\/([a-zA-Z0-9_-]+)\/?$/i);
+    if (spaceGoMatch && method === 'GET') {
+      const slug = decodeURIComponent(spaceGoMatch[1]).toLowerCase();
+      const code = decodeURIComponent(spaceGoMatch[2]);
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return new Response('Not found', { status: 404 });
+      space.shortLinks = Array.isArray(space.shortLinks) ? space.shortLinks : [];
+      const link = space.shortLinks.find((l) => l.code === code);
+      if (!link) return jsonResponse({ error: 'Short link not found.' }, 404);
+
+      link.clicks = (link.clicks || 0) + 1;
+      link.lastClickedAt = new Date().toISOString();
+      const refHeader = request.headers.get('referer') || request.headers.get('referrer') || 'direct';
+      let refKey = 'direct';
+      try {
+        refKey = refHeader === 'direct' ? 'direct' : new URL(refHeader).hostname || 'direct';
+      } catch (_e) {
+        refKey = String(refHeader).slice(0, 60);
+      }
+      link.referrers = link.referrers && typeof link.referrers === 'object' ? link.referrers : {};
+      link.referrers[refKey] = (link.referrers[refKey] || 0) + 1;
+      await saveDb(env, db);
+
+      let dest = link.targetUrl;
+      try {
+        const destUrl = new URL(dest, url.origin);
+        if (link.utmSource && !destUrl.searchParams.has('utm_source')) destUrl.searchParams.set('utm_source', link.utmSource);
+        if (link.utmMedium && !destUrl.searchParams.has('utm_medium')) destUrl.searchParams.set('utm_medium', link.utmMedium);
+        if (link.utmCampaign && !destUrl.searchParams.has('utm_campaign')) destUrl.searchParams.set('utm_campaign', link.utmCampaign);
+        dest = destUrl.href;
+      } catch (_e) {}
+
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: dest,
+          'Cache-Control': 'no-store'
+        }
+      });
+    }
+
+    const spaceLinksMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/links\/?$/i);
+    if (spaceLinksMatch) {
+      const slug = decodeURIComponent(spaceLinksMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.shortLinks = Array.isArray(space.shortLinks) ? space.shortLinks : [];
+
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const targetUrl = String(payload.targetUrl || payload.url || '').trim().slice(0, 500);
+        if (!targetUrl) return jsonResponse({ error: 'targetUrl is required.' }, 400);
+        const code = String(payload.code || randomHex(3))
+          .trim()
+          .replace(/[^a-zA-Z0-9_-]/g, '')
+          .slice(0, 40) || randomHex(3);
+        const existingIdx = space.shortLinks.findIndex((l) => l.code === code);
+        const linkRecord = {
+          id: existingIdx > -1 ? space.shortLinks[existingIdx].id : 'lnk_' + randomHex(5),
+          code,
+          targetUrl,
+          title: String(payload.title || code).trim().slice(0, 120),
+          utmSource: String(payload.utmSource || '').trim().slice(0, 60),
+          utmMedium: String(payload.utmMedium || '').trim().slice(0, 60),
+          utmCampaign: String(payload.utmCampaign || '').trim().slice(0, 60),
+          clicks: existingIdx > -1 ? space.shortLinks[existingIdx].clicks || 0 : 0,
+          referrers: existingIdx > -1 ? space.shortLinks[existingIdx].referrers || {} : {},
+          shortUrl: `${url.origin}/live/${space.slug}/go/${code}`,
+          createdAt: existingIdx > -1 ? space.shortLinks[existingIdx].createdAt : new Date().toISOString(),
+          lastClickedAt: existingIdx > -1 ? space.shortLinks[existingIdx].lastClickedAt : null
+        };
+        if (existingIdx > -1) space.shortLinks[existingIdx] = linkRecord;
+        else space.shortLinks.unshift(linkRecord);
+        if (space.shortLinks.length > 200) space.shortLinks = space.shortLinks.slice(0, 200);
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, link: linkRecord, count: space.shortLinks.length }, 201, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'GET') {
+        const totalClicks = space.shortLinks.reduce((s, l) => s + (l.clicks || 0), 0);
+        return jsonResponse(
+          { ok: true, count: space.shortLinks.length, totalClicks, links: space.shortLinks },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'DELETE') {
+        const codeOrId = url.searchParams.get('code') || url.searchParams.get('id');
+        if (codeOrId) {
+          space.shortLinks = space.shortLinks.filter((l) => l.code !== codeOrId && l.id !== codeOrId);
+        } else {
+          space.shortLinks = [];
+        }
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, count: space.shortLinks.length, links: space.shortLinks }, 200, { 'Access-Control-Allow-Origin': '*' });
+      }
+    }
+
+    // 1b-0n. Wave 20: Per-Space Public Status Page & Uptime Incident Feed (/live/:slug/status, /status.svg, /status/incidents)
+    const spaceStatusMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/(status|status\.svg)(?:\/(incidents))?\/?$/i);
+    if (spaceStatusMatch) {
+      const slug = decodeURIComponent(spaceStatusMatch[1]).toLowerCase();
+      const statusKind = spaceStatusMatch[2].toLowerCase();
+      const statusSub = (spaceStatusMatch[3] || '').toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.statusIncidents = Array.isArray(space.statusIncidents) ? space.statusIncidents : [];
+
+      if (statusKind === 'status.svg' && method === 'GET') {
+        return new Response(generateStatusBadgeSvg(space), {
+          status: 200,
+          headers: {
+            'Content-Type': 'image/svg+xml; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      }
+
+      if (statusSub === 'incidents' && (method === 'POST' || method === 'PATCH' || method === 'PUT')) {
+        if (!user || !canEditSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized: Owner or Editor role required to manage status incidents.' }, 403);
+        }
+        const payload = await request.json().catch(() => ({}));
+        const nowIso = new Date().toISOString();
+        if (method === 'PATCH' || method === 'PUT' || payload.id) {
+          const targetId = String(payload.id || url.searchParams.get('id') || '');
+          const inc = space.statusIncidents.find((i) => i.id === targetId);
+          if (inc) {
+            if (payload.status) inc.status = String(payload.status).toLowerCase();
+            if (payload.message) inc.message = String(payload.message).trim().slice(0, 1000);
+            if (payload.severity) inc.severity = String(payload.severity).toLowerCase();
+            inc.updatedAt = nowIso;
+            if (inc.status === 'resolved') inc.resolvedAt = nowIso;
+            await saveDb(env, db);
+            return jsonResponse({ ok: true, incident: inc, statusSummary: evaluateSpaceStatus(space) });
+          }
+        }
+        const newInc = {
+          id: 'inc_' + randomHex(5),
+          title: String(payload.title || 'Service Degradation').trim().slice(0, 140),
+          severity: ['minor', 'major', 'critical'].includes(String(payload.severity || '').toLowerCase())
+            ? String(payload.severity).toLowerCase()
+            : 'minor',
+          status: ['investigating', 'identified', 'monitoring', 'resolved'].includes(String(payload.status || '').toLowerCase())
+            ? String(payload.status).toLowerCase()
+            : 'investigating',
+          message: String(payload.message || '').trim().slice(0, 1000),
+          createdAt: nowIso,
+          updatedAt: nowIso
+        };
+        space.statusIncidents.unshift(newInc);
+        if (space.statusIncidents.length > 100) space.statusIncidents = space.statusIncidents.slice(0, 100);
+        recordAuditLog(space, user, 'status_incident_posted', { id: newInc.id, title: newInc.title, severity: newInc.severity });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, incident: newInc, statusSummary: evaluateSpaceStatus(space) }, 201);
+      }
+
+      if (method === 'GET') {
+        const st = evaluateSpaceStatus(space);
+        return jsonResponse(
+          {
+            ok: true,
+            slug: space.slug,
+            title: space.title,
+            state: st.state,
+            label: st.label,
+            uptimePercent: st.uptimePercent,
+            badgeUrl: `/live/${space.slug}/status.svg`,
+            activeIncidents: st.activeIncidents,
+            incidents: st.incidents
+          },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+    }
+
     // 1b-1. Per-Space Server-Side API Proxy & Secrets Vault (POST /live/:slug/proxy)
     const proxyLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/proxy\/?$/i);
     if (proxyLiveMatch && method === 'POST') {
@@ -5380,21 +5749,43 @@ const spaceHubWorker = {
         mode === 'draft'
           ? (hasAb && forcedVariant === 'b' ? 'b' : 'a')
           : pickAbVariant(baseFiles, forcedVariant, cookieVariant);
+
+      // Wave 20: Canary Deployments & Weighted Traffic Splitting
+      let isCanaryHit = false;
+      const canaryCfg = space.canaryConfig && typeof space.canaryConfig === 'object' ? space.canaryConfig : null;
+      if (mode !== 'draft' && canaryCfg && canaryCfg.enabled && canaryCfg.files) {
+        const forceCanary = url.searchParams.get('canary') === '1' || request.headers.get('x-canary') === '1';
+        const forceProd = url.searchParams.get('canary') === '0' || request.headers.get('x-canary') === '0';
+        const weight = Math.max(0, Math.min(100, Number(canaryCfg.weight ?? 0)));
+        if (forceCanary) {
+          isCanaryHit = true;
+        } else if (!forceProd && weight > 0) {
+          isCanaryHit = weight >= 100 || Math.random() * 100 < weight;
+        }
+      }
+
       if (mode !== 'draft') {
         space.views = (space.views || 0) + 1;
+        if (isCanaryHit) {
+          space.canaryViews = (space.canaryViews || 0) + 1;
+        } else {
+          space.prodViews = (space.prodViews || 0) + 1;
+        }
         if (hasAb) {
           if (variant === 'b') space.abViewsB = (space.abViewsB || 0) + 1;
           else space.abViewsA = (space.abViewsA || 0) + 1;
         }
         await saveDb(env, db);
       }
+      const effectiveBaseFiles = isCanaryHit ? canaryCfg.files : baseFiles;
       const targetFiles =
-        hasAb && variant === 'b' ? { ...baseFiles, 'index.html': baseFiles['index.b.html'] } : baseFiles;
-      const customHdrs = resolveSpaceCustomHeaders(baseFiles, space, '/*');
+        hasAb && variant === 'b' ? { ...effectiveBaseFiles, 'index.html': effectiveBaseFiles['index.b.html'] } : effectiveBaseFiles;
+      const customHdrs = resolveSpaceCustomHeaders(effectiveBaseFiles, space, '/*');
       const liveHeaders = {
         ...customHdrs,
         'Content-Type': 'text/html; charset=utf-8'
       };
+      liveHeaders['X-SpaceHub-Canary'] = isCanaryHit ? 'true' : 'false';
       if (mode !== 'draft' && space.releaseId) {
         liveHeaders['X-SpaceHub-Release'] = space.releaseId;
         if (!liveHeaders['Cache-Control']) liveHeaders['Cache-Control'] = 'no-store';
@@ -7458,6 +7849,75 @@ const spaceHubWorker = {
             space.requestInspectorLogs = [];
             await saveDb(env, db);
             return jsonResponse({ ok: true, count: 0, logs: [] });
+          }
+        }
+
+        // Wave 20: Canary Deployments & Weighted Traffic Splitting (/api/spaces/:owner/:slug/canary)
+        if (action === 'canary') {
+          if (!user || !space || !canViewSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          if (method === 'GET') {
+            return jsonResponse({
+              ok: true,
+              canary: space.canaryConfig || { enabled: false, weight: 0 },
+              canaryViews: space.canaryViews || 0,
+              prodViews: space.prodViews || 0
+            });
+          }
+          if (method === 'PUT' || method === 'POST') {
+            if (!canPublishSpace(space, user)) {
+              return jsonResponse({ error: 'Unauthorized: Owner, Admin, or Publisher role required for canary releases.' }, 403);
+            }
+            const nowIso = new Date().toISOString();
+            const act = String(body.action || '').toLowerCase();
+            if (act === 'promote') {
+              const candidateFiles = space.canaryConfig?.files || space.draftFiles || {};
+              recordPreviousRelease(space);
+              space.publishedFiles = JSON.parse(JSON.stringify(candidateFiles));
+              space.draftFiles = JSON.parse(JSON.stringify(candidateFiles));
+              space.releaseId = crypto.randomUUID();
+              space.publishedAt = nowIso;
+              space.updatedAt = nowIso;
+              space.hasUnpublishedChanges = false;
+              space.canaryConfig = { enabled: false, weight: 0, promotedAt: nowIso };
+              recordAuditLog(space, user, 'canary_promoted_to_production', { releaseId: space.releaseId });
+              await saveDb(env, db);
+              return jsonResponse({
+                ok: true,
+                promoted: true,
+                releaseId: space.releaseId,
+                canary: space.canaryConfig
+              });
+            }
+            if (act === 'abort') {
+              space.canaryConfig = { enabled: false, weight: 0, abortedAt: nowIso };
+              recordAuditLog(space, user, 'canary_aborted');
+              await saveDb(env, db);
+              return jsonResponse({ ok: true, aborted: true, canary: space.canaryConfig });
+            }
+            const weight = Math.max(0, Math.min(100, Number(body.weight ?? 20)));
+            const enabled = body.enabled !== undefined ? Boolean(body.enabled) : weight > 0;
+            const canaryFiles = body.files && typeof body.files === 'object'
+              ? { ...(space.publishedFiles || space.draftFiles || {}), ...body.files }
+              : JSON.parse(JSON.stringify(space.draftFiles || {}));
+            space.canaryConfig = {
+              enabled,
+              weight,
+              files: canaryFiles,
+              updatedAt: nowIso
+            };
+            recordAuditLog(space, user, 'canary_configured', { enabled, weight });
+            await saveDb(env, db);
+            return jsonResponse({
+              ok: true,
+              canary: {
+                enabled: space.canaryConfig.enabled,
+                weight: space.canaryConfig.weight,
+                updatedAt: space.canaryConfig.updatedAt
+              },
+              canaryViews: space.canaryViews || 0
+            });
           }
         }
 

@@ -1577,6 +1577,88 @@ function computeSearchFacets(space) {
   return { tags: tagCounts, indexedCount: index.length };
 }
 
+function computeTextVector(text = '', dims = 32) {
+  const vec = new Array(dims).fill(0);
+  const clean = String(text || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim();
+  if (!clean) return vec;
+  const words = clean.split(/\s+/).filter(Boolean);
+  for (const word of words) {
+    let h = 2166136261;
+    for (let i = 0; i < word.length; i++) {
+      h ^= word.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    vec[h % dims] += 2;
+    for (let i = 0; i <= word.length - 3; i++) {
+      const tri = word.slice(i, i + 3);
+      let th = 2166136261;
+      for (let j = 0; j < tri.length; j++) {
+        th ^= tri.charCodeAt(j);
+        th = Math.imul(th, 16777619) >>> 0;
+      }
+      vec[th % dims] += 1;
+    }
+  }
+  const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;
+  return vec.map((v) => Math.round((v / norm) * 10000) / 10000);
+}
+
+function cosineSimilarity(vecA = [], vecB = []) {
+  const len = Math.min(vecA.length, vecB.length);
+  if (len === 0) return 0;
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < len; i++) {
+    const a = Number(vecA[i]) || 0;
+    const b = Number(vecB[i]) || 0;
+    dot += a * b;
+    magA += a * a;
+    magB += b * b;
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  if (!denom) return 0;
+  return Math.round((dot / denom) * 10000) / 10000;
+}
+
+function evaluateSpaceStatus(space) {
+  const incidents = Array.isArray(space?.statusIncidents) ? space.statusIncidents : [];
+  const activeIncidents = incidents.filter((inc) => inc && inc.status !== 'resolved');
+  let state = 'operational';
+  let label = 'Operational';
+  let color = '#10b981';
+  if (space?.maintenanceMode) {
+    state = 'maintenance';
+    label = 'Maintenance';
+    color = '#6366f1';
+  } else if (activeIncidents.some((i) => i.severity === 'critical' || i.severity === 'major')) {
+    state = 'outage';
+    label = 'Major Outage';
+    color = '#ef4444';
+  } else if (activeIncidents.length > 0) {
+    state = 'degraded';
+    label = 'Degraded';
+    color = '#f59e0b';
+  }
+  return {
+    state,
+    label,
+    color,
+    uptimePercent: state === 'operational' ? 99.98 : state === 'degraded' ? 99.4 : 98.0,
+    activeIncidents,
+    incidents
+  };
+}
+
+function generateStatusBadgeSvg(space) {
+  const st = evaluateSpaceStatus(space);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="170" height="28" viewBox="0 0 170 28">
+  <rect width="170" height="28" rx="14" fill="#18181b" stroke="#27272a" stroke-width="1.5"/>
+  <circle cx="16" cy="14" r="4.5" fill="${st.color}"/>
+  <text x="28" y="18" fill="#fafafa" font-family="system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="600">Status: ${st.label}</text>
+</svg>`;
+}
+
 function searchSpaceContent(space, rawQuery, tagFilter = '') {
   const q = String(rawQuery || '').trim().toLowerCase();
   const cleanTag = String(tagFilter || '').trim().toLowerCase();
@@ -5292,6 +5374,68 @@ app.get(['/live/:slug/search', '/s/:slug/search'], (req, res) => {
   const tag = String(req.query.tag || '');
   const results = searchSpaceContent(space, q, tag);
   res.json({ ok: true, query: q, tag: tag || null, count: results.length, facets: computeSearchFacets(space), results });
+});
+
+// Wave 20: Per-Space Vector Embeddings & Semantic Similarity Search (/live/:slug/vectors)
+app.post(['/live/:slug/vectors', '/s/:slug/vectors', '/live/:slug/vectors/upsert', '/s/:slug/vectors/upsert'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.vectorStore = Array.isArray(space.vectorStore) ? space.vectorStore : [];
+  const payload = req.body || {};
+  const rawItems = Array.isArray(payload.vectors) ? payload.vectors : Array.isArray(payload.items) ? payload.items : [payload];
+  const namespace = String(payload.namespace || 'default').trim().slice(0, 64);
+  const nowIso = new Date().toISOString();
+  const upserted = [];
+  for (const item of rawItems) {
+    if (!item || typeof item !== 'object') continue;
+    const id = String(item.id || `vec_${crypto.randomBytes(4).toString('hex')}`).trim().slice(0, 80);
+    const text = String(item.text || item.content || '').trim().slice(0, 4000);
+    const values = Array.isArray(item.values) && item.values.length > 0
+      ? item.values.map((v) => Number(v) || 0)
+      : computeTextVector(text, 32);
+    const rec = { id, namespace: String(item.namespace || namespace), text, values, metadata: item.metadata || {}, updatedAt: nowIso };
+    const idx = space.vectorStore.findIndex((v) => v.id === id && v.namespace === rec.namespace);
+    if (idx > -1) space.vectorStore[idx] = rec;
+    else space.vectorStore.push(rec);
+    upserted.push({ id: rec.id, namespace: rec.namespace, dimensions: rec.values.length });
+  }
+  saveDb(db);
+  res.status(201).json({ ok: true, upsertedCount: upserted.length, totalVectors: space.vectorStore.length, upserted });
+});
+
+app.post(['/live/:slug/vectors/query', '/s/:slug/vectors/query'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const payload = req.body || {};
+  const queryText = String(payload.text || payload.query || '').trim();
+  const queryVec = Array.isArray(payload.vector) && payload.vector.length > 0
+    ? payload.vector.map((v) => Number(v) || 0)
+    : computeTextVector(queryText, 32);
+  const topK = Math.max(1, Math.min(50, Number(payload.topK || 5)));
+  const matches = (space.vectorStore || [])
+    .map((v) => ({ id: v.id, namespace: v.namespace, score: cosineSimilarity(queryVec, v.values || []), text: v.text, metadata: v.metadata || {} }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
+  res.json({ ok: true, query: queryText || null, topK, count: matches.length, matches });
+});
+
+// Wave 20: Public Status Page & Badge (/live/:slug/status & /live/:slug/status.svg)
+app.get(['/live/:slug/status.svg', '/s/:slug/status.svg'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).send('Not found');
+  res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+  res.send(generateStatusBadgeSvg(space));
+});
+
+app.get(['/live/:slug/status', '/s/:slug/status'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  const st = evaluateSpaceStatus(space);
+  res.json({ ok: true, slug: space.slug, title: space.title, state: st.state, label: st.label, uptimePercent: st.uptimePercent, badgeUrl: `/live/${space.slug}/status.svg`, activeIncidents: st.activeIncidents, incidents: st.incidents });
 });
 
 // Automatic SEO sitemap.xml, robots.txt & /live/:slug/health
