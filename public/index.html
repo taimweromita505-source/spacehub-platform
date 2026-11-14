@@ -55,8 +55,62 @@
     ]
   }
   </script>
+  <link rel="dns-prefetch" href="https://accounts.google.com" />
+  <style id="critical-lcp-css">
+    :root {
+      color-scheme: light dark;
+      --bg-light: #fafafa; --bg-dark: #09090b;
+      --surface-light: #ffffff; --surface-dark: #111113;
+      --surface-elevated-light: #f4f4f5; --surface-elevated-dark: #18181b;
+      --text-light: #09090b; --text-dark: #fafafa;
+      --muted-light: #52525b; --muted-dark: #a1a1aa;
+      --border-light: #e4e4e7; --border-dark: #27272a;
+      --accent-light: #4f46e5; --accent-dark: #818cf8;
+      --bg: var(--bg-light); --surface: var(--surface-light);
+      --surface-elevated: var(--surface-elevated-light);
+      --text: var(--text-light); --muted: var(--muted-light);
+      --border: var(--border-light); --accent: var(--accent-light);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: var(--bg-dark); --surface: var(--surface-dark);
+        --surface-elevated: var(--surface-elevated-dark);
+        --text: var(--text-dark); --muted: var(--muted-dark);
+        --border: var(--border-dark); --accent: var(--accent-dark);
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    [hidden]:not([hidden="until-found"]) { display: none !important; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+      background-color: var(--bg); color: var(--text);
+      line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+    .topbar {
+      position: sticky; top: 0; z-index: 40;
+      background-color: var(--surface); border-block-end: 1px solid var(--border);
+    }
+    .topbar-inner {
+      max-width: 1200px; margin: 0 auto; padding: 0.7rem 1.5rem;
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+    }
+    .container { max-width: 1200px; width: 100%; margin: 0 auto; padding: 2.25rem 1.5rem; flex: 1; }
+    .workspace-hero {
+      display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      align-items: center; gap: clamp(1.5rem, 4vw, 3.5rem);
+      padding: clamp(1.4rem, 4vw, 3.75rem); margin-block-end: 2rem;
+      border: 1px solid var(--border); border-radius: 1.25rem; background: var(--surface);
+    }
+    .workspace-hero h1 { font-size: clamp(2rem, 4.3vw, 4rem); letter-spacing: -0.055em; line-height: 1.03; }
+    .workspace-hero-copy p { color: var(--muted); font-size: 1.04rem; max-width: 34ch; margin-block: 1.1rem 1.5rem; }
+    .workspace-demo {
+      min-width: 0; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 0.85rem; overflow: hidden;
+    }
+    @media (max-width: 800px) { .workspace-hero { grid-template-columns: 1fr; } }
+  </style>
   <link rel="stylesheet" href="/styles.css" />
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -206,7 +260,13 @@
         </search>
       </div>
 
-      <div id="spacesGrid" class="spaces-grid" aria-live="polite"></div>
+      <div id="spacesGrid" class="spaces-grid" aria-live="polite">
+        <div class="empty-state" data-prerendered-empty="true">
+          <h3>No Spaces yet</h3>
+          <p>Published community projects will appear here. You can explore a sample workspace now.</p>
+          <button type="button" class="btn btn-primary btn-sm" id="emptyStateCtaBtn">Try the workspace demo</button>
+        </div>
+      </div>
     </section>
 
     <!-- VIEW: TEMPLATES MARKETPLACE -->
@@ -2315,6 +2375,6 @@ curl -X POST https://spacehub.win/api/agent/v1/spaces/USERNAME/my-web-app/deploy
     </form>
   </dialog>
 
-  <script src="/app.js"></script>
+  <script defer src="/app.js"></script>
 </body>
 </html>

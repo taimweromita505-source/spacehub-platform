@@ -285,8 +285,23 @@ function updateAuthUI() {
     }
   }
   updateAgentProviderBadge();
-  refreshAccountExtras();
+  const scheduleIdle = window.requestIdleCallback || ((cb) => setTimeout(cb, 150));
+  scheduleIdle(() => refreshAccountExtras());
 }
+
+let lastRenderedSpacesSig = '';
+
+function bindEmptyStateButton() {
+  const btn = document.getElementById('emptyStateCtaBtn');
+  if (!btn || btn._shBound) return;
+  btn._shBound = true;
+  btn.addEventListener('click', () => {
+    if (state.user) startSpaceCreation();
+    else showWorkspaceDemo();
+  });
+}
+
+bindEmptyStateButton();
 
 async function loadSpacesList() {
   const grid = document.getElementById('spacesGrid');
@@ -305,10 +320,25 @@ async function loadSpacesList() {
     sub.textContent = 'Public applications deployed by the community';
   }
 
+  if (state.filter === 'public' && !state.searchQuery && !state.spaces.length) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('sh_cached_public_spaces') || 'null');
+      if (Array.isArray(cached) && cached.length > 0) {
+        state.spaces = cached;
+        renderSpacesGrid();
+      }
+    } catch (_e) {}
+  }
+
   try {
     const q = encodeURIComponent(state.searchQuery);
     const data = await apiFetch(`/api/spaces?filter=${state.filter}&search=${q}`);
     state.spaces = data.spaces || [];
+    if (state.filter === 'public' && !state.searchQuery) {
+      try {
+        localStorage.setItem('sh_cached_public_spaces', JSON.stringify(state.spaces));
+      } catch (_e) {}
+    }
     renderSpacesGrid();
   } catch (err) {
     grid.innerHTML = `<p>${escapeHtml(err.message)}</p>`;
@@ -317,7 +347,20 @@ async function loadSpacesList() {
 
 function renderSpacesGrid() {
   const grid = document.getElementById('spacesGrid');
+  const sig = JSON.stringify({
+    u: Boolean(state.user),
+    q: state.searchQuery,
+    s: state.spaces.map((x) => `${x.id}:${x.updatedAt}:${x.views}:${x.likes}:${x.isOwner}`)
+  });
+  if (sig === lastRenderedSpacesSig) return;
+  lastRenderedSpacesSig = sig;
+
   if (!state.spaces.length) {
+    const prerendered = grid.querySelector('[data-prerendered-empty="true"]');
+    if (prerendered && !state.user && !state.searchQuery) {
+      bindEmptyStateButton();
+      return;
+    }
     const actionLabel = state.user ? 'Create a Space' : 'Try the workspace demo';
     grid.innerHTML = `
       <div class="empty-state">
@@ -330,10 +373,7 @@ function renderSpacesGrid() {
         <button type="button" class="btn btn-primary btn-sm" id="emptyStateCtaBtn">${actionLabel}</button>
       </div>
     `;
-    document.getElementById('emptyStateCtaBtn').addEventListener('click', () => {
-      if (state.user) startSpaceCreation();
-      else showWorkspaceDemo();
-    });
+    bindEmptyStateButton();
     return;
   }
 
@@ -3955,6 +3995,14 @@ async function initGoogleAuth() {
 
 function setupGoogleIdentityServices() {
   if (!googleClientId) return;
+  if (!document.getElementById('gsiClientScript')) {
+    const s = document.createElement('script');
+    s.id = 'gsiClientScript';
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.defer = true;
+    document.body.appendChild(s);
+  }
 
   function tryRender() {
     if (typeof google === 'undefined' || !google.accounts || !google.accounts.id) {
@@ -4685,16 +4733,26 @@ document.getElementById('copyInstallLinkBtn')?.addEventListener('click', async (
 
 // Bootstrap application on load
 (async function initApp() {
-  try {
-    const me = await apiFetch('/api/auth/me');
-    state.user = me.user;
-  } catch (_e) {
-    state.user = null;
-  }
+  const spacesPromise = loadSpacesList();
+  const authPromise = apiFetch('/api/auth/me')
+    .then((me) => {
+      state.user = me.user;
+    })
+    .catch(() => {
+      state.user = null;
+    });
+
+  await Promise.allSettled([authPromise, spacesPromise]);
   updateAuthUI();
-  initGoogleAuth();
-  initStripeConfig();
-  await loadSpacesList();
+  if (state.user) {
+    renderSpacesGrid();
+  }
+
+  const scheduleIdle = window.requestIdleCallback || ((cb) => setTimeout(cb, 150));
+  scheduleIdle(() => {
+    initGoogleAuth();
+    initStripeConfig();
+  });
 
   const params = new URLSearchParams(window.location.search);
   if (params.get('reset')) {

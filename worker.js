@@ -3394,6 +3394,9 @@ function buildBundledHtml(files, origin = '', space = null) {
   const supportsAndroid = appPlatform === 'both' || appPlatform === 'android';
   const supportsIphone = appPlatform === 'both' || appPlatform === 'iphone';
 
+  // Boost LCP for the first above-the-fold hero image when not explicitly lazy-loaded
+  html = html.replace(/<img\b(?![^>]*\bfetchpriority=)(?![^>]*\bloading=["']lazy["'])([^>]*)>/i, '<img fetchpriority="high"$1>');
+
   if (space) {
     const safeTitle = String(space.title || space.slug).replace(/["<>]/g, '');
     const safeDesc = String(space.description || `${safeTitle} — Hosted on SpaceHub`).replace(/["<>]/g, '');
@@ -6329,7 +6332,7 @@ const spaceHubWorker = {
       liveHeaders['X-SpaceHub-Canary'] = isCanaryHit ? 'true' : 'false';
       if (mode !== 'draft' && space.releaseId) {
         liveHeaders['X-SpaceHub-Release'] = space.releaseId;
-        if (!liveHeaders['Cache-Control']) liveHeaders['Cache-Control'] = 'no-store';
+        if (!liveHeaders['Cache-Control']) liveHeaders['Cache-Control'] = 'no-cache';
       }
       if (hasAb && mode !== 'draft') {
         liveHeaders['Set-Cookie'] = `sh_ab_${space.slug}=${variant}; Path=/; Max-Age=2592000; SameSite=Lax`;

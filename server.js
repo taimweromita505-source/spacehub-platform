@@ -5003,6 +5003,9 @@ function buildBundledHtml(files, space = null) {
   const supportsAndroid = appPlatform === 'both' || appPlatform === 'android';
   const supportsIphone = appPlatform === 'both' || appPlatform === 'iphone';
 
+  // Boost LCP for the first above-the-fold hero image when not explicitly lazy-loaded
+  html = html.replace(/<img\b(?![^>]*\bfetchpriority=)(?![^>]*\bloading=["']lazy["'])([^>]*)>/i, '<img fetchpriority="high"$1>');
+
   if (space) {
     const safeTitle = String(space.title || space.slug).replace(/["<>]/g, '');
     const safeDesc = String(space.description || `${safeTitle} — Hosted on SpaceHub`).replace(/["<>]/g, '');

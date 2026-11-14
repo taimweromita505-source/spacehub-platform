@@ -1401,7 +1401,11 @@ dialog::backdrop {
 .demo-preview[data-size="tablet"] .demo-preview-page { width: 80%; }
 .demo-preview[data-size="mobile"] .demo-preview-page { width: 64%; }
 
-.workspace-starters { margin-block: 2rem 2.5rem; }
+.workspace-starters {
+  margin-block: 2rem 2.5rem;
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 220px;
+}
 .workspace-starters h2 { margin-bottom: 0.7rem; font-size: 1.25rem; }
 .starter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
 .starter-card {
@@ -1491,3 +1495,14 @@ dialog::backdrop {
 .launch-checklist { list-style: none; margin-block-start: .6rem; }
 .launch-checklist li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .3rem 1rem; padding-block: .35rem; }
 .launch-checklist span { color: var(--muted); }
+
+/* Core Web Vitals & LCP Off-Screen Rendering Containment */
+.spaces-grid {
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 320px;
+}
+
+.space-card,
+.workspace-demo {
+  contain: layout style paint;
+}
