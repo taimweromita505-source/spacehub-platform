@@ -1402,6 +1402,37 @@ document.getElementById('injectStackSelect')?.addEventListener('change', (e) => 
     return;
   }
 
+  if (stack === 'firewall_rules') {
+    state.workingFiles['firewall.json'] = JSON.stringify({
+      "enabled": true,
+      "blockedIps": [],
+      "blockedCountries": [],
+      "blockedUserAgents": ["curl/0.0", "badbot", "python-scraper"],
+      "requireApiKey": ""
+    }, null, 2);
+    state.activeFile = 'firewall.json';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['firewall.json'];
+    showToast('Created firewall.json edge security rules!');
+    return;
+  }
+
+  if (stack === 'vitals_telemetry') {
+    const slug = state.selectedSpace?.slug || 'demo';
+    const snippet = `\n<!-- SpaceHub Core Web Vitals Telemetry SDK -->\n<script>\n(function(){\n  window.addEventListener('load', function() {\n    setTimeout(function() {\n      var nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];\n      var ttfb = nav ? Math.round(nav.responseStart - nav.requestStart) : 120;\n      fetch('/live/${slug}/vitals', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ metrics: [{ metric: 'TTFB', value: Math.max(1, ttfb), path: location.pathname }] })\n      }).catch(function(){});\n    }, 1000);\n  });\n})();\n</script>\n`;
+    const curHtml = state.workingFiles['index.html'] || '';
+    state.workingFiles['index.html'] = curHtml.includes('</head>')
+      ? curHtml.replace('</head>', snippet + '</head>')
+      : curHtml + snippet;
+    state.activeFile = 'index.html';
+    recordDraftEdit();
+    renderFileTabs();
+    document.getElementById('codeEditorTextarea').value = state.workingFiles['index.html'];
+    showToast('Injected Core Web Vitals Telemetry SDK into index.html!');
+    return;
+  }
+
   const tag = snippets[stack];
   if (!tag) return;
   let html = state.workingFiles['index.html'] || '';

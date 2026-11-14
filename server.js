@@ -1355,6 +1355,34 @@ function generateSpaceOpenApiSpec(space, origin = 'https://spacehub.win') {
   };
 }
 
+async function signWebhookPayloadHmac(secret = '', bodyStr = '') {
+  const hmac = crypto.createHmac('sha256', String(secret || 'spacehub_default_hmac_secret'));
+  hmac.update(String(bodyStr || ''));
+  return `sha256=${hmac.digest('hex')}`;
+}
+
+function summarizeSpaceVitals(samples = []) {
+  const metrics = ['LCP', 'CLS', 'INP', 'TTFB', 'FCP'];
+  const summary = {};
+  for (const m of metrics) {
+    const vals = samples
+      .filter((s) => s && s.metric === m && typeof s.value === 'number')
+      .map((s) => s.value)
+      .sort((a, b) => a - b);
+    if (vals.length === 0) continue;
+    const p50 = vals[Math.floor(vals.length * 0.5)];
+    const p75 = vals[Math.floor(vals.length * 0.75)];
+    const p95 = vals[Math.floor(vals.length * 0.95)];
+    let rating = 'good';
+    if (m === 'LCP' && p75 > 2500) rating = p75 > 4000 ? 'poor' : 'needs-improvement';
+    if (m === 'CLS' && p75 > 0.1) rating = p75 > 0.25 ? 'poor' : 'needs-improvement';
+    if (m === 'INP' && p75 > 200) rating = p75 > 500 ? 'poor' : 'needs-improvement';
+    if (m === 'TTFB' && p75 > 800) rating = p75 > 1800 ? 'poor' : 'needs-improvement';
+    summary[m] = { count: vals.length, p50, p75, p95, rating };
+  }
+  return summary;
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;

@@ -2170,6 +2170,126 @@ function generateSpaceOpenApiSpec(space, origin = 'https://spacehub.win') {
   };
 }
 
+async function signWebhookPayloadHmac(secret = '', bodyStr = '') {
+  const enc = new TextEncoder();
+  const keyBytes = enc.encode(String(secret || 'spacehub_default_hmac_secret'));
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sigBuf = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(String(bodyStr || '')));
+  const hex = Array.from(new Uint8Array(sigBuf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `sha256=${hex}`;
+}
+
+async function dispatchSpaceEventBus(space, eventType, data = {}) {
+  if (!space || !Array.isArray(space.webhookSubscriptions)) return [];
+  const subs = space.webhookSubscriptions.filter(
+    (s) => s && s.active !== false && Array.isArray(s.events) && (s.events.includes('*') || s.events.includes(eventType))
+  );
+  const results = [];
+  const timestamp = new Date().toISOString();
+
+  for (const sub of subs) {
+    const bodyObj = {
+      id: 'ev_' + randomHex(6),
+      event: eventType,
+      space: space.slug,
+      timestamp,
+      data
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+    const sig = await signWebhookPayloadHmac(sub.secret || 'sh_whsec_default', bodyStr);
+    let status = 'skipped';
+    if (String(sub.url || '').startsWith('mock://')) {
+      status = `delivered_mock:${sub.url}`;
+    } else if (/^https?:\/\//i.test(String(sub.url || ''))) {
+      try {
+        const r = await fetch(sub.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-SpaceHub-Event': eventType,
+            'X-SpaceHub-Signature': sig
+          },
+          body: bodyStr
+        });
+        status = `http_${r.status}`;
+      } catch (err) {
+        status = `error:${err.message || 'failed'}`;
+      }
+    }
+    sub.lastDeliveryAt = timestamp;
+    sub.lastStatus = status;
+    sub.lastSignature = sig;
+    results.push({ id: sub.id, url: sub.url, event: eventType, signature: sig, status });
+  }
+  return results;
+}
+
+function evaluateSpaceFirewall(space, files = {}, request) {
+  let fw = space.firewallConfig && typeof space.firewallConfig === 'object' ? space.firewallConfig : null;
+  if (!fw && files && files['firewall.json']) {
+    try {
+      fw = JSON.parse(files['firewall.json']);
+    } catch (_e) {}
+  }
+  if (!fw || typeof fw !== 'object' || fw.enabled === false) {
+    return { allowed: true };
+  }
+  const ip = (request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'anon').split(',')[0].trim();
+  const country = (request.headers.get('cf-ipcountry') || request.headers.get('x-country') || '').trim().toUpperCase();
+  const ua = (request.headers.get('user-agent') || '').toLowerCase();
+  const apiKeyHdr = (request.headers.get('x-space-api-key') || '').trim();
+
+  if (Array.isArray(fw.blockedIps) && fw.blockedIps.includes(ip)) {
+    return { allowed: false, status: 403, reason: 'blocked_ip' };
+  }
+  if (Array.isArray(fw.blockedCountries) && country && fw.blockedCountries.map((c) => String(c).toUpperCase()).includes(country)) {
+    return { allowed: false, status: 403, reason: 'blocked_country' };
+  }
+  if (Array.isArray(fw.blockedUserAgents) && ua) {
+    for (const pat of fw.blockedUserAgents) {
+      if (pat && ua.includes(String(pat).toLowerCase())) {
+        return { allowed: false, status: 403, reason: 'blocked_user_agent' };
+      }
+    }
+  }
+  if (fw.requireApiKey && typeof fw.requireApiKey === 'string' && fw.requireApiKey.trim() !== '') {
+    if (apiKeyHdr !== fw.requireApiKey.trim()) {
+      return { allowed: false, status: 401, reason: 'invalid_or_missing_space_api_key' };
+    }
+  }
+  return { allowed: true };
+}
+
+function summarizeSpaceVitals(samples = []) {
+  const metrics = ['LCP', 'CLS', 'INP', 'TTFB', 'FCP'];
+  const summary = {};
+  for (const m of metrics) {
+    const vals = samples
+      .filter((s) => s && s.metric === m && typeof s.value === 'number')
+      .map((s) => s.value)
+      .sort((a, b) => a - b);
+    if (vals.length === 0) continue;
+    const p50 = vals[Math.floor(vals.length * 0.5)];
+    const p75 = vals[Math.floor(vals.length * 0.75)];
+    const p95 = vals[Math.floor(vals.length * 0.95)];
+    let rating = 'good';
+    if (m === 'LCP' && p75 > 2500) rating = p75 > 4000 ? 'poor' : 'needs-improvement';
+    if (m === 'CLS' && p75 > 0.1) rating = p75 > 0.25 ? 'poor' : 'needs-improvement';
+    if (m === 'INP' && p75 > 200) rating = p75 > 500 ? 'poor' : 'needs-improvement';
+    if (m === 'TTFB' && p75 > 800) rating = p75 > 1800 ? 'poor' : 'needs-improvement';
+    summary[m] = { count: vals.length, p50, p75, p95, rating };
+  }
+  return summary;
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
@@ -3271,8 +3391,8 @@ const spaceHubWorker = {
       }
     }
 
-    // 1b-0. Per-Space Built-in User Authentication API (/live/:slug/auth and /live/:slug/auth/me)
-    const spaceAuthMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/auth(?:\/(me))?\/?$/i);
+    // 1b-0. Per-Space Built-in User Authentication API (/live/:slug/auth, /live/:slug/auth/me, /live/:slug/auth/otp)
+    const spaceAuthMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/auth(?:\/(me|otp))?\/?$/i);
     if (spaceAuthMatch) {
       const slug = decodeURIComponent(spaceAuthMatch[1]).toLowerCase();
       const subAction = (spaceAuthMatch[2] || '').toLowerCase();
@@ -3280,6 +3400,98 @@ const spaceHubWorker = {
       if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
       space.appUsers = Array.isArray(space.appUsers) ? space.appUsers : [];
       space.appSessions = space.appSessions && typeof space.appSessions === 'object' ? space.appSessions : {};
+      space.appOtps = space.appOtps && typeof space.appOtps === 'object' ? space.appOtps : {};
+
+      if (subAction === 'otp' && method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const email = String(payload.email || '').trim().toLowerCase();
+        const codeInput = String(payload.code || payload.otp || '').trim();
+        const name = String(payload.name || email.split('@')[0] || 'Member').trim().slice(0, 80);
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          return jsonResponse({ error: 'Valid email address is required.' }, 400);
+        }
+
+        if (!codeInput) {
+          // Request 6-digit OTP & Magic Link token
+          const code = String(100000 + (parseInt(randomHex(3), 16) % 900000)).slice(0, 6);
+          const magicToken = 'ml_' + randomHex(12);
+          const expiresAtMs = Date.now() + 10 * 60 * 1000; // 10 minutes
+          space.appOtps[email] = { code, magicToken, name, expiresAtMs };
+          await saveDb(env, db);
+          return jsonResponse(
+            {
+              ok: true,
+              sent: true,
+              email,
+              expiresInSec: 600,
+              codePreview: code,
+              magicLinkUrl: `${url.origin}/live/${space.slug}/auth/otp?token=${magicToken}&email=${encodeURIComponent(email)}`
+            },
+            200,
+            { 'Access-Control-Allow-Origin': '*' }
+          );
+        }
+
+        // Verify 6-digit OTP code
+        const record = space.appOtps[email];
+        if (!record || Date.now() > record.expiresAtMs || record.code !== codeInput) {
+          return jsonResponse({ error: 'Invalid or expired one-time passcode.' }, 401);
+        }
+        delete space.appOtps[email];
+        let appUser = space.appUsers.find((u) => u.email === email);
+        if (!appUser) {
+          appUser = {
+            id: 'au_' + randomHex(6),
+            email,
+            name: record.name || name,
+            authMethod: 'otp',
+            createdAt: new Date().toISOString()
+          };
+          space.appUsers.push(appUser);
+        }
+        const sessionTok = 'as_' + randomHex(12);
+        space.appSessions[sessionTok] = appUser.id;
+        await dispatchSpaceEventBus(space, 'user.otp_login', { userId: appUser.id, email: appUser.email });
+        await saveDb(env, db);
+        return jsonResponse(
+          {
+            ok: true,
+            token: sessionTok,
+            user: { id: appUser.id, email: appUser.email, name: appUser.name, createdAt: appUser.createdAt }
+          },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (subAction === 'otp' && method === 'GET') {
+        const email = String(url.searchParams.get('email') || '').trim().toLowerCase();
+        const magicTok = String(url.searchParams.get('token') || '').trim();
+        const record = email ? space.appOtps[email] : null;
+        if (!record || Date.now() > record.expiresAtMs || !magicTok || record.magicToken !== magicTok) {
+          return jsonResponse({ error: 'Invalid or expired magic link.' }, 401);
+        }
+        delete space.appOtps[email];
+        let appUser = space.appUsers.find((u) => u.email === email);
+        if (!appUser) {
+          appUser = {
+            id: 'au_' + randomHex(6),
+            email,
+            name: record.name || email.split('@')[0],
+            authMethod: 'magic_link',
+            createdAt: new Date().toISOString()
+          };
+          space.appUsers.push(appUser);
+        }
+        const sessionTok = 'as_' + randomHex(12);
+        space.appSessions[sessionTok] = appUser.id;
+        await saveDb(env, db);
+        return jsonResponse({
+          ok: true,
+          token: sessionTok,
+          user: { id: appUser.id, email: appUser.email, name: appUser.name, createdAt: appUser.createdAt }
+        });
+      }
 
       if (subAction === 'me' && method === 'GET') {
         const authHdr = request.headers.get('authorization') || '';
@@ -3719,6 +3931,137 @@ const spaceHubWorker = {
       );
     }
 
+    // 1b-0h. Wave 18: Built-in Webhooks & Event Bus Subscription System (/live/:slug/webhooks)
+    const spaceWebhooksMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/webhooks(?:\/(dispatch))?\/?$/i);
+    if (spaceWebhooksMatch) {
+      const slug = decodeURIComponent(spaceWebhooksMatch[1]).toLowerCase();
+      const subAction = (spaceWebhooksMatch[2] || '').toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.webhookSubscriptions = Array.isArray(space.webhookSubscriptions) ? space.webhookSubscriptions : [];
+
+      if (subAction === 'dispatch' && method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const eventType = String(payload.event || 'custom.event').trim().slice(0, 64);
+        const eventData = payload.data && typeof payload.data === 'object' ? payload.data : payload;
+        const deliveries = await dispatchSpaceEventBus(space, eventType, eventData);
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, event: eventType, deliveredCount: deliveries.length, deliveries },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'GET') {
+        if (!user || !canViewSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized.' }, 403);
+        }
+        return jsonResponse({
+          ok: true,
+          count: space.webhookSubscriptions.length,
+          subscriptions: space.webhookSubscriptions
+        });
+      }
+
+      if (method === 'POST') {
+        if (!user || !canEditSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized.' }, 403);
+        }
+        const payload = await request.json().catch(() => ({}));
+        const targetUrl = String(payload.url || '').trim().slice(0, 300);
+        if (!/^https?:\/\/|^mock:\/\//i.test(targetUrl)) {
+          return jsonResponse({ error: 'Webhook URL must start with https://, http://, or mock://' }, 400);
+        }
+        const events = Array.isArray(payload.events) && payload.events.length
+          ? payload.events.map((e) => String(e).trim())
+          : ['*'];
+        const secret = String(payload.secret || `sh_whsec_${randomHex(10)}`).trim();
+        const sub = {
+          id: 'wh_' + randomHex(6),
+          url: targetUrl,
+          events,
+          secret,
+          active: payload.active !== false,
+          createdAt: new Date().toISOString(),
+          lastDeliveryAt: null,
+          lastStatus: null
+        };
+        space.webhookSubscriptions.push(sub);
+        if (space.webhookSubscriptions.length > 25) {
+          space.webhookSubscriptions = space.webhookSubscriptions.slice(-25);
+        }
+        recordAuditLog(space, user, 'webhook_subscription_added', { id: sub.id, url: sub.url, events: sub.events });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, subscription: sub, count: space.webhookSubscriptions.length }, 201);
+      }
+
+      if (method === 'DELETE') {
+        if (!user || !canEditSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized.' }, 403);
+        }
+        const targetId = url.searchParams.get('id');
+        if (targetId) {
+          space.webhookSubscriptions = space.webhookSubscriptions.filter((s) => s.id !== targetId);
+        } else {
+          space.webhookSubscriptions = [];
+        }
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, count: space.webhookSubscriptions.length, subscriptions: space.webhookSubscriptions });
+      }
+    }
+
+    // 1b-0i. Wave 18: Live App Performance & Core Web Vitals Telemetry (/live/:slug/vitals)
+    const spaceVitalsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/vitals\/?$/i);
+    if (spaceVitalsMatch) {
+      const slug = decodeURIComponent(spaceVitalsMatch[1]).toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.vitalsSamples = Array.isArray(space.vitalsSamples) ? space.vitalsSamples : [];
+
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const items = Array.isArray(payload.metrics) ? payload.metrics : [payload];
+        const nowIso = new Date().toISOString();
+        const validMetrics = ['LCP', 'CLS', 'INP', 'TTFB', 'FCP'];
+        let recorded = 0;
+
+        for (const item of items) {
+          const metric = String(item.metric || item.name || '').toUpperCase().trim();
+          const val = Number(item.value);
+          if (validMetrics.includes(metric) && !isNaN(val) && val >= 0) {
+            space.vitalsSamples.push({
+              id: 'vt_' + randomHex(4),
+              metric,
+              value: val,
+              path: String(item.path || '/').slice(0, 80),
+              createdAt: nowIso
+            });
+            recorded++;
+          }
+        }
+        if (space.vitalsSamples.length > 300) {
+          space.vitalsSamples = space.vitalsSamples.slice(-300);
+        }
+        await saveDb(env, db);
+        const summary = summarizeSpaceVitals(space.vitalsSamples);
+        return jsonResponse(
+          { ok: true, recorded, totalSamples: space.vitalsSamples.length, summary },
+          201,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'GET') {
+        const summary = summarizeSpaceVitals(space.vitalsSamples);
+        return jsonResponse(
+          { ok: true, totalSamples: space.vitalsSamples.length, summary, recent: space.vitalsSamples.slice(-20) },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+    }
+
     // 1b-1. Per-Space Server-Side API Proxy & Secrets Vault (POST /live/:slug/proxy)
     const proxyLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/proxy\/?$/i);
     if (proxyLiveMatch && method === 'POST') {
@@ -3843,6 +4186,7 @@ const spaceHubWorker = {
           Message: entry.message || '—'
         }
       });
+      await dispatchSpaceEventBus(space, 'form.submitted', entry);
       recordAuditLog(space, null, 'form_submission_received', { name: entry.name, email: entry.email });
       await saveDb(env, db);
 
@@ -4527,6 +4871,17 @@ const spaceHubWorker = {
       }
       const baseFiles =
         (mode === 'draft' && canAccess) ? space.draftFiles : space.publishedFiles || space.draftFiles;
+
+      // Wave 18: Edge Rate-Limiting & Bot Protection Firewall per Space (firewall.json)
+      if (!canAccess && mode !== 'draft') {
+        const fwCheck = evaluateSpaceFirewall(space, baseFiles, request);
+        if (!fwCheck.allowed) {
+          return jsonResponse(
+            { error: 'Access denied by Space Firewall.', reason: fwCheck.reason },
+            fwCheck.status || 403
+          );
+        }
+      }
 
       if (space.maintenanceMode && !canAccess && mode !== 'draft') {
         if (baseFiles && baseFiles['maintenance.html']) {
