@@ -2290,6 +2290,116 @@ function summarizeSpaceVitals(samples = []) {
   return summary;
 }
 
+function recordSpaceInspectorLog(space, { method = 'POST', path = '/', status = 200, durationMs = 1, requestBody = null, responsePreview = null } = {}) {
+  if (!space) return null;
+  space.requestInspectorLogs = Array.isArray(space.requestInspectorLogs) ? space.requestInspectorLogs : [];
+  let safeBody = requestBody;
+  if (safeBody && typeof safeBody === 'object') {
+    try {
+      safeBody = JSON.parse(JSON.stringify(safeBody));
+      if (safeBody.password) safeBody.password = '***';
+      if (safeBody.secret) safeBody.secret = '***';
+      if (safeBody.apiKey) safeBody.apiKey = '***';
+    } catch (_e) {}
+  }
+  const entry = {
+    id: 'req_' + randomHex(6),
+    method: String(method).toUpperCase(),
+    path: String(path),
+    status: Number(status) || 200,
+    durationMs: Math.max(1, Number(durationMs) || 1),
+    requestBody: safeBody,
+    responsePreview: responsePreview || null,
+    timestamp: new Date().toISOString()
+  };
+  space.requestInspectorLogs.unshift(entry);
+  if (space.requestInspectorLogs.length > 50) {
+    space.requestInspectorLogs = space.requestInspectorLogs.slice(0, 50);
+  }
+  return entry;
+}
+
+async function processSpaceJobQueue(space, targetJobId = '') {
+  if (!space || !Array.isArray(space.jobQueue)) return [];
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const processed = [];
+
+  for (const job of space.jobQueue) {
+    if (!job || job.status !== 'queued') continue;
+    if (targetJobId && job.id !== targetJobId) continue;
+    const dueMs = job.runAt ? Date.parse(job.runAt) : 0;
+    if (!targetJobId && !Number.isNaN(dueMs) && dueMs > nowMs) continue;
+
+    job.attempts = (job.attempts || 0) + 1;
+    job.status = 'running';
+    job.startedAt = nowIso;
+
+    let succeeded = true;
+    let execOutput = { executed: true, task: job.name, attempt: job.attempts };
+
+    if (job.payload && job.payload.simulateFail && job.attempts <= (job.maxRetries || 0)) {
+      succeeded = false;
+      execOutput = { error: 'Simulated transient job failure' };
+    } else if (job.webhookUrl) {
+      if (job.webhookUrl.startsWith('mock://')) {
+        execOutput = { webhookStatus: `delivered_mock:${job.webhookUrl}`, task: job.name };
+      } else if (/^https?:\/\//i.test(job.webhookUrl)) {
+        try {
+          const r = await fetch(job.webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jobId: job.id,
+              space: space.slug,
+              name: job.name,
+              payload: job.payload,
+              attempt: job.attempts,
+              timestamp: nowIso
+            })
+          });
+          succeeded = r.ok;
+          execOutput = { webhookStatus: `http_${r.status}` };
+        } catch (err) {
+          succeeded = false;
+          execOutput = { error: err.message || 'webhook_failed' };
+        }
+      }
+    }
+
+    if (succeeded) {
+      job.status = 'completed';
+      job.completedAt = new Date().toISOString();
+      job.result = execOutput;
+      await dispatchSpaceEventBus(space, 'job.completed', { jobId: job.id, name: job.name, result: execOutput });
+    } else if (job.attempts <= (job.maxRetries ?? 2)) {
+      job.status = 'queued';
+      job.lastError = execOutput.error || 'execution_failed';
+    } else {
+      job.status = 'failed';
+      job.completedAt = new Date().toISOString();
+      job.result = execOutput;
+      await dispatchSpaceEventBus(space, 'job.failed', { jobId: job.id, name: job.name, result: execOutput });
+    }
+    processed.push(job);
+  }
+  return processed;
+}
+
+function computeSearchFacets(space) {
+  const index = Array.isArray(space?.searchIndex) ? space.searchIndex : [];
+  const tagCounts = {};
+  for (const doc of index) {
+    if (doc && Array.isArray(doc.tags)) {
+      for (const t of doc.tags) {
+        const clean = String(t).trim().toLowerCase();
+        if (clean) tagCounts[clean] = (tagCounts[clean] || 0) + 1;
+      }
+    }
+  }
+  return { tags: tagCounts, indexedCount: index.length };
+}
+
 function normalizeSpaceSecrets(input) {
   const out = {};
   if (!input) return out;
@@ -2398,10 +2508,56 @@ async function executeSpaceCron(space, overrideUrl = '') {
   return space.cronLastStatus;
 }
 
-function searchSpaceContent(space, rawQuery) {
+function searchSpaceContent(space, rawQuery, tagFilter = '') {
   const q = String(rawQuery || '').trim().toLowerCase();
-  if (!q) return [];
+  const cleanTag = String(tagFilter || '').trim().toLowerCase();
+  if (!q && !cleanTag) return [];
+  const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
   const results = [];
+
+  // Wave 19: Search custom full-text index with weighted scoring & tag facets
+  const customIndex = Array.isArray(space.searchIndex) ? space.searchIndex : [];
+  const scoredDocs = [];
+  for (const doc of customIndex) {
+    if (!doc) continue;
+    const docTags = Array.isArray(doc.tags) ? doc.tags.map((t) => String(t).toLowerCase()) : [];
+    if (cleanTag && !docTags.includes(cleanTag)) continue;
+
+    const title = String(doc.title || '');
+    const body = String(doc.body || doc.content || '');
+    const titleLower = title.toLowerCase();
+    const bodyLower = body.toLowerCase();
+
+    let score = cleanTag ? 5 : 0;
+    if (q) {
+      if (titleLower.includes(q)) score += 10;
+      if (docTags.some((t) => t.includes(q))) score += 6;
+      if (bodyLower.includes(q)) score += 3;
+      for (const tok of tokens) {
+        if (titleLower.includes(tok)) score += 4;
+        if (bodyLower.includes(tok)) score += 2;
+      }
+    }
+    if (score > 0) {
+      const idx = q ? bodyLower.indexOf(tokens[0] || q) : 0;
+      const start = Math.max(0, idx - 30);
+      scoredDocs.push({
+        type: 'indexed_doc',
+        id: doc.id,
+        title,
+        tags: doc.tags || [],
+        url: doc.url || `/live/${space.slug}`,
+        snippet: body.slice(start, start + 160),
+        metadata: doc.metadata || {},
+        score
+      });
+    }
+  }
+  scoredDocs.sort((a, b) => b.score - a.score);
+  results.push(...scoredDocs);
+
+  if (!q) return results.slice(0, 25);
+
   const store = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
   Object.entries(store).forEach(([k, v]) => {
     const serialized = typeof v === 'string' ? v : JSON.stringify(v);
@@ -3158,6 +3314,10 @@ const spaceHubWorker = {
       if (space.cronSchedule && ['hourly', 'daily', 'weekly'].includes(space.cronSchedule)) {
         await executeSpaceCron(space);
         changed = true;
+      }
+      if (Array.isArray(space.jobQueue) && space.jobQueue.some((j) => j && j.status === 'queued')) {
+        const ran = await processSpaceJobQueue(space);
+        if (ran.length > 0) changed = true;
       }
     }
 
@@ -4062,6 +4222,228 @@ const spaceHubWorker = {
       }
     }
 
+    // 1b-0j. Wave 19: Built-in Cron & Background Job Queue API per Space (/live/:slug/jobs & /live/:slug/jobs/run)
+    const spaceJobsMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/jobs(?:\/(run))?\/?$/i);
+    if (spaceJobsMatch) {
+      const slug = decodeURIComponent(spaceJobsMatch[1]).toLowerCase();
+      const jobSubAction = (spaceJobsMatch[2] || '').toLowerCase();
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.jobQueue = Array.isArray(space.jobQueue) ? space.jobQueue : [];
+
+      if (jobSubAction === 'run' && method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const targetJobId = String(payload.jobId || url.searchParams.get('id') || '').trim();
+        const processed = await processSpaceJobQueue(space, targetJobId);
+        recordSpaceInspectorLog(space, {
+          method: 'POST',
+          path: pathname,
+          status: 200,
+          requestBody: payload,
+          responsePreview: { processedCount: processed.length }
+        });
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, processedCount: processed.length, processed, totalJobs: space.jobQueue.length },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const name = String(payload.name || payload.task || 'background_task').trim().slice(0, 80);
+        const delaySeconds = Math.max(0, Math.min(86400 * 7, Number(payload.delaySeconds || 0)));
+        const maxRetries = Math.max(0, Math.min(5, Number(payload.maxRetries ?? 2)));
+        const nowMs = Date.now();
+        const job = {
+          id: 'job_' + randomHex(6),
+          name,
+          payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : (payload.data || {}),
+          delaySeconds,
+          maxRetries,
+          attempts: 0,
+          webhookUrl: String(payload.webhookUrl || '').trim().slice(0, 300),
+          status: 'queued',
+          runAt: new Date(nowMs + delaySeconds * 1000).toISOString(),
+          createdAt: new Date(nowMs).toISOString(),
+          completedAt: null,
+          result: null
+        };
+        space.jobQueue.unshift(job);
+        if (space.jobQueue.length > 200) space.jobQueue = space.jobQueue.slice(0, 200);
+        recordSpaceInspectorLog(space, {
+          method: 'POST',
+          path: pathname,
+          status: 201,
+          requestBody: payload,
+          responsePreview: { jobId: job.id, status: job.status }
+        });
+        await saveDb(env, db);
+        return jsonResponse(
+          { ok: true, job, queueLength: space.jobQueue.length },
+          201,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'GET') {
+        const jobId = url.searchParams.get('id');
+        if (jobId) {
+          const found = space.jobQueue.find((j) => j.id === jobId);
+          if (!found) return jsonResponse({ error: 'Job not found.' }, 404);
+          return jsonResponse({ ok: true, job: found }, 200, { 'Access-Control-Allow-Origin': '*' });
+        }
+        const statusFilter = (url.searchParams.get('status') || '').toLowerCase();
+        const list = statusFilter
+          ? space.jobQueue.filter((j) => j.status === statusFilter)
+          : space.jobQueue;
+        return jsonResponse(
+          {
+            ok: true,
+            count: list.length,
+            counts: {
+              queued: space.jobQueue.filter((j) => j.status === 'queued').length,
+              completed: space.jobQueue.filter((j) => j.status === 'completed').length,
+              failed: space.jobQueue.filter((j) => j.status === 'failed').length
+            },
+            jobs: list
+          },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'DELETE') {
+        const jobId = url.searchParams.get('id');
+        if (jobId) {
+          space.jobQueue = space.jobQueue.filter((j) => j.id !== jobId);
+        } else {
+          space.jobQueue = [];
+        }
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, count: space.jobQueue.length, jobs: space.jobQueue }, 200, { 'Access-Control-Allow-Origin': '*' });
+      }
+    }
+
+    // 1b-0k. Wave 19: Space Monetization License Key Generator & Verification API (/live/:slug/licenses)
+    const spaceLicensesMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/licenses(?:\/(verify|[a-zA-Z0-9_-]+))?\/?$/i);
+    if (spaceLicensesMatch) {
+      const slug = decodeURIComponent(spaceLicensesMatch[1]).toLowerCase();
+      const licSubParam = spaceLicensesMatch[2] ? decodeURIComponent(spaceLicensesMatch[2]) : '';
+      const space = [...db.spaces].reverse().find((s) => s.slug === slug);
+      if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
+      space.licenses = Array.isArray(space.licenses) ? space.licenses : [];
+
+      if (licSubParam.toLowerCase() === 'verify' && method === 'POST') {
+        const payload = await request.json().catch(() => ({}));
+        const keyStr = String(payload.key || payload.licenseKey || '').trim();
+        const deviceId = String(payload.deviceId || payload.fingerprint || '').trim().slice(0, 120);
+        const lic = space.licenses.find((l) => l.key === keyStr);
+        if (!lic) {
+          recordSpaceInspectorLog(space, { method: 'POST', path: pathname, status: 404, requestBody: payload, responsePreview: { valid: false, reason: 'not_found' } });
+          await saveDb(env, db);
+          return jsonResponse({ ok: false, valid: false, reason: 'license_not_found' }, 404, { 'Access-Control-Allow-Origin': '*' });
+        }
+        if (lic.status !== 'active') {
+          return jsonResponse({ ok: false, valid: false, reason: `license_${lic.status}` }, 403, { 'Access-Control-Allow-Origin': '*' });
+        }
+        if (lic.expiresAt && Date.parse(lic.expiresAt) < Date.now()) {
+          lic.status = 'expired';
+          await saveDb(env, db);
+          return jsonResponse({ ok: false, valid: false, reason: 'license_expired' }, 403, { 'Access-Control-Allow-Origin': '*' });
+        }
+        lic.activatedDevices = Array.isArray(lic.activatedDevices) ? lic.activatedDevices : [];
+        if (deviceId && !lic.activatedDevices.includes(deviceId)) {
+          if (lic.maxActivations > 0 && lic.activations >= lic.maxActivations) {
+            return jsonResponse({ ok: false, valid: false, reason: 'max_activations_reached', maxActivations: lic.maxActivations }, 403, { 'Access-Control-Allow-Origin': '*' });
+          }
+          lic.activatedDevices.push(deviceId);
+          lic.activations = lic.activatedDevices.length;
+        } else if (!deviceId) {
+          if (lic.maxActivations > 0 && lic.activations >= lic.maxActivations) {
+            return jsonResponse({ ok: false, valid: false, reason: 'max_activations_reached', maxActivations: lic.maxActivations }, 403, { 'Access-Control-Allow-Origin': '*' });
+          }
+          lic.activations = (lic.activations || 0) + 1;
+        }
+        lic.lastVerifiedAt = new Date().toISOString();
+        recordSpaceInspectorLog(space, { method: 'POST', path: pathname, status: 200, requestBody: payload, responsePreview: { valid: true, tier: lic.tier } });
+        await saveDb(env, db);
+        return jsonResponse(
+          {
+            ok: true,
+            valid: true,
+            license: {
+              key: lic.key,
+              tier: lic.tier,
+              status: lic.status,
+              customerEmail: lic.customerEmail,
+              activations: lic.activations,
+              maxActivations: lic.maxActivations,
+              expiresAt: lic.expiresAt,
+              metadata: lic.metadata || {}
+            }
+          },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
+
+      if (method === 'POST') {
+        if (!user || !canEditSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized: Owner or Editor role required to issue licenses.' }, 403);
+        }
+        const payload = await request.json().catch(() => ({}));
+        const seg = () => randomHex(2).toUpperCase();
+        const generatedKey = String(payload.key || `sh_lic_${seg()}-${seg()}-${seg()}`).trim();
+        const lic = {
+          id: 'lic_' + randomHex(6),
+          key: generatedKey,
+          customerEmail: String(payload.customerEmail || payload.email || '').trim().slice(0, 160),
+          customerName: String(payload.customerName || payload.name || '').trim().slice(0, 120),
+          tier: String(payload.tier || 'pro').trim().slice(0, 40),
+          maxActivations: Math.max(1, Math.min(1000, Number(payload.maxActivations ?? 3))),
+          activations: 0,
+          activatedDevices: [],
+          status: 'active',
+          expiresAt: payload.expiresAt ? String(payload.expiresAt) : null,
+          metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {},
+          createdAt: new Date().toISOString()
+        };
+        space.licenses.unshift(lic);
+        if (space.licenses.length > 500) space.licenses = space.licenses.slice(0, 500);
+        recordAuditLog(space, user, 'license_key_issued', { key: lic.key, tier: lic.tier, customerEmail: lic.customerEmail });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, license: lic, count: space.licenses.length }, 201, { 'Access-Control-Allow-Origin': '*' });
+      }
+
+      if (method === 'GET') {
+        if (!user || !canViewSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized.' }, 403);
+        }
+        return jsonResponse({
+          ok: true,
+          count: space.licenses.length,
+          activeCount: space.licenses.filter((l) => l.status === 'active').length,
+          licenses: space.licenses
+        });
+      }
+
+      if (method === 'DELETE') {
+        if (!user || !canEditSpace(space, user)) {
+          return jsonResponse({ error: 'Unauthorized.' }, 403);
+        }
+        const targetKey = licSubParam || url.searchParams.get('key') || '';
+        const found = space.licenses.find((l) => l.key === targetKey || l.id === targetKey);
+        if (!found) return jsonResponse({ error: 'License not found.' }, 404);
+        found.status = 'revoked';
+        found.revokedAt = new Date().toISOString();
+        recordAuditLog(space, user, 'license_key_revoked', { key: found.key });
+        await saveDb(env, db);
+        return jsonResponse({ ok: true, license: found });
+      }
+    }
+
     // 1b-1. Per-Space Server-Side API Proxy & Secrets Vault (POST /live/:slug/proxy)
     const proxyLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/proxy\/?$/i);
     if (proxyLiveMatch && method === 'POST') {
@@ -4187,6 +4569,13 @@ const spaceHubWorker = {
         }
       });
       await dispatchSpaceEventBus(space, 'form.submitted', entry);
+      recordSpaceInspectorLog(space, {
+        method: 'POST',
+        path: pathname,
+        status: 201,
+        requestBody: fields,
+        responsePreview: { submissionId: entry.id, email: entry.email }
+      });
       recordAuditLog(space, null, 'form_submission_received', { name: entry.name, email: entry.email });
       await saveDb(env, db);
 
@@ -4322,15 +4711,83 @@ const spaceHubWorker = {
       }
     }
 
-    // 1b-4. Built-in Full-Text Search API (GET /live/:slug/search?q=...)
-    const searchLiveMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/search\/?$/i);
-    if (searchLiveMatch && method === 'GET') {
-      const slug = decodeURIComponent(searchLiveMatch[1]).toLowerCase();
+    // 1b-4. Built-in Full-Text Search & Faceted Index API (/live/:slug/search & /live/:slug/search/index)
+    const searchIndexMatch = pathname.match(/^\/(?:live|s)\/([^/]+)\/search(?:\/(index))?\/?$/i);
+    if (searchIndexMatch) {
+      const slug = decodeURIComponent(searchIndexMatch[1]).toLowerCase();
+      const isIndexSubpath = Boolean(searchIndexMatch[2]);
       const space = [...db.spaces].reverse().find((s) => s.slug === slug);
       if (!space) return jsonResponse({ error: 'Space not found.' }, 404);
-      const q = url.searchParams.get('q') || '';
-      const results = searchSpaceContent(space, q);
-      return jsonResponse({ ok: true, query: q, count: results.length, results });
+      space.searchIndex = Array.isArray(space.searchIndex) ? space.searchIndex : [];
+
+      if (isIndexSubpath) {
+        if (method === 'GET') {
+          const facets = computeSearchFacets(space);
+          return jsonResponse(
+            { ok: true, count: space.searchIndex.length, facets, documents: space.searchIndex },
+            200,
+            { 'Access-Control-Allow-Origin': '*' }
+          );
+        }
+        if (method === 'POST' || method === 'PUT') {
+          const payload = await request.json().catch(() => ({}));
+          const rawDocs = Array.isArray(payload.documents) ? payload.documents : [payload];
+          const nowIso = new Date().toISOString();
+          const indexed = [];
+          for (const item of rawDocs) {
+            if (!item || typeof item !== 'object') continue;
+            const docId = String(item.id || `doc_${randomHex(5)}`).trim().slice(0, 80);
+            const docRecord = {
+              id: docId,
+              title: String(item.title || 'Untitled').trim().slice(0, 200),
+              body: String(item.body || item.content || '').trim().slice(0, 4000),
+              tags: Array.isArray(item.tags) ? item.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
+              url: String(item.url || `/live/${space.slug}`).trim().slice(0, 300),
+              metadata: item.metadata && typeof item.metadata === 'object' ? item.metadata : {},
+              updatedAt: nowIso
+            };
+            const existingIdx = space.searchIndex.findIndex((d) => d.id === docId);
+            if (existingIdx > -1) {
+              space.searchIndex[existingIdx] = docRecord;
+            } else {
+              space.searchIndex.push(docRecord);
+            }
+            indexed.push(docRecord);
+          }
+          if (space.searchIndex.length > 500) {
+            space.searchIndex = space.searchIndex.slice(-500);
+          }
+          await saveDb(env, db);
+          const facets = computeSearchFacets(space);
+          return jsonResponse(
+            { ok: true, indexedCount: indexed.length, totalDocuments: space.searchIndex.length, facets, documents: indexed },
+            201,
+            { 'Access-Control-Allow-Origin': '*' }
+          );
+        }
+        if (method === 'DELETE') {
+          const docId = url.searchParams.get('id');
+          if (docId) {
+            space.searchIndex = space.searchIndex.filter((d) => d.id !== docId);
+          } else {
+            space.searchIndex = [];
+          }
+          await saveDb(env, db);
+          return jsonResponse({ ok: true, totalDocuments: space.searchIndex.length }, 200, { 'Access-Control-Allow-Origin': '*' });
+        }
+      }
+
+      if (method === 'GET') {
+        const q = url.searchParams.get('q') || '';
+        const tag = url.searchParams.get('tag') || '';
+        const results = searchSpaceContent(space, q, tag);
+        const facets = computeSearchFacets(space);
+        return jsonResponse(
+          { ok: true, query: q, tag: tag || null, count: results.length, facets, results },
+          200,
+          { 'Access-Control-Allow-Origin': '*' }
+        );
+      }
     }
 
     // 1b-5. Automatic SEO sitemap.xml, robots.txt & /live/:slug/health
@@ -4566,6 +5023,13 @@ const spaceHubWorker = {
         if (built.error) return jsonResponse({ error: built.error }, 400, cors);
         space.orders.unshift(built.order);
         if (space.orders.length > 200) space.orders = space.orders.slice(0, 200);
+        recordSpaceInspectorLog(space, {
+          method: 'POST',
+          path: pathname,
+          status: 201,
+          requestBody: payload,
+          responsePreview: { orderId: built.order.id, amountUsd: built.order.amountUsd }
+        });
         await saveDb(env, db);
         return jsonResponse({ ok: true, order: built.order }, 201, cors);
       }
@@ -4729,6 +5193,13 @@ const spaceHubWorker = {
         };
         rows.push(newRow);
         if (rows.length > 500) space.dbTables[tableName] = rows.slice(-500);
+        recordSpaceInspectorLog(space, {
+          method: 'POST',
+          path: pathname,
+          status: 201,
+          requestBody: payload,
+          responsePreview: { table: tableName, rowId: newRow.id }
+        });
         await saveDb(env, db);
         return jsonResponse(
           { ok: true, table: tableName, row: newRow, count: space.dbTables[tableName].length },
@@ -6205,11 +6676,12 @@ const spaceHubWorker = {
       }
 
       // Single space routes: /api/spaces/:username/:slug...
-      const spaceMatch = pathname.match(/^\/api\/(?:agent\/v1\/)?spaces\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/i);
+      const spaceMatch = pathname.match(/^\/api\/(?:agent\/v1\/)?spaces\/([^/]+)\/([^/]+)(?:\/([^/]+)(?:\/([^/]+))?)?$/i);
       if (spaceMatch) {
         const username = decodeURIComponent(spaceMatch[1]).toLowerCase();
         const slug = decodeURIComponent(spaceMatch[2]).toLowerCase();
         const action = spaceMatch[3] ? spaceMatch[3].toLowerCase() : '';
+        const subAction = spaceMatch[4] ? spaceMatch[4].toLowerCase() : '';
         const space = db.spaces.find((s) => s.ownerUsername === username && s.slug === slug);
 
         if (!action && method === 'GET') {
@@ -6910,6 +7382,83 @@ const spaceHubWorker = {
           space.errorLogs = [];
           await saveDb(env, db);
           return jsonResponse({ ok: true, count: 0, errors: [] });
+        }
+
+        // Wave 19: Live API Request Inspector & Replay Debugger (/api/spaces/:owner/:slug/inspector)
+        if (action === 'inspector') {
+          if (!user || !space || !canViewSpace(space, user)) {
+            return jsonResponse({ error: 'Unauthorized.' }, 403);
+          }
+          space.requestInspectorLogs = Array.isArray(space.requestInspectorLogs) ? space.requestInspectorLogs : [];
+
+          if (method === 'GET') {
+            return jsonResponse({
+              ok: true,
+              count: space.requestInspectorLogs.length,
+              logs: space.requestInspectorLogs
+            });
+          }
+
+          if ((subAction === 'replay' || !subAction) && method === 'POST') {
+            if (!canEditSpace(space, user)) {
+              return jsonResponse({ error: 'Unauthorized: Owner or Editor role required to replay requests.' }, 403);
+            }
+            const targetLogId = String(body.logId || body.id || '').trim();
+            const original = targetLogId
+              ? space.requestInspectorLogs.find((l) => l.id === targetLogId)
+              : null;
+            if (targetLogId && !original) {
+              return jsonResponse({ error: 'Inspector request log entry not found.' }, 404);
+            }
+            const replayPath = String(original ? original.path : body.path || `/live/${space.slug}/submit`);
+            const replayMethod = String(original ? original.method : body.method || 'POST').toUpperCase();
+            const replayPayload = original ? original.requestBody : (body.body || {});
+
+            const replayReq = new Request(new URL(replayPath, url.origin).href, {
+              method: replayMethod,
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                ...(request.headers.get('authorization') ? { Authorization: request.headers.get('authorization') } : {})
+              },
+              body: ['GET', 'HEAD'].includes(replayMethod) ? undefined : JSON.stringify(replayPayload || {})
+            });
+            const startMs = Date.now();
+            const replayRes = await spaceHubWorker.handle(replayReq, env);
+            const durationMs = Math.max(1, Date.now() - startMs);
+            let replayData = null;
+            try {
+              replayData = await replayRes.clone().json();
+            } catch (_e) {
+              replayData = { raw: (await replayRes.clone().text()).slice(0, 300) };
+            }
+            const reloadedDb = await loadDb(env);
+            const reloadedSpace = reloadedDb.spaces.find((s) => s.id === space.id) || space;
+            const replayEntry = recordSpaceInspectorLog(reloadedSpace, {
+              method: replayMethod,
+              path: replayPath,
+              status: replayRes.status,
+              durationMs,
+              requestBody: replayPayload,
+              responsePreview: { replayedFrom: targetLogId || 'custom', status: replayRes.status }
+            });
+            await saveDb(env, reloadedDb);
+            return jsonResponse({
+              ok: true,
+              replayed: true,
+              originalLogId: targetLogId || null,
+              status: replayRes.status,
+              replayResponse: replayData,
+              replayEntry
+            });
+          }
+
+          if (method === 'DELETE') {
+            if (!canEditSpace(space, user)) return jsonResponse({ error: 'Unauthorized.' }, 403);
+            space.requestInspectorLogs = [];
+            await saveDb(env, db);
+            return jsonResponse({ ok: true, count: 0, logs: [] });
+          }
         }
 
         if (!action && method === 'DELETE') {

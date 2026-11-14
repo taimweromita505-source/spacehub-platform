@@ -1491,10 +1491,141 @@ async function executeSpaceCron(space, overrideUrl = '') {
   return space.cronLastStatus;
 }
 
-function searchSpaceContent(space, rawQuery) {
+function recordSpaceInspectorLog(space, { method = 'POST', path = '/', status = 200, durationMs = 1, requestBody = null, responsePreview = null } = {}) {
+  if (!space) return null;
+  space.requestInspectorLogs = Array.isArray(space.requestInspectorLogs) ? space.requestInspectorLogs : [];
+  let safeBody = requestBody;
+  if (safeBody && typeof safeBody === 'object') {
+    try {
+      safeBody = JSON.parse(JSON.stringify(safeBody));
+      if (safeBody.password) safeBody.password = '***';
+      if (safeBody.secret) safeBody.secret = '***';
+      if (safeBody.apiKey) safeBody.apiKey = '***';
+    } catch (_e) {}
+  }
+  const entry = {
+    id: 'req_' + crypto.randomBytes(6).toString('hex'),
+    method: String(method).toUpperCase(),
+    path: String(path),
+    status: Number(status) || 200,
+    durationMs: Math.max(1, Number(durationMs) || 1),
+    requestBody: safeBody,
+    responsePreview: responsePreview || null,
+    timestamp: new Date().toISOString()
+  };
+  space.requestInspectorLogs.unshift(entry);
+  if (space.requestInspectorLogs.length > 50) {
+    space.requestInspectorLogs = space.requestInspectorLogs.slice(0, 50);
+  }
+  return entry;
+}
+
+async function processSpaceJobQueue(space, targetJobId = '') {
+  if (!space || !Array.isArray(space.jobQueue)) return [];
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const processed = [];
+
+  for (const job of space.jobQueue) {
+    if (!job || job.status !== 'queued') continue;
+    if (targetJobId && job.id !== targetJobId) continue;
+    const dueMs = job.runAt ? Date.parse(job.runAt) : 0;
+    if (!targetJobId && !Number.isNaN(dueMs) && dueMs > nowMs) continue;
+
+    job.attempts = (job.attempts || 0) + 1;
+    job.status = 'running';
+    job.startedAt = nowIso;
+
+    let succeeded = true;
+    let execOutput = { executed: true, task: job.name, attempt: job.attempts };
+
+    if (job.payload && job.payload.simulateFail && job.attempts <= (job.maxRetries || 0)) {
+      succeeded = false;
+      execOutput = { error: 'Simulated transient job failure' };
+    } else if (job.webhookUrl && job.webhookUrl.startsWith('mock://')) {
+      execOutput = { webhookStatus: `delivered_mock:${job.webhookUrl}`, task: job.name };
+    }
+
+    if (succeeded) {
+      job.status = 'completed';
+      job.completedAt = new Date().toISOString();
+      job.result = execOutput;
+    } else if (job.attempts <= (job.maxRetries ?? 2)) {
+      job.status = 'queued';
+      job.lastError = execOutput.error || 'execution_failed';
+    } else {
+      job.status = 'failed';
+      job.completedAt = new Date().toISOString();
+      job.result = execOutput;
+    }
+    processed.push(job);
+  }
+  return processed;
+}
+
+function computeSearchFacets(space) {
+  const index = Array.isArray(space?.searchIndex) ? space.searchIndex : [];
+  const tagCounts = {};
+  for (const doc of index) {
+    if (doc && Array.isArray(doc.tags)) {
+      for (const t of doc.tags) {
+        const clean = String(t).trim().toLowerCase();
+        if (clean) tagCounts[clean] = (tagCounts[clean] || 0) + 1;
+      }
+    }
+  }
+  return { tags: tagCounts, indexedCount: index.length };
+}
+
+function searchSpaceContent(space, rawQuery, tagFilter = '') {
   const q = String(rawQuery || '').trim().toLowerCase();
-  if (!q) return [];
+  const cleanTag = String(tagFilter || '').trim().toLowerCase();
+  if (!q && !cleanTag) return [];
+  const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
   const results = [];
+
+  const customIndex = Array.isArray(space.searchIndex) ? space.searchIndex : [];
+  const scoredDocs = [];
+  for (const doc of customIndex) {
+    if (!doc) continue;
+    const docTags = Array.isArray(doc.tags) ? doc.tags.map((t) => String(t).toLowerCase()) : [];
+    if (cleanTag && !docTags.includes(cleanTag)) continue;
+
+    const title = String(doc.title || '');
+    const body = String(doc.body || doc.content || '');
+    const titleLower = title.toLowerCase();
+    const bodyLower = body.toLowerCase();
+
+    let score = cleanTag ? 5 : 0;
+    if (q) {
+      if (titleLower.includes(q)) score += 10;
+      if (docTags.some((t) => t.includes(q))) score += 6;
+      if (bodyLower.includes(q)) score += 3;
+      for (const tok of tokens) {
+        if (titleLower.includes(tok)) score += 4;
+        if (bodyLower.includes(tok)) score += 2;
+      }
+    }
+    if (score > 0) {
+      const idx = q ? bodyLower.indexOf(tokens[0] || q) : 0;
+      const start = Math.max(0, idx - 30);
+      scoredDocs.push({
+        type: 'indexed_doc',
+        id: doc.id,
+        title,
+        tags: doc.tags || [],
+        url: doc.url || `/live/${space.slug}`,
+        snippet: body.slice(start, start + 160),
+        metadata: doc.metadata || {},
+        score
+      });
+    }
+  }
+  scoredDocs.sort((a, b) => b.score - a.score);
+  results.push(...scoredDocs);
+
+  if (!q) return results.slice(0, 25);
+
   const store = space.appStorage && typeof space.appStorage === 'object' ? space.appStorage : {};
   Object.entries(store).forEach(([k, v]) => {
     const serialized = typeof v === 'string' ? v : JSON.stringify(v);
@@ -5114,14 +5245,53 @@ app.delete(['/live/:slug/assets', '/s/:slug/assets', '/live/:slug/assets/:name',
   res.json({ ok: true, assetCount: Object.keys(space.assets).length });
 });
 
-// Built-in Full-Text Search API (GET /live/:slug/search?q=...)
+// Built-in Full-Text Search & Faceted Index API (/live/:slug/search & /live/:slug/search/index)
+app.get(['/live/:slug/search/index', '/s/:slug/search/index'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.searchIndex = Array.isArray(space.searchIndex) ? space.searchIndex : [];
+  res.json({ ok: true, count: space.searchIndex.length, facets: computeSearchFacets(space), documents: space.searchIndex });
+});
+
+app.post(['/live/:slug/search/index', '/s/:slug/search/index'], (req, res) => {
+  const db = loadDb();
+  const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
+  if (!space) return res.status(404).json({ error: 'Space not found.' });
+  space.searchIndex = Array.isArray(space.searchIndex) ? space.searchIndex : [];
+  const payload = req.body || {};
+  const rawDocs = Array.isArray(payload.documents) ? payload.documents : [payload];
+  const nowIso = new Date().toISOString();
+  const indexed = [];
+  for (const item of rawDocs) {
+    if (!item || typeof item !== 'object') continue;
+    const docId = String(item.id || `doc_${crypto.randomBytes(4).toString('hex')}`).trim().slice(0, 80);
+    const docRecord = {
+      id: docId,
+      title: String(item.title || 'Untitled').trim().slice(0, 200),
+      body: String(item.body || item.content || '').trim().slice(0, 4000),
+      tags: Array.isArray(item.tags) ? item.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
+      url: String(item.url || `/live/${space.slug}`).trim().slice(0, 300),
+      metadata: item.metadata && typeof item.metadata === 'object' ? item.metadata : {},
+      updatedAt: nowIso
+    };
+    const existingIdx = space.searchIndex.findIndex((d) => d.id === docId);
+    if (existingIdx > -1) space.searchIndex[existingIdx] = docRecord;
+    else space.searchIndex.push(docRecord);
+    indexed.push(docRecord);
+  }
+  saveDb(db);
+  res.status(201).json({ ok: true, indexedCount: indexed.length, totalDocuments: space.searchIndex.length, facets: computeSearchFacets(space), documents: indexed });
+});
+
 app.get(['/live/:slug/search', '/s/:slug/search'], (req, res) => {
   const db = loadDb();
   const space = [...db.spaces].reverse().find((s) => s.slug === req.params.slug.toLowerCase());
   if (!space) return res.status(404).json({ error: 'Space not found.' });
   const q = String(req.query.q || '');
-  const results = searchSpaceContent(space, q);
-  res.json({ ok: true, query: q, count: results.length, results });
+  const tag = String(req.query.tag || '');
+  const results = searchSpaceContent(space, q, tag);
+  res.json({ ok: true, query: q, tag: tag || null, count: results.length, facets: computeSearchFacets(space), results });
 });
 
 // Automatic SEO sitemap.xml, robots.txt & /live/:slug/health
