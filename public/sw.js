@@ -1,4 +1,4 @@
-const CACHE_NAME = 'spacehub-pwa-v10';
+const CACHE_NAME = 'spacehub-pwa-v11';
 const PRECACHE_URLS = ['/', '/styles.css', '/app.js', '/icon.svg', '/manifest.webmanifest'];
 const STATIC_ASSET_PATHS = new Set(['/styles.css', '/app.js', '/icon.svg', '/manifest.webmanifest']);
 

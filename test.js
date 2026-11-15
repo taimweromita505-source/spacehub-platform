@@ -270,15 +270,10 @@ function request(server, method, path, body = null, token = null) {
     );
     assert.strictEqual(extCreate.status, 201);
 
-    console.log('10. Testing Sign In with Gmail / Social Account (POST /api/auth/social)...');
-    const gmailAuth = await request(server, 'POST', '/api/auth/social', {
-      provider: 'google',
-      email: `creator_${Date.now()}@gmail.com`,
-      displayName: 'Gmail Creator'
-    });
-    assert.strictEqual(gmailAuth.status, 200);
-    assert.ok(gmailAuth.body.token, 'Should return session token for Gmail sign-in');
-    assert.strictEqual(gmailAuth.body.user.socialProvider, 'google');
+    console.log('10. Testing unconfigured Google sign-in...');
+    const gmailAuth = await request(server, 'POST', '/api/auth/social', { provider: 'google' });
+    assert.strictEqual(gmailAuth.status, 503);
+    assert.equal(gmailAuth.body.token, undefined);
 
     console.log('11. Testing Advanced Space Cloud JSON Storage API (/live/:slug/storage)...');
     const storePost = await request(server, 'POST', `/live/${space.slug}/storage`, {
@@ -404,8 +399,12 @@ function request(server, method, path, body = null, token = null) {
     assert.strictEqual(roomGet.status, 200);
     assert.strictEqual(roomGet.body.events[0].sender, 'PlayerOne');
 
-    const collabUsername = gmailAuth.body.user.username;
-    const collabToken = gmailAuth.body.token;
+    const collaborator = await request(server, 'POST', '/api/auth/register', {
+      username: `collab_${Date.now()}`,
+      password: 'collaborator-test-password'
+    });
+    assert.strictEqual(collaborator.status, 201);
+    const { token: collabToken, user: { username: collabUsername } } = collaborator.body;
     const addCollab = await request(
       server,
       'PUT',

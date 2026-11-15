@@ -1,3 +1,4 @@
+import socialIdentity from './social-identity.cjs';
 // Cloudflare Worker + KV + Static Assets Production Backend for SpaceHub
 // Uses env.SPACEHUB_KV for persistent global state and env.ASSETS for static frontend files
 
@@ -6961,92 +6962,21 @@ ${itemsXml}
       }
 
       if (pathname === '/api/auth/social' && method === 'POST') {
-        const provider = ['google', 'github', 'apple'].includes(body.provider) ? body.provider : 'google';
-        let email = String(body.email || '').trim().toLowerCase();
-        let displayName = String(body.displayName || '').trim();
-        let preferredUsername = String(body.username || '').trim().toLowerCase();
-        const accessToken = String(body.accessToken || '').trim();
-        const idToken = String(body.idToken || '').trim();
-
-        // Strict mode (enabled once GOOGLE_CLIENT_ID is configured): only cryptographically verified
-        // identities are accepted — no typed-email sign-in that anyone could use to claim an account.
-        const strictSocial = Boolean(env.GOOGLE_CLIENT_ID);
-        let googleVerified = false;
-        let githubVerified = false;
-        if (strictSocial) {
-          if (provider === 'apple') {
-            return jsonResponse({ error: 'Apple sign-in is not available yet. Please use Google, GitHub, or a password.' }, 400);
-          }
-          if (provider === 'google' && !idToken) {
-            return jsonResponse({ error: 'Please use the Google Sign-In button.' }, 400);
-          }
-          if (provider === 'github' && !accessToken) {
-            return jsonResponse({ error: 'Paste a GitHub token so we can verify your account.' }, 400);
-          }
+        let identity;
+        try {
+          identity = await socialIdentity.verifySocialIdentity(body, env.GOOGLE_CLIENT_ID);
+        } catch {
+          return jsonResponse({ error: 'Social sign-in verification is temporarily unavailable.' }, 502);
         }
+        if (identity.error) return jsonResponse({ error: identity.error }, identity.status);
 
-        // Real Google ID token verification (audience, issuer and verified email are all checked)
-        if (provider === 'google' && idToken && env.GOOGLE_CLIENT_ID) {
-          const gRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
-          if (!gRes.ok) {
-            return jsonResponse({ error: 'Invalid Google ID token.' }, 401);
-          }
-          const gInfo = await gRes.json();
-          if (gInfo.aud !== env.GOOGLE_CLIENT_ID) {
-            return jsonResponse({ error: 'Google token was issued for a different application.' }, 401);
-          }
-          if (!['accounts.google.com', 'https://accounts.google.com'].includes(gInfo.iss)) {
-            return jsonResponse({ error: 'Invalid Google token issuer.' }, 401);
-          }
-          if (!gInfo.email || !(gInfo.email_verified === true || gInfo.email_verified === 'true')) {
-            return jsonResponse({ error: 'Your Google account email is not verified.' }, 401);
-          }
-          email = String(gInfo.email).toLowerCase();
-          displayName = gInfo.name || displayName;
-          googleVerified = true;
-        }
+        const { provider, subject, email, username, displayName, accessToken } = identity;
+        const baseHandle = slugify(username || provider).slice(0, 20);
+        let foundUser = socialIdentity.findSocialUser(db.users, identity);
 
-        // Real GitHub Access Token verification (identity always comes from GitHub, never from typed fields)
-        if (provider === 'github' && accessToken) {
-          const ghRes = await fetch('https://api.github.com/user', {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: 'application/vnd.github+json',
-              'User-Agent': 'SpaceHub-Cloudflare-Edge'
-            }
-          });
-          if (!ghRes.ok) {
-            return jsonResponse({ error: 'Invalid GitHub token.' }, 401);
-          }
-          const ghUser = await ghRes.json();
-          preferredUsername = String(ghUser.login || '').toLowerCase();
-          displayName = ghUser.name || ghUser.login || displayName;
-          email = String(ghUser.email || `${preferredUsername}@users.noreply.github.com`).toLowerCase();
-          githubVerified = true;
+        if (!foundUser && socialIdentity.needsExistingAccountRecovery(db.users, identity)) {
+          return jsonResponse({ error: 'Sign in to your existing SpaceHub account with your password or recover it first.' }, 409);
         }
-
-        if (!email && !preferredUsername) {
-          return jsonResponse({ error: 'Please enter your Gmail / social email or account handle.' }, 400);
-        }
-        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-          // If user typed just the Gmail handle without @gmail.com, append @gmail.com for Google
-          if (provider === 'google' && /^[a-z0-9._-]+$/i.test(email)) {
-            email = `${email}@gmail.com`;
-          } else if (provider === 'apple' && /^[a-z0-9._-]+$/i.test(email)) {
-            email = `${email}@icloud.com`;
-          } else if (provider === 'github' && /^[a-z0-9_-]+$/i.test(email)) {
-            preferredUsername = email;
-            email = `${email}@users.noreply.github.com`;
-          } else {
-            return jsonResponse({ error: 'Please enter a valid email address (e.g. you@gmail.com).' }, 400);
-          }
-        }
-
-        const baseHandle = slugify(preferredUsername || email.split('@')[0] || provider).slice(0, 20);
-        const socialVerifiedNow = googleVerified || githubVerified;
-        let foundUser = db.users.find(
-          (u) => (email && u.email && u.email.toLowerCase() === email) || (u.socialProvider === provider && u.username === baseHandle)
-        );
 
         if (!foundUser) {
           let finalUsername = baseHandle.length >= 3 ? baseHandle : `${baseHandle}_${randomHex(2)}`;
@@ -7060,21 +6990,27 @@ ${itemsXml}
             displayName: displayName || email.split('@')[0] || finalUsername,
             email,
             socialProvider: provider,
-            socialVerified: socialVerifiedNow,
+            socialSubject: subject,
+            socialVerified: true,
             salt,
             passwordHash: hash,
             createdAt: new Date().toISOString()
           };
           db.users.push(foundUser);
         } else {
-          foundUser.socialProvider = foundUser.socialProvider || provider;
-          if (socialVerifiedNow) {
-            // First verified login on an account that was created from an unverified typed email:
-            // kill any sessions that existed before, so a squatter cannot keep access.
-            if (!foundUser.socialVerified) revokeUserSessions(db, foundUser.id, null);
-            foundUser.socialVerified = true;
+          // Credentials issued before this account was bound to a provider ID are untrusted.
+          if (!foundUser.socialSubject) {
+            revokeUserSessions(db, foundUser.id, null);
+            db.agentKeys = db.agentKeys.filter((key) => key.userId !== foundUser.id);
+            db.passwordResets = db.passwordResets.filter((reset) => reset.userId !== foundUser.id);
+            if (!foundUser.socialVerified) {
+              const { salt, hash } = await hashPasswordEdge(randomHex(16));
+              foundUser.salt = salt;
+              foundUser.passwordHash = hash;
+            }
           }
-          if (email && !foundUser.email) foundUser.email = email;
+          foundUser.socialSubject = subject;
+          foundUser.socialVerified = true;
           if (displayName) foundUser.displayName = displayName;
         }
 

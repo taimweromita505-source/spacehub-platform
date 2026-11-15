@@ -23,7 +23,8 @@ const env = {
   PAYPAL_MODE: 'sandbox',
   PAYPAL_WEBHOOK_ID: 'WH-TEST',
   RESEND_API_KEY: 'resend-test-key',
-  ADMIN_USERNAMES: 'boss,sam'
+  GOOGLE_CLIENT_ID: 'test-google-client-id.apps.googleusercontent.com',
+  ADMIN_USERNAMES: 'boss'
 };
 
 let nextOrderId = 'ORDER-1';
@@ -40,13 +41,17 @@ globalThis.fetch = async (input, init = {}) => {
   if (target.startsWith('https://oauth2.googleapis.com/tokeninfo')) {
     const url = new URL(target);
     const token = url.searchParams.get('id_token');
+    const testClaims = { sub: 'alice-google-subject', exp: Math.floor(Date.now() / 1000) + 3600 };
     if (token === 'bad-token') return json({ error: 'invalid_token' }, 401);
-    if (token === 'wrong-aud') return json({ aud: 'wrong-client-id', iss: 'accounts.google.com', email: 'alice@gmail.com', email_verified: true });
-    if (token === 'unverified-email') return json({ aud: env.GOOGLE_CLIENT_ID, iss: 'accounts.google.com', email: 'unverified@gmail.com', email_verified: false });
+    if (token === 'wrong-aud') return json({ ...testClaims, aud: 'wrong-client-id', iss: 'accounts.google.com', email: 'alice@gmail.com', email_verified: true });
+    if (token === 'unverified-email') return json({ ...testClaims, aud: env.GOOGLE_CLIENT_ID, iss: 'accounts.google.com', email: 'unverified@gmail.com', email_verified: false });
     if (token === 'valid-sam-token') {
       return json({
         aud: env.GOOGLE_CLIENT_ID,
         iss: 'accounts.google.com',
+        sub: 'sam-google-subject',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        hd: 'example.com',
         email: 'sam@example.com',
         email_verified: true,
         name: 'Sam'
@@ -56,6 +61,8 @@ globalThis.fetch = async (input, init = {}) => {
       return json({
         aud: env.GOOGLE_CLIENT_ID,
         iss: 'accounts.google.com',
+        sub: 'alice-google-subject',
+        exp: Math.floor(Date.now() / 1000) + 3600,
         email: 'alice@gmail.com',
         email_verified: true,
         name: 'Alice Verified'
@@ -150,7 +157,7 @@ try {
   const boss = (await call('POST', '/api/auth/register', { username: 'boss', password: 'bosspass123' })).body.token;
   const payerReg = await call('POST', '/api/auth/register', { username: 'payer', password: 'payerpass1' });
   const payer = payerReg.body.token;
-  const samReg = await call('POST', '/api/auth/social', { provider: 'google', email: 'sam@example.com' });
+  const samReg = await call('POST', '/api/auth/social', { provider: 'google', idToken: 'valid-sam-token' });
   assert.strictEqual(samReg.status, 200, samReg.text);
   const sam = samReg.body.token;
   const samUsername = samReg.body.user.username;
@@ -296,7 +303,7 @@ try {
   // ---------- 3. Admin dashboard ----------
   assert.strictEqual((await call('GET', '/api/admin/overview')).status, 401);
   assert.strictEqual((await call('GET', '/api/admin/overview', null, payer)).status, 403);
-  // "sam" is listed as admin but signed in with an unverified typed email => still refused.
+  // A verified Google account still needs an explicit admin grant.
   assert.strictEqual((await call('GET', '/api/admin/overview', null, sam)).status, 403);
 
   const overview = await call('GET', '/api/admin/overview', null, boss);
@@ -408,12 +415,19 @@ try {
   assert.strictEqual((await call('POST', '/api/auth/login', { username: 'sam', password: 'brandnewpass' })).status, 200);
 
   // Google OAuth / Identity Services verification & /api/auth/config
+  const googleClientId = env.GOOGLE_CLIENT_ID;
+  delete env.GOOGLE_CLIENT_ID;
   const authConfigBefore = await call('GET', '/api/auth/config');
   assert.strictEqual(authConfigBefore.status, 200);
   assert.strictEqual(authConfigBefore.body.googleClientId, null);
 
-  // Now enable Google OAuth Client ID on environment
-  env.GOOGLE_CLIENT_ID = 'test-google-client-id.apps.googleusercontent.com';
+  const disabledGoogle = await call('POST', '/api/auth/social', { provider: 'google' });
+  assert.strictEqual(disabledGoogle.status, 503);
+  assert.strictEqual(disabledGoogle.body.token, undefined);
+  assert.strictEqual((await call('POST', '/api/auth/social', { provider: 'github' })).status, 400);
+  assert.strictEqual((await call('POST', '/api/auth/social', { provider: 'apple' })).status, 400);
+
+  env.GOOGLE_CLIENT_ID = googleClientId;
   const authConfig = await call('GET', '/api/auth/config');
   assert.strictEqual(authConfig.status, 200);
   assert.strictEqual(authConfig.body.googleClientId, env.GOOGLE_CLIENT_ID);
@@ -441,6 +455,8 @@ try {
   assert.strictEqual(validGoogle.body.user.email, 'alice@gmail.com');
   assert.strictEqual(validGoogle.body.user.socialVerified, true);
   assert.strictEqual(validGoogle.body.user.displayName, 'Alice Verified');
+  const returningGoogle = await call('POST', '/api/auth/social', { provider: 'google', idToken: 'valid-google-token' });
+  assert.strictEqual(returningGoogle.body.user.id, validGoogle.body.user.id);
 
   console.log('WAVE 10 TESTS PASSED!');
 } finally {

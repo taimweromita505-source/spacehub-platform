@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { verifySocialIdentity, findSocialUser, needsExistingAccountRecovery } = require('./social-identity.cjs');
 const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
@@ -3048,66 +3049,22 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 app.post('/api/auth/social', async (req, res) => {
-  const body = req.body || {};
-  const provider = ['google', 'github', 'apple'].includes(body.provider) ? body.provider : 'google';
-  let email = String(body.email || '').trim().toLowerCase();
-  let displayName = String(body.displayName || '').trim();
-  let preferredUsername = String(body.username || '').trim().toLowerCase();
-  const accessToken = String(body.accessToken || '').trim();
-  const idToken = String(body.idToken || '').trim();
-
+  let identity;
   try {
-    if (provider === 'google' && idToken) {
-      const gRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
-      if (!gRes.ok) {
-        return res.status(401).json({ error: 'Invalid Google ID token.' });
-      }
-      const gInfo = await gRes.json();
-      email = String(gInfo.email || email).toLowerCase();
-      displayName = gInfo.name || displayName;
-    }
-
-    if (provider === 'github' && accessToken) {
-      const ghRes = await fetch('https://api.github.com/user', {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: 'application/vnd.github+json',
-          'User-Agent': 'SpaceHub-Platform'
-        }
-      });
-      if (!ghRes.ok) {
-        return res.status(401).json({ error: 'Invalid GitHub token.' });
-      }
-      const ghUser = await ghRes.json();
-      preferredUsername = String(ghUser.login || preferredUsername).toLowerCase();
-      displayName = ghUser.name || ghUser.login || displayName;
-      email = String(ghUser.email || email || `${preferredUsername}@users.noreply.github.com`).toLowerCase();
-    }
-  } catch (err) {
-    return res.status(400).json({ error: err.message || 'Social verification failed.' });
+    identity = await verifySocialIdentity(req.body || {}, process.env.GOOGLE_CLIENT_ID);
+  } catch {
+    return res.status(502).json({ error: 'Social sign-in verification is temporarily unavailable.' });
   }
+  if (identity.error) return res.status(identity.status).json({ error: identity.error });
 
-  if (!email && !preferredUsername) {
-    return res.status(400).json({ error: 'Please enter your Gmail / social email or account handle.' });
-  }
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    if (provider === 'google' && /^[a-z0-9._-]+$/i.test(email)) {
-      email = `${email}@gmail.com`;
-    } else if (provider === 'apple' && /^[a-z0-9._-]+$/i.test(email)) {
-      email = `${email}@icloud.com`;
-    } else if (provider === 'github' && /^[a-z0-9_-]+$/i.test(email)) {
-      preferredUsername = email;
-      email = `${email}@users.noreply.github.com`;
-    } else {
-      return res.status(400).json({ error: 'Please enter a valid email address (e.g. you@gmail.com).' });
-    }
-  }
-
+  const { provider, subject, email, username, displayName, accessToken } = identity;
   const db = loadDb();
-  const baseHandle = slugify(preferredUsername || email.split('@')[0] || provider).slice(0, 20);
-  let foundUser = db.users.find(
-    (u) => (email && u.email && u.email.toLowerCase() === email) || (u.socialProvider === provider && u.username === baseHandle)
-  );
+  const baseHandle = slugify(username || provider).slice(0, 20);
+  let foundUser = findSocialUser(db.users, identity);
+
+  if (!foundUser && needsExistingAccountRecovery(db.users, identity)) {
+    return res.status(409).json({ error: 'Sign in to your existing SpaceHub account with your password or recover it first.' });
+  }
 
   if (!foundUser) {
     let finalUsername = baseHandle.length >= 3 ? baseHandle : `${baseHandle}_${crypto.randomBytes(2).toString('hex')}`;
@@ -3120,13 +3077,22 @@ app.post('/api/auth/social', async (req, res) => {
       displayName: displayName || email.split('@')[0] || finalUsername,
       email,
       socialProvider: provider,
+      socialSubject: subject,
+      socialVerified: true,
       passwordHash: hashPassword(crypto.randomBytes(16).toString('hex')),
       createdAt: new Date().toISOString()
     };
     db.users.push(foundUser);
   } else {
-    foundUser.socialProvider = foundUser.socialProvider || provider;
-    if (email && !foundUser.email) foundUser.email = email;
+    if (!foundUser.socialSubject) {
+      for (const [token, userId] of Object.entries(db.sessions)) {
+        if (userId === foundUser.id) delete db.sessions[token];
+      }
+      db.agentKeys = db.agentKeys.filter((key) => key.userId !== foundUser.id);
+      if (!foundUser.socialVerified) foundUser.passwordHash = hashPassword(crypto.randomBytes(16).toString('hex'));
+    }
+    foundUser.socialSubject = subject;
+    foundUser.socialVerified = true;
     if (displayName) foundUser.displayName = displayName;
   }
 
@@ -3352,9 +3318,8 @@ function decoratePlanWithPayPalUrls(plan, origin, paypalEmail) {
   };
 }
 
-// Real Google Sign-In is only wired on the Cloudflare edge Worker (worker.js).
 app.get('/api/auth/config', (_req, res) => {
-  res.json({ googleClientId: null });
+  res.json({ googleClientId: process.env.GOOGLE_CLIENT_ID || null });
 });
 
 // PayPal REST API checkout is only wired on the Cloudflare edge Worker (worker.js).

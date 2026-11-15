@@ -4000,100 +4000,44 @@ document.getElementById('payWithStripeBtn')?.addEventListener('click', async () 
   }
 });
 
-// Social Account Sign-In (Google / Gmail, GitHub, Apple)
-let googleClientId = null;
-
+// Google Identity Services is shown only when configured and loaded.
 async function initGoogleAuth() {
   try {
-    const cfg = await apiFetch('/api/auth/config');
-    if (cfg && cfg.googleClientId) {
-      googleClientId = cfg.googleClientId;
-      setupGoogleIdentityServices();
-    }
+    const { googleClientId } = await apiFetch('/api/auth/config');
+    if (!googleClientId) return;
+
+    const script = document.createElement('script');
+    script.id = 'gsiClientScript';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.addEventListener('load', () => {
+      try {
+        google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: handleGoogleCredentialResponse,
+          auto_select: false,
+          cancel_on_tap_outside: true
+        });
+        for (const [id, label] of [['gsiButtonSignIn', 'continue_with'], ['gsiButtonSignUp', 'signup_with']]) {
+          const button = document.getElementById(id);
+          button.style.display = 'flex';
+          google.accounts.id.renderButton(button, {
+            theme: 'outline',
+            size: 'large',
+            text: label,
+            shape: 'rectangular',
+            width: 320
+          });
+        }
+        if (!state.user) google.accounts.id.prompt();
+      } catch (err) {
+        console.warn('Google Identity Services setup:', err);
+      }
+    }, { once: true });
+    document.body.appendChild(script);
   } catch (_e) {
-    // Non-blocking fallback
+    // Password and GitHub sign-in remain available.
   }
-}
-
-function setupGoogleIdentityServices() {
-  if (!googleClientId) return;
-  if (!document.getElementById('gsiClientScript')) {
-    const s = document.createElement('script');
-    s.id = 'gsiClientScript';
-    s.src = 'https://accounts.google.com/gsi/client';
-    s.async = true;
-    s.defer = true;
-    document.body.appendChild(s);
-  }
-
-  function tryRender() {
-    if (typeof google === 'undefined' || !google.accounts || !google.accounts.id) {
-      setTimeout(tryRender, 150);
-      return;
-    }
-
-    try {
-      google.accounts.id.initialize({
-        client_id: googleClientId,
-        callback: handleGoogleCredentialResponse,
-        auto_select: false,
-        cancel_on_tap_outside: true
-      });
-
-      // Render official Google button in sign-in dialog
-      const btnSignIn = document.getElementById('gsiButtonSignIn');
-      if (btnSignIn) {
-        btnSignIn.style.display = 'flex';
-        google.accounts.id.renderButton(btnSignIn, {
-          theme: 'outline',
-          size: 'large',
-          text: 'continue_with',
-          shape: 'rectangular',
-          width: 320
-        });
-      }
-
-      // Render official Google button in sign-up dialog
-      const btnSignUp = document.getElementById('gsiButtonSignUp');
-      if (btnSignUp) {
-        btnSignUp.style.display = 'flex';
-        google.accounts.id.renderButton(btnSignUp, {
-          theme: 'outline',
-          size: 'large',
-          text: 'signup_with',
-          shape: 'rectangular',
-          width: 320
-        });
-      }
-
-      // Render official Google button in social-auth dialog
-      const btnSocial = document.getElementById('gsiButtonSocial');
-      if (btnSocial) {
-        btnSocial.style.display = 'flex';
-        google.accounts.id.renderButton(btnSocial, {
-          theme: 'outline',
-          size: 'large',
-          text: 'continue_with',
-          shape: 'rectangular',
-          width: 320
-        });
-      }
-
-      // Hide fallback unverified Google button since verified GIS is active
-      document.querySelectorAll('.social-auth-btn[data-social-provider="google"]').forEach((el) => {
-        el.style.display = 'none';
-      });
-
-      // One Tap prompt for visitors who are not signed in
-      if (!state.user) {
-        google.accounts.id.prompt();
-      }
-    } catch (err) {
-      console.warn('Google Identity Services setup:', err);
-    }
-  }
-
-  tryRender();
 }
 
 async function handleGoogleCredentialResponse(response) {
@@ -4123,100 +4067,33 @@ async function handleGoogleCredentialResponse(response) {
   }
 }
 
-document.querySelectorAll('.social-auth-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const provider = btn.getAttribute('data-social-provider') || 'google';
-    document.getElementById('signInDialog')?.close();
-    document.getElementById('signUpDialog')?.close();
-
-    const titleEl = document.getElementById('socialAuthDialogTitle');
-    const leadEl = document.getElementById('socialAuthDialogLead');
-    const provInput = document.getElementById('socialProviderInput');
-    const emailLabel = document.getElementById('socialEmailLabel');
-    const emailInput = document.getElementById('socialEmailInput');
-    const ghTokenField = document.getElementById('socialGithubTokenField');
-    const submitBtn = document.getElementById('socialAuthSubmitBtn');
-    const errBox = document.getElementById('socialAuthServerError');
-    const gsiSocial = document.getElementById('gsiButtonSocial');
-    const manualFields = document.getElementById('socialManualFields');
-
-    if (errBox) errBox.hidden = true;
-    if (provInput) provInput.value = provider;
-
-    if (provider === 'google' && googleClientId) {
-      if (titleEl) titleEl.textContent = 'Sign In with Google';
-      if (leadEl) {
-        leadEl.textContent = 'Sign in securely with your verified Google / Gmail account.';
-      }
-      if (gsiSocial) gsiSocial.style.display = 'flex';
-      if (manualFields) manualFields.style.display = 'none';
-      if (submitBtn) submitBtn.style.display = 'none';
-    } else {
-      if (gsiSocial) gsiSocial.style.display = 'none';
-      if (manualFields) manualFields.style.display = 'block';
-      if (submitBtn) submitBtn.style.display = 'inline-flex';
-
-      if (provider === 'github') {
-        if (titleEl) titleEl.textContent = 'Continue with GitHub';
-        if (leadEl) {
-          leadEl.textContent =
-            'Enter your GitHub username or email (or paste a GitHub token to auto-connect GitHub Pages hosting).';
-        }
-        if (emailLabel) emailLabel.innerHTML = 'GitHub Username or Email <span aria-hidden="true">*</span>';
-        if (emailInput) emailInput.placeholder = 'octocat or octocat@github.com';
-        if (ghTokenField) ghTokenField.hidden = false;
-        if (submitBtn) submitBtn.textContent = 'Continue with GitHub';
-      } else if (provider === 'apple') {
-        if (titleEl) titleEl.textContent = 'Continue with Apple';
-        if (leadEl) {
-          leadEl.textContent =
-            'Enter your Apple ID email (e.g. @icloud.com or @me.com) to sign in or create your linked SpaceHub account.';
-        }
-        if (emailLabel) emailLabel.innerHTML = 'Apple ID Email <span aria-hidden="true">*</span>';
-        if (emailInput) emailInput.placeholder = 'you@icloud.com';
-        if (ghTokenField) ghTokenField.hidden = true;
-        if (submitBtn) submitBtn.textContent = 'Continue with Apple';
-      } else {
-        if (titleEl) titleEl.textContent = 'Continue with Google (Gmail)';
-        if (leadEl) {
-          leadEl.textContent =
-            'Enter your Gmail address to sign in or automatically create your linked SpaceHub account.';
-        }
-        if (emailLabel) emailLabel.innerHTML = 'Gmail Address <span aria-hidden="true">*</span>';
-        if (emailInput) emailInput.placeholder = 'you@gmail.com';
-        if (ghTokenField) ghTokenField.hidden = true;
-        if (submitBtn) submitBtn.textContent = 'Continue with Google';
-      }
-    }
-
-    document.getElementById('socialAuthDialog')?.showModal();
-    if (provider !== 'google' || !googleClientId) {
-      emailInput?.focus();
-    }
+document.querySelectorAll('.github-sign-in-btn').forEach((button) => {
+  button.addEventListener('click', () => {
+    document.getElementById('signInDialog').close();
+    document.getElementById('signUpDialog').close();
+    document.getElementById('socialAuthForm').reset();
+    document.getElementById('socialAuthServerError').hidden = true;
+    document.getElementById('socialAuthDialog').showModal();
+    document.getElementById('socialGithubTokenInput').focus();
   });
 });
 
 document.getElementById('socialAuthForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const provider = document.getElementById('socialProviderInput')?.value || 'google';
-  const email = document.getElementById('socialEmailInput')?.value.trim() || '';
-  const displayName = document.getElementById('socialDisplayNameInput')?.value.trim() || '';
-  const accessToken = document.getElementById('socialGithubTokenInput')?.value.trim() || '';
+  const accessToken = document.getElementById('socialGithubTokenInput').value.trim();
   const errBox = document.getElementById('socialAuthServerError');
-  if (errBox) errBox.hidden = true;
+  errBox.hidden = true;
 
-  if (!email && !accessToken) {
-    if (errBox) {
-      errBox.textContent = 'Please enter your email or account handle.';
-      errBox.hidden = false;
-    }
+  if (!accessToken) {
+    errBox.textContent = 'Enter a GitHub personal access token.';
+    errBox.hidden = false;
     return;
   }
 
   try {
     const data = await apiFetch('/api/auth/social', {
       method: 'POST',
-      body: JSON.stringify({ provider, email, displayName, accessToken })
+      body: JSON.stringify({ provider: 'github', accessToken })
     });
     state.user = data.user;
     state.token = data.token;
@@ -4228,8 +4105,7 @@ document.getElementById('socialAuthForm')?.addEventListener('submit', async (e) 
     loadAgentKeys();
     loadHostingConnections();
     resumeSpaceCreation();
-    const provLabels = { google: 'Google (Gmail)', github: 'GitHub', apple: 'Apple' };
-    showToast(`Signed in with ${provLabels[provider] || provider} as @${data.user.username}!`);
+    showToast(`Signed in with GitHub as @${data.user.username}!`);
   } catch (err) {
     if (errBox) {
       errBox.textContent = err.message;
